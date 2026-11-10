@@ -1063,6 +1063,8 @@ static void h_vt3_init_uva(CPU *c)
 /* LINDBERGH_VT3_CAMFIELDS=<from>-<to>: during those frames, each small integer
  * field of the camera object (and the match manager at 0x85061a4) that changes,
  * logged per frame - finding the start-of-match camera's state */
+static int g_rout_on;
+static void vt3_rout_mark(int i);
 static void (*g_vt3_game_routine)(CPU *);
 static void h_vt3_game_routine(CPU *c)
 {
@@ -1070,17 +1072,122 @@ static void h_vt3_game_routine(CPU *c)
     static long a = -2, b; static uint32_t prev[0x400 / 4]; static uint32_t pself; static int n;
     uint32_t self = rd32(c->esp + 4);
     if (a == -2) { const char *v = getenv("LINDBERGH_VT3_CAMFIELDS"); a = v && *v ? atol(v) : -1; b = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : a; }
+    if (g_rout_on) vt3_rout_mark(16);
     push32(c, 0xDEADBEEFu); g_vt3_game_routine(c);
+    {   /* World mode: at a match's start the game draws through the broadcast camera
+         * for ~3 s before it sets it through setProjectCameraMatrix (the hook
+         * world mode reads it from), and without it world mode guessed the camera
+         * from the draws - an overview and a top-down view before the real one.
+         * The routine has just written the camera's eye and target into the scene
+         * camera (+0x78 eye, +0x84 target): when the game has not set the world
+         * camera for a few frames, it is built from those and the broadcast lens.
+         * LINDBERGH_VT3_FEEDCAM=0 turns it off. */
+        static int feed = -1;
+        if (feed < 0) { const char *v = getenv("LINDBERGH_VT3_FEEDCAM"), *im = getenv("LINDBERGH_VT3_IMMERSIVE");
+                        feed = im && *im == '1' && !(v && *v == '0'); }
+        extern volatile unsigned g_game_world_real_frame; extern int g_vt3_feeding; extern unsigned g_frame;
+        if (feed && self >= 0x08000000u && self < 0xC0000000u &&
+            (g_game_world_real_frame == ~0u || g_frame - g_game_world_real_frame > 3)) {
+            uint32_t sc = rd32(self + 8); float e[3], t[3];
+            for (int k = 0; k < 3; k++) { uint32_t u = rd32(sc + 0x78 + 4u * k); memcpy(&e[k], &u, 4);
+                                          u = rd32(sc + 0x84 + 4u * k); memcpy(&t[k], &u, 4); }
+            float f[3] = { t[0] - e[0], t[1] - e[1], t[2] - e[2] };
+            float fl = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+            if (fl > 1e-3f && isfinite(fl)) {
+                for (int k = 0; k < 3; k++) f[k] /= fl;
+                float r[3] = { -f[2], 0, f[0] };                    /* f x (0,1,0) */
+                float rl = sqrtf(r[0] * r[0] + r[2] * r[2]);
+                if (rl > 1e-3f) {
+                    r[0] /= rl; r[2] /= rl;
+                    float u[3] = { r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0] };
+                    float view[12] = { r[0], r[1], r[2], 0, u[0], u[1], u[2], 0, -f[0], -f[1], -f[2], 0 };
+                    for (int row = 0; row < 3; row++)
+                        view[row * 4 + 3] = -(view[row * 4] * e[0] + view[row * 4 + 1] * e[1] + view[row * 4 + 2] * e[2]);
+                    static const float proj[16] = { 3.20261f, 0, 0, 0, 0, 5.67128f, 0, 0, 0, 0, -1.00067f, -2.00067f, 0, 0, -1, 0 };
+                    extern void arb_note_projection(const float *proj, const float *view);
+                    static unsigned told;
+                    if (g_vt3_log && g_frame - told > 60) { told = g_frame; fprintf(stderr, "[vt3] frame %u: world camera built from the camera routine (eye %.0f %.0f %.0f)\n", g_frame, e[0], e[1], e[2]); }
+                    g_vt3_feeding = 1; arb_note_projection(proj, view); g_vt3_feeding = 0;
+                }
+            }
+        }
+    }
     if (a < 0 || (long)g_frame < a || (long)g_frame > b) return;
+    if (g_frame % 10 == 0) {    /* what the routine wrote into the scene camera, and the view drawn with */
+        extern volatile float g_game_view[12];
+        uint32_t sc = rd32(self + 8); float w[6];
+        for (int i = 0; i < 6; i++) { uint32_t u = rd32(sc + 0x78 + 4u * i); memcpy(&w[i], &u, 4); }
+        const volatile float *V = g_game_view;
+        float e[3]; for (int k = 0; k < 3; k++) e[k] = -(V[k] * V[3] + V[4 + k] * V[7] + V[8 + k] * V[11]);
+        fprintf(stderr, "[camview] frame %u scam %#x wrote %.1f %.1f %.1f | %.1f %.1f %.1f ; drawn eye %.1f %.1f %.1f\n",
+                g_frame, sc, w[0], w[1], w[2], w[3], w[4], w[5], e[0], e[1], e[2]);
+    }
+    {   /* the global block gameRoutine starts from (0x850e200..0x850e400), as floats */
+        static uint32_t gprev[0x200 / 4]; static int ginit, gn;
+        for (int i = 0; i < 0x200 / 4; i++) {
+            uint32_t v = rd32(0x0850e200u + 4u * i);
+            if (ginit && v != gprev[i] && gn < 4000) {
+                float f0, f1; memcpy(&f0, &gprev[i], 4); memcpy(&f1, &v, 4);
+                fprintf(stderr, "[camglb] frame %u 0x%08x %g -> %g (%#x)\n", g_frame, 0x0850e200u + 4u * i, f0, f1, v); gn++;
+            }
+            gprev[i] = v;
+        }
+        ginit = 1;
+    }
     if (self != pself) { for (int i = 0; i < 0x400 / 4; i++) prev[i] = rd32(self + 4u * i); pself = self;
                          fprintf(stderr, "[camfld] frame %u camera %#x\n", g_frame, self); return; }
-    for (int i = 0; i < 0x400 / 4 && n < 3000; i++) {
+    for (int i = 0; i < 0x400 / 4 && n < 60000; i++) {
         uint32_t v = rd32(self + 4u * i);
-        if (v != prev[i] && (v < 0x10000 || prev[i] < 0x10000) && v < 0x10000000 && prev[i] < 0x10000000) {
+        static int all = -1; if (all < 0) { const char *e = getenv("LINDBERGH_VT3_CAMFIELDS_ALL"); all = e && *e == '1'; }
+        if (v != prev[i] && (all || ((v < 0x10000 || prev[i] < 0x10000) && v < 0x10000000 && prev[i] < 0x10000000))) {
             fprintf(stderr, "[camfld] frame %u +%#x %u -> %u\n", g_frame, 4 * i, prev[i], v); n++;
         }
         prev[i] = v;
     }
+}
+/* LINDBERGH_VT3_CAMROUTINES=1: which of the camera's per-frame routines run,
+ * logged whenever the set changes from one frame to the next */
+#define CAM_ROUT(X) X(0, procMain, "_ZN6camera8procMainEv") X(1, gameRoutine_kawa, "_ZN6camera16gameRoutine_kawaEv") \
+    X(2, normal, "_ZN6camera6normalEv") X(3, match, "_ZN6camera5matchEv") X(4, ready, "_ZN6camera5readyEv") \
+    X(5, ab, "_ZN6camera2abEv") X(6, uva, "_ZN6camera3uvaEv") X(7, playerintro, "_ZN6camera11playerintroEv") \
+    X(8, continue_cam, "_ZN6camera12continue_camEv") X(9, replay, "_ZN6camera6replayEv") X(10, winlose, "_ZN6camera7winloseEv") \
+    X(11, howtoplay, "_ZN6camera9howtoplayEv") X(12, ending, "_ZN6camera6endingEv") X(13, setLook_down, "_ZN6camera12setLook_downEv") \
+    X(14, calcParameter, "_ZN6camera13calcParameterEv") X(15, continue_init, "_ZN6camera16initContinue_camEi")
+static const char *const g_rout_name[] = {
+#define CAM_RN(i, n, sym) #n,
+    CAM_ROUT(CAM_RN) };
+static unsigned g_rout_mask, g_rout_frame = ~0u, g_rout_prev = ~0u;
+static void vt3_rout_mark(int i)   /* also called by the gameRoutine hook (bit 16) */
+{
+    extern unsigned g_frame;
+    if (g_frame != g_rout_frame) {
+        if (g_rout_frame != ~0u && g_rout_mask != g_rout_prev) {
+            fprintf(stderr, "[camrout] frame %u:", g_rout_frame);
+            for (int k = 0; k < 17; k++) if (g_rout_mask >> k & 1) fprintf(stderr, " %s", k == 16 ? "gameRoutine" : g_rout_name[k]);
+            fprintf(stderr, "\n");
+            g_rout_prev = g_rout_mask;
+        }
+        g_rout_frame = g_frame; g_rout_mask = 0;
+    }
+    g_rout_mask |= 1u << i;
+}
+#define CAM_RD(i, n, sym) static void (*g_rt_##n)(CPU *); static void h_rt_##n(CPU *c) { vt3_rout_mark(i); push32(c, 0xDEADBEEFu); g_rt_##n(c); }
+CAM_ROUT(CAM_RD)
+static void vt3_routines_install(void)
+{
+    const char *v = getenv("LINDBERGH_VT3_CAMROUTINES");
+    if (!v || *v != '1') return;
+    g_rout_on = 1;
+#define CAM_RI(i, n, sym) if (i != 0 && i != 5 && i != 13 && i != 14 && i != 15 && !vt3_wrap(sym, &g_rt_##n, h_rt_##n)) fprintf(stderr, "[camrout] %s not wrapped\n", sym);
+    CAM_ROUT(CAM_RI)
+}
+/* LINDBERGH_VT3_ATTACHLOG=1: each camera the scene manager is given, the frame and the caller */
+static void (*g_vt3_attach_cam)(CPU *);
+static void h_vt3_attach_cam(CPU *c)
+{
+    extern unsigned g_frame;
+    fprintf(stderr, "[attach] frame %u: scene manager %#x camera %#x (from %#x)\n", g_frame, rd32(c->esp + 4), rd32(c->esp + 8), rd32(c->esp));
+    push32(c, 0xDEADBEEFu); g_vt3_attach_cam(c);
 }
 int g_replays = 1, g_replay_hook;
 static void (*g_vt3_is_replay)(CPU *);
@@ -1127,9 +1234,13 @@ static void vt3_jumps(void)
              * wider - outside the broadcast camera's view was black. Every
              * node is visible, as House of the Dead 4's culling is widened. */
             vt3_camlog_install();
+            vt3_routines_install();
+            { const char *u = getenv("LINDBERGH_VT3_ATTACHLOG");
+              if (u && *u == '1' && vt3_wrap("_ZN14_sSceneManager12attachCameraEP8_sCamera", &g_vt3_attach_cam, h_vt3_attach_cam))
+                  fprintf(stderr, "[sega] Virtua Tennis 3: camera attaches logged\n"); }
             { const char *u = getenv("LINDBERGH_VT3_CAMFIELDS");
-              if (u && *u && vt3_wrap("_ZN6camera11gameRoutineEv", &g_vt3_game_routine, h_vt3_game_routine))
-                  fprintf(stderr, "[sega] Virtua Tennis 3: camera fields logged, frames %s\n", u); }
+              if (((u && *u) || g_rout_on || (getenv("LINDBERGH_VT3_IMMERSIVE") && *getenv("LINDBERGH_VT3_IMMERSIVE") == '1')) && vt3_wrap("_ZN6camera11gameRoutineEv", &g_vt3_game_routine, h_vt3_game_routine))
+                  fprintf(stderr, "[sega] Virtua Tennis 3: camera routine hooked (fields %s)\n", u ? u : "-"); }
             { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA"), *imm = getenv("LINDBERGH_VT3_IMMERSIVE");
               int skip_uva = u && *u ? *u == '1' : imm && *imm == '1';    /* default: on in world mode */
               if (skip_uva && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))

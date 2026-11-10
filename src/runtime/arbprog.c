@@ -3231,6 +3231,8 @@ static int g_noted_n, g_noted_next;
  * across, for arb_env_projection to tell a draw's from. */
 volatile float g_game_world_P[16], g_game_layer_x, g_game_up_eye[3], g_game_view[12];
 volatile int g_game_world_ok;
+volatile unsigned g_game_world_real_frame = ~0u;   /* the last frame the game itself set the world camera */
+int g_vt3_feeding;                                 /* arb_note_projection called with a camera built here */
 /* the bound vertex program's local i (0 if none) */
 int arb_vp_local(int i, float v[4])
 {
@@ -3283,6 +3285,7 @@ void arb_note_projection(const float *proj, const float *view)
             for (int i = 0; i < 3; i++) g_game_up_eye[i] = view[1 + 4 * i];   /* the world's up, in the camera's space */
             for (int i = 0; i < 12; i++) g_game_view[i] = view[i];
             g_game_world_ok = 1;
+            { extern unsigned g_frame; if (!g_vt3_feeding) g_game_world_real_frame = g_frame; }
         }
     }
     for (int i = 0; i < g_noted_n; i++) if (!memcmp(g_noted_proj[i], proj, 64)) return;
