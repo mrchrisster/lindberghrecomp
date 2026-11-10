@@ -1031,6 +1031,35 @@ static int vt3_wrap(const char *sym, void (**orig)(CPU *), HleHandler h)
     uint32_t va = guest_symbol(sym);
     return va && (*orig = dispatch_lifted(va)) && guest_override(sym, h);
 }
+/* LINDBERGH_VT3_CAMLOG=1: each camera state the game starts, and when */
+#define CAM_STATES(X) X(initReady, "_ZN6camera9initReadyEv") \
+    X(initMatch, "_ZN6camera9initMatchEv") X(initPlayerintro, "_ZN6camera15initPlayerintroEv") \
+    X(initGameRoutine, "_ZN6camera15initGameRoutineEv") X(initGameRoutine_kawa, "_ZN6camera20initGameRoutine_kawaEv") \
+    X(initNormal, "_ZN6camera10initNormalEv") X(initAb, "_ZN6camera6initAbEv") X(initContinue_cam, "_ZN6camera16initContinue_camEi") \
+    X(initReplay, "_ZN6camera10initReplayEv") X(initHowtoplay, "_ZN6camera13initHowtoplayEv")
+#define CAM_DEF(n, sym) static void (*g_cam_##n)(CPU *); \
+    static void h_cam_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[camstate] frame %u: %s(%#x)\n", g_frame, #n, rd32(c->esp + 8)); \
+                                    push32(c, 0xDEADBEEFu); g_cam_##n(c); }
+CAM_STATES(CAM_DEF)
+static void vt3_camlog_install(void)
+{
+    const char *v = getenv("LINDBERGH_VT3_CAMLOG");
+    if (!v || *v != '1') return;
+#define CAM_INST(n, sym) if (!vt3_wrap(sym, &g_cam_##n, h_cam_##n)) fprintf(stderr, "[camstate] %s not wrapped\n", sym);
+    CAM_STATES(CAM_INST)
+    fprintf(stderr, "[camstate] logging the camera's states\n");
+}
+/* LINDBERGH_VT3_SKIP_UVA=1: the fly-by intro camera (camera::initUva, at a
+ * match's start and between games) not started - the camera stays on its
+ * game routine. (Running the fly-by fast instead overran its animation.) */
+static void (*g_vt3_init_uva)(CPU *);
+static void h_vt3_init_uva(CPU *c)
+{
+    extern unsigned g_frame;
+    if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: intro fly-by camera skipped\n", g_frame);
+    (void)g_vt3_init_uva;
+    RET(0);
+}
 int g_replays = 1, g_replay_hook;
 static void (*g_vt3_is_replay)(CPU *);
 static void h_vt3_is_replay(CPU *c)
@@ -1075,6 +1104,10 @@ static void vt3_jumps(void)
              * bounding sphere against the frustum), and the headset sees far
              * wider - outside the broadcast camera's view was black. Every
              * node is visible, as House of the Dead 4's culling is widened. */
+            vt3_camlog_install();
+            { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA");
+              if (u && *u == '1' && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))
+                  fprintf(stderr, "[sega] Virtua Tennis 3: intro fly-by camera skipped\n"); }
             const char *im = getenv("LINDBERGH_VT3_IMMERSIVE");
             const char *cull = getenv("LINDBERGH_VT3_CULL");    /* =1: culling kept (testing) */
             if (im && *im == '1' && !(cull && *cull == '1') && guest_override("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", h_true))
