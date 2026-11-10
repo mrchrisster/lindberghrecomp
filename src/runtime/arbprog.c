@@ -1026,7 +1026,8 @@ static int emit_instr(Tr *t, char *stmt)
         else if (target == 4 && getenv("LINDBERGH_CUBE_GREY") && *getenv("LINDBERGH_CUBE_GREY") == '1')
             snprintf(r, sizeof r, "vec4(0.5, 0.5, 0.5, 1.0)");   /* LINDBERGH_CUBE_GREY=1: every cube map lookup a flat grey (is the cube map what is missing?) */
         else if (proj && target == 2 && t->stage == 1 && (g_tr_scr >> unit & 1))   /* a screen copy, where the eye drew this point */
-            snprintf(r, sizeof r, "texture2D(s2_%d, (lg_eye0.xy / lg_eye0.w * 0.5 + 0.5) * u_scr[%d].xy + u_scr[%d].zw)", unit, unit, unit);
+            snprintf(r, sizeof r, "(u_scr[%d].x != 0.0 ? texture2D(s2_%d, (lg_eye0.xy / lg_eye0.w * 0.5 + 0.5) * u_scr[%d].xy + u_scr[%d].zw) : texture2DProj(s2_%d, %s))",
+                     unit, unit, unit, unit, unit, X(0));
         else if (proj && target != 4)
             snprintf(r, sizeof r, "%sProj(%s%d, %s)", fnb[target], sm[target], unit, X(0));
         else if (bias)
@@ -1995,7 +1996,8 @@ static void upload(Linked *l)
         float st[4] = { k, y0, 0, 0 };
         int on = 0;
         for (int i = 0; i < n; i++) if (l->fid == fps[i]) on = 1;
-        if (on && k != 1.0f && g_game_world_ok && l->u_sP >= 0) {
+        extern int stereo_draw_world(void);
+        if (on && k != 1.0f && g_game_world_ok && l->u_sP >= 0 && stereo_draw_world()) {
             float P[16], Pi[16], V[16], Vi[16];
             for (int i = 0; i < 16; i++) P[i] = g_game_world_P[i];
             memset(V, 0, sizeof V); memset(Vi, 0, sizeof Vi);
@@ -2012,13 +2014,15 @@ static void upload(Linked *l)
         }
         glUniform4fv(l->u_stand, 1, st);
     }
-    if (l->u_scr >= 0 && l->scr) {    /* each screen copy's place in its texture */
+    if (l->u_scr >= 0 && l->scr) {    /* each screen copy's place in its texture (zero: the game's own lookup - not a world draw) */
         extern int stereo_screen_copy_map(unsigned tex, float out[4]);
+        extern int stereo_draw_world(void);
         float m[16][4]; memset(m, 0, sizeof m);
+        int world = stereo_draw_world();
         GLint active = GL_TEXTURE0;
         glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
         for (int u = 0; u < 16; u++) {
-            if (!(l->scr >> u & 1)) continue;
+            if (!(l->scr >> u & 1) || !world) continue;
             GLint tex = 0;
             glActiveTexture(GL_TEXTURE0 + u);
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
@@ -2384,13 +2388,16 @@ void arb_before_draw(void)
          * the game's own) pulled a little toward the eye. Its depth equals the
          * surface's under it; from the game camera the two round alike, through
          * the headset's reprojection not - the ads on the boards flickered
-         * (blended or alpha-tested: the far board's logos are cut-outs).
+         * (blended or alpha-tested: the far board's logos are cut-outs). Not on a
+         * 2D screen (flat picture, HUD): on that panel, tilted as the head turned, the slope term
+         * pushed the logo screen and the HUD out of the depth range.
          * LINDBERGH_VT3_DECAL_OFFSET=<units> (default 32, ~2 cm at the far boards; 0 = off). The game sets
          * its polygon offset before every draw, so this never outlives the draw. */
         static float du = -1;
         if (du < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *o = getenv("LINDBERGH_VT3_DECAL_OFFSET");
                       du = !(v && *v == '1') ? 0 : o && *o ? (float)atof(o) : 32.0f; }
-        if (du > 0 && (glIsEnabled(GL_BLEND) || glIsEnabled(GL_ALPHA_TEST)) && glIsEnabled(GL_DEPTH_TEST) && !glIsEnabled(GL_POLYGON_OFFSET_FILL)) {
+        extern int stereo_draw_not_screen(void);
+        if (du > 0 && stereo_draw_not_screen() && (glIsEnabled(GL_BLEND) || glIsEnabled(GL_ALPHA_TEST)) && glIsEnabled(GL_DEPTH_TEST) && !glIsEnabled(GL_POLYGON_OFFSET_FILL)) {
             glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(-1.0f, -du);
         }

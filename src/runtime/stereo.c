@@ -386,7 +386,12 @@ static void effective_projection(const float *p, int hud, float *out)
              * shirts, the crowd, the banners). */
             static float nk = -1;
             if (nk < 0) { const char *v = getenv("LINDBERGH_VT3_NEAR"); nk = v && *v ? (float)atof(v) : 1.0f; }
-            float n2 = nk * n, f2 = 4.0f * f;
+            /* ...but only for a camera with a near plane of a few units (the
+             * broadcast camera's is 1): the pixel camera's is 800 with its screen
+             * at ~989, and once the viewpoint moved in, a turn of the head took
+             * the HUD sprites and the logo screen behind a near plane that far
+             * out - they vanished. Those keep the old 0.05. */
+            float n2 = (n > 10.0f ? 0.05f : nk) * n, f2 = 4.0f * f;
             q[10] = -(f2 + n2) / (f2 - n2); q[14] = -2.0f * f2 * n2 / (f2 - n2);
             lg_stereo_eye_projection(q,hud,&eye,out);
             /* The broadcast camera's lens is narrow (about 20 degrees down):
@@ -2442,6 +2447,19 @@ static void vert_dump(uint32_t lo, uint32_t hi, GLsizei count)
     free(buf);
     if (n) fprintf(stderr, " world min %.2f %.2f %.2f max %.2f %.2f %.2f mean %.2f %.2f %.2f", mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], rw[0] / n, rw[1] / n, rw[2] / n);
     fprintf(stderr, "\n");
+}
+
+/* the draw being made goes into the world (not a 2D screen, the HUD or a pass) */
+int stereo_draw_world(void) { return g_on && !g_flat && g_loaded_hud == LG_STEREO_WORLD; }
+/* ...or anything but a 2D screen: the flat picture's panel, the HUD, a full-screen fill */
+int stereo_draw_not_screen(void)
+{
+    /* Virtua Tennis 3's HUD sprites come through its pixel camera (screen plane at
+     * the picture's pixels) and are classed as world draws: told apart by that lens */
+    extern volatile float g_game_layer_x;
+    const float *p = g_proj[g_proj_top];
+    if (g_game_layer_x > 0 && fabsf(p[0] - g_game_layer_x) < 1e-4f) return 0;
+    return g_on && !g_flat && g_loaded_hud != LG_STEREO_HUD && g_loaded_hud != LG_STEREO_FILL;
 }
 
 void stereo_reproject_view(int v, float out[16]);
