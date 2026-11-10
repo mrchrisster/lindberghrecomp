@@ -1034,7 +1034,7 @@ static int vt3_wrap(const char *sym, void (**orig)(CPU *), HleHandler h)
 /* LINDBERGH_VT3_CAMLOG=1: each camera state the game starts, and when */
 #define CAM_STATES(X) X(initReady, "_ZN6camera9initReadyEv") \
     X(initMatch, "_ZN6camera9initMatchEv") X(initPlayerintro, "_ZN6camera15initPlayerintroEv") \
-    X(initGameRoutine, "_ZN6camera15initGameRoutineEv") X(initGameRoutine_kawa, "_ZN6camera20initGameRoutine_kawaEv") \
+    X(initGameRoutine_kawa, "_ZN6camera20initGameRoutine_kawaEv") \
     X(initNormal, "_ZN6camera10initNormalEv") X(initAb, "_ZN6camera6initAbEv") X(initContinue_cam, "_ZN6camera16initContinue_camEi") \
     X(initReplay, "_ZN6camera10initReplayEv") X(initHowtoplay, "_ZN6camera13initHowtoplayEv")
 #define CAM_DEF(n, sym) static void (*g_cam_##n)(CPU *); \
@@ -1049,7 +1049,7 @@ static void vt3_camlog_install(void)
     CAM_STATES(CAM_INST)
     fprintf(stderr, "[camstate] logging the camera's states\n");
 }
-/* LINDBERGH_VT3_SKIP_UVA=1: the fly-by intro camera (camera::initUva, at a
+/* LINDBERGH_VT3_SKIP_UVA=1 (default in world mode; =0 keeps it): the fly-by intro camera (camera::initUva, at a
  * match's start and between games) not started - the camera stays on its
  * game routine. (Running the fly-by fast instead overran its animation.) */
 static void (*g_vt3_init_uva)(CPU *);
@@ -1059,6 +1059,28 @@ static void h_vt3_init_uva(CPU *c)
     if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: intro fly-by camera skipped\n", g_frame);
     (void)g_vt3_init_uva;
     RET(0);
+}
+/* LINDBERGH_VT3_CAMFIELDS=<from>-<to>: during those frames, each small integer
+ * field of the camera object (and the match manager at 0x85061a4) that changes,
+ * logged per frame - finding the start-of-match camera's state */
+static void (*g_vt3_game_routine)(CPU *);
+static void h_vt3_game_routine(CPU *c)
+{
+    extern unsigned g_frame;
+    static long a = -2, b; static uint32_t prev[0x400 / 4]; static uint32_t pself; static int n;
+    uint32_t self = rd32(c->esp + 4);
+    if (a == -2) { const char *v = getenv("LINDBERGH_VT3_CAMFIELDS"); a = v && *v ? atol(v) : -1; b = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : a; }
+    push32(c, 0xDEADBEEFu); g_vt3_game_routine(c);
+    if (a < 0 || (long)g_frame < a || (long)g_frame > b) return;
+    if (self != pself) { for (int i = 0; i < 0x400 / 4; i++) prev[i] = rd32(self + 4u * i); pself = self;
+                         fprintf(stderr, "[camfld] frame %u camera %#x\n", g_frame, self); return; }
+    for (int i = 0; i < 0x400 / 4 && n < 3000; i++) {
+        uint32_t v = rd32(self + 4u * i);
+        if (v != prev[i] && (v < 0x10000 || prev[i] < 0x10000) && v < 0x10000000 && prev[i] < 0x10000000) {
+            fprintf(stderr, "[camfld] frame %u +%#x %u -> %u\n", g_frame, 4 * i, prev[i], v); n++;
+        }
+        prev[i] = v;
+    }
 }
 int g_replays = 1, g_replay_hook;
 static void (*g_vt3_is_replay)(CPU *);
@@ -1105,8 +1127,12 @@ static void vt3_jumps(void)
              * wider - outside the broadcast camera's view was black. Every
              * node is visible, as House of the Dead 4's culling is widened. */
             vt3_camlog_install();
-            { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA");
-              if (u && *u == '1' && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))
+            { const char *u = getenv("LINDBERGH_VT3_CAMFIELDS");
+              if (u && *u && vt3_wrap("_ZN6camera11gameRoutineEv", &g_vt3_game_routine, h_vt3_game_routine))
+                  fprintf(stderr, "[sega] Virtua Tennis 3: camera fields logged, frames %s\n", u); }
+            { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA"), *imm = getenv("LINDBERGH_VT3_IMMERSIVE");
+              int skip_uva = u && *u ? *u == '1' : imm && *imm == '1';    /* default: on in world mode */
+              if (skip_uva && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))
                   fprintf(stderr, "[sega] Virtua Tennis 3: intro fly-by camera skipped\n"); }
             const char *im = getenv("LINDBERGH_VT3_IMMERSIVE");
             const char *cull = getenv("LINDBERGH_VT3_CULL");    /* =1: culling kept (testing) */
