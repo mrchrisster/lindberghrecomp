@@ -1104,6 +1104,25 @@ static int depth_passthrough(const char *body)
     return writes > 0 && writes == copies;
 }
 
+/* Virtua Tennis 3 world mode: planar shadows put back on the court (see upload) */
+static int vt3_ground_fix(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *g = getenv("LINDBERGH_VT3_GROUND");
+                  on = v && *v == '1' && g && *g == '1'; }   /* opt-in (LINDBERGH_VT3_GROUND=1): the shadows' geometry proved right already */
+    return on;
+}
+static const char k_ground_decl[] = "uniform vec4 u_gnd;\nuniform mat4 u_gP, u_gPi;\n";
+/* A planar shadow is right on the game camera's screen and nowhere else (it
+ * moved with the head): taken along that camera's ray to the court plane
+ * (u_gnd: its normal and offset in the camera's space; w 0 = off) */
+static const char k_ground_code[] =
+    "  if (u_gnd.w != 0.0) {\n"
+    "    vec4 ge = u_gPi * gl_Position;\n"
+    "    vec3 gd = abs(ge.w) > 1e-4 * length(ge.xyz) ? ge.xyz * sign(ge.w) : (ge.z < 0.0 ? ge.xyz : -ge.xyz);\n"
+    "    float gk = dot(u_gnd.xyz, gd);\n"
+    "    if (gk < -1e-6) gl_Position = u_gP * vec4(gd * (u_gnd.w / gk), 1.0);\n"
+    "  }\n";
 static GLuint g_tr_id;      /* the program being translated, for LINDBERGH_FP_ONLY */
 static char *translate(int stage, const char *src_in, Tr *t)
 {
@@ -1296,6 +1315,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
 #ifdef LINDBERGH_GL4ES
         /* multiview: one matrix per view, and render targets as two layers */
         if (!stage && !t->nmat && !t->pos_invariant) bput(&g, gl4es_mv_shaders ? "uniform mat4 u_reproj[2];\nuniform float u_eyex[2];\n" : "uniform mat4 u_reproj;\n");
+        if (!stage && !t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_decl);
         const char *sty[] = { "", "sampler1D s1_", "sampler2D s2_", "sampler3D s3_",
                               "samplerCube sc_", gl4es_mv_shaders ? "sampler2DArray sr_" : "sampler2D sr_",
                               "highp sampler2D ss_",   /* the compare done in the shader (shadow_compare); highp: a
@@ -1304,6 +1324,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
                               "sampler2DArray sl_" };
 #else
         if (!stage && !t->nmat && !t->pos_invariant) bput(&g, "uniform mat4 u_reproj;\n");
+        if (!stage && !t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_decl);
         const char *sty[] = { "", "sampler1D s1_", "sampler2D s2_", "sampler3D s3_",
                               "samplerCube sc_", "sampler2DRect sr_", manual_compare() ? "sampler2D ss_" : "sampler2DShadow ss_", "sampler2D sl_" };
 #endif
@@ -1339,8 +1360,12 @@ static char *translate(int stage, const char *src_in, Tr *t)
              * eye's (stereo.c; identity when not in stereo). */
 #ifdef LINDBERGH_GL4ES
             /* multiview: gl4es clips to the game's screen from gl4es_mvPre */
+            if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
             if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders) bput(&g, "  gl4es_mvPre = gl_Position;\n  gl_Position = u_reproj[gl_ViewID_OVR] * gl_Position;\n  gl_Position.x += u_eyex[gl_ViewID_OVR];\n");
             else
+#endif
+#ifndef LINDBERGH_GL4ES
+            if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
 #endif
             if (!t->nmat && !t->pos_invariant) bput(&g, "  gl_Position = u_reproj * gl_Position;\n");
         } else {
@@ -1414,7 +1439,7 @@ typedef struct {
     int    ok;
     MatRef mat[2][16]; int nmat[2];
     int    env_hi[2], local_hi[2];
-    GLint  u_env[2], u_loc[2], u_mat[2][16], u_rect, u_reproj, u_eyex, u_gen;
+    GLint  u_env[2], u_loc[2], u_mat[2][16], u_rect, u_reproj, u_eyex, u_gen, u_gnd, u_gP, u_gPi;
     int    nlit[2], lit_idx[2][16];         /* literals in the program's env (Tr) */
     float  lit[2][16][4];
     int    lit_loc[2][16];
@@ -1807,6 +1832,9 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     l->u_reproj = glGetUniformLocation(l->prog, "u_reproj");
     l->u_eyex = glGetUniformLocation(l->prog, "u_eyex");
     l->u_gen = glGetUniformLocation(l->prog, "u_gen");
+    l->u_gnd = glGetUniformLocation(l->prog, "u_gnd");
+    l->u_gP = glGetUniformLocation(l->prog, "u_gP");
+    l->u_gPi = glGetUniformLocation(l->prog, "u_gPi");
 #ifdef LINDBERGH_GL4ES
     if (gl4es_mv_shaders && l->u_reproj >= 0) {
         static int shown;
@@ -1898,6 +1926,31 @@ void arb_attrib_array(unsigned index, int on)
 
 static void upload(Linked *l)
 {
+    if (l->u_gnd >= 0) {
+        /* a planar shadow's signature: stencil NOTEQUAL (each pixel darkened
+         * once), depth test off, blended */
+        extern volatile float g_game_world_P[16], g_game_up_eye[3], g_game_view[12]; extern volatile int g_game_world_ok;
+        GLint sf = 0; glGetIntegerv(GL_STENCIL_FUNC, &sf);
+        float gnd[4] = { 0, 0, 0, 0 };
+        if (g_game_world_ok && glIsEnabled(GL_STENCIL_TEST) && sf == GL_NOTEQUAL && !glIsEnabled(GL_DEPTH_TEST) && glIsEnabled(GL_BLEND)) {
+            float n[3] = { g_game_up_eye[0], g_game_up_eye[1], g_game_up_eye[2] };
+            float nl = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (nl > 0.5f) {
+                static float h = -1;   /* LINDBERGH_VT3_GROUND_Y: the plane's height, game units (the shadows lie at ~0.06-0.08) */
+                if (h < 0) { const char *v = getenv("LINDBERGH_VT3_GROUND_Y"); h = v && *v ? (float)atof(v) : 0.08f; }
+                for (int i = 0; i < 3; i++) n[i] /= nl;
+                float d = h + n[0] * g_game_view[3] + n[1] * g_game_view[7] + n[2] * g_game_view[11];
+                if (d < -1e-3f) { gnd[0] = n[0]; gnd[1] = n[1]; gnd[2] = n[2]; gnd[3] = d; }
+            }
+        }
+        glUniform4fv(l->u_gnd, 1, gnd);
+        if (gnd[3] != 0 && l->u_gP >= 0 && l->u_gPi >= 0) {
+            float P[16], Pi[16];
+            for (int i = 0; i < 16; i++) P[i] = g_game_world_P[i];
+            if (mat_inv(P, Pi)) { glUniformMatrix4fv(l->u_gP, 1, GL_FALSE, P); glUniformMatrix4fv(l->u_gPi, 1, GL_FALSE, Pi); }
+            else { gnd[3] = 0; glUniform4fv(l->u_gnd, 1, gnd); }
+        }
+    }
     if (l->u_gen >= 0) {
         /* Which generic arrays are on, asked of GL rather than remembered:
          * glPopClientAttrib (VT3 calls it every pass) and entry points
@@ -2226,6 +2279,15 @@ void arb_before_draw(void)
     {   static int nost = -1;   /* LINDBERGH_NO_STENCIL=1 (testing): every draw without its stencil test */
         if (nost < 0) { const char *v = getenv("LINDBERGH_NO_STENCIL"); nost = v && *v == '1'; }
         if (nost) glDisable(GL_STENCIL_TEST); }
+    {   static long w1 = -2;    /* LINDBERGH_VT3_W1=<vp> (testing): that vertex program's local 8.x, 0, read as 1 */
+        if (w1 == -2) { const char *v = getenv("LINDBERGH_VT3_W1"); w1 = v && *v ? atol(v) : -1; }
+        if (w1 > 0 && g_enabled[0] && g_bound[0] == (GLuint)w1) {
+            ArbProg *pp = prog_get(0, g_bound[0], 0);
+            if (pp && pp->local[8][0] == 0) { pp->local[8][0] = 1; pp->local_gen++; }
+        } }
+    {   static long nbf = -2;   /* LINDBERGH_NOBLEND_FP=<id> (testing): that fragment program's draws unblended, no stencil, no culling */
+        if (nbf == -2) { const char *v = getenv("LINDBERGH_NOBLEND_FP"); nbf = v && *v ? atol(v) : -1; }
+        if (nbf > 0 && g_enabled[1] && g_bound[1] == (GLuint)nbf) { glDisable(GL_BLEND); glDisable(GL_STENCIL_TEST); glDisable(GL_CULL_FACE); } }
     if (!stereo_glprof_on()) { before_draw(); return; }
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
@@ -3018,6 +3080,14 @@ int arb_vp_local(int i, float v[4])
     ArbProg *pp = prog_get(0, g_bound[0], 0);
     if (!pp) return 0;
     for (int k = 0; k < 4; k++) v[k] = pp->local[i][k];
+    /* a literal the program declares in that slot is what the shader gets */
+    for (int j = 0; j < g_nlinked; j++) {
+        Linked *l = &g_linked[j];
+        if (l->vid != g_bound[0]) continue;
+        for (int n = 0; n < l->nlit[0]; n++)
+            if (l->lit_loc[0][n] && l->lit_idx[0][n] == i) { for (int k = 0; k < 4; k++) v[k] = l->lit[0][n][k]; return 2; }
+        break;
+    }
     return 1;
 }
 /* the bound vertex program's local[0..3] (VT3's matrix, by rows); 0 if none */

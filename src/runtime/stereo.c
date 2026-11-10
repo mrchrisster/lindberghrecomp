@@ -1655,7 +1655,13 @@ static int transform_call(CPU *c, HleId id, const char *n)
          * Dead 4 clears depth alone only for its HUD, over the scene. */
         static unsigned cleared_frame = ~0u, colour_frame = ~0u;
         if ((mask & GL_COLOR_BUFFER_BIT) && g_game_fb == g_world_fb) colour_frame = g_frame;
-        if ((mask & GL_DEPTH_BUFFER_BIT) && !(mask & GL_COLOR_BUFFER_BIT) && g_game_fb == g_world_fb &&
+        static int noinj = -1;  /* LINDBERGH_NO_CLEAR_INJECT=1 (testing): the game's depth-only clear left alone */
+        if (noinj < 0) { const char *v = getenv("LINDBERGH_NO_CLEAR_INJECT"); noinj = v && *v == '1'; }
+        { static int told; if ((mask & GL_DEPTH_BUFFER_BIT) && !(mask & GL_COLOR_BUFFER_BIT) && told < 6 && g_scene_draws) {
+              told++; fprintf(stderr, "[clear] frame %u depth-only clear fb %u world fb %u flat %d cleared %u colour %u -> %s\n", g_frame, (unsigned)g_game_fb,
+                              (unsigned)g_world_fb, g_flat, cleared_frame, colour_frame,
+                              g_game_fb == g_world_fb && !g_flat && cleared_frame != g_frame && colour_frame != g_frame && !noinj ? "colour cleared too" : "as is"); } }
+        if ((mask & GL_DEPTH_BUFFER_BIT) && !(mask & GL_COLOR_BUFFER_BIT) && g_game_fb == g_world_fb && !noinj &&
             !g_flat && cleared_frame != g_frame && colour_frame != g_frame) {
             cleared_frame = g_frame;
             GLfloat cc[4];
@@ -2099,8 +2105,101 @@ static Op *op_new(void);
 /* LINDBERGH_VERT_DUMP=<frame>: each world draw's vertices that frame, taken
  * back to the world through the broadcast camera (inverse lens, inverse
  * view): which plane the shadows lie on. */
+/* one attribute of vertex v as floats (float, or unsigned byte as stored) */
+static int attr_read(int i, uint32_t v, float out[4])
+{
+    Arr *a = &g_arr[i];
+    out[0] = out[1] = out[2] = 0; out[3] = 1;
+    if (!a->on || a->size < 1) return 0;
+    int eb = type_bytes(a->type);
+    uint32_t stride = a->stride ? (uint32_t)a->stride : (uint32_t)(a->size * eb);
+    unsigned char b[64];
+    if (a->size * eb > 64) return 0;
+    if (a->vbo) {
+        GLint was = 0; glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &was);
+        glBindBuffer(GL_ARRAY_BUFFER, a->vbo);
+        glGetBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(a->ptr + v * stride), a->size * eb, b);
+        glBindBuffer(GL_ARRAY_BUFFER, (GLuint)was);
+    } else memcpy(b, GP(a->ptr + v * stride), (size_t)(a->size * eb));
+    for (int k = 0; k < a->size && k < 4; k++) {
+        if (a->type == GL_FLOAT) out[k] = ((float *)b)[k];
+        else if (a->type == GL_UNSIGNED_BYTE) out[k] = a->norm ? b[k] / 255.0f : b[k];
+        else if (a->type == GL_SHORT) out[k] = ((short *)b)[k];
+        else if (a->type == GL_UNSIGNED_SHORT) out[k] = ((unsigned short *)b)[k];
+        else return 0;
+    }
+    return 1;
+}
+
+/* LINDBERGH_EMU_VP=<vp>: Virtua Tennis 3's skinned planar-shadow program run
+ * on the CPU for a draw's first vertices (its exact steps), to world space */
+static void vp141_emu(void)
+{
+    static long want = -2;
+    if (want == -2) { const char *v = getenv("LINDBERGH_EMU_VP"); want = v && *v ? atol(v) : -1; }
+    if (want >= 0 && arb_bound_vp() == 165) {      /* the body, for comparison: its first vertex */
+        extern int arb_vp_local(int i, float v[4]);
+        float L[4][4], x[4], cl[4], RR[16], fc[4];
+        for (int r = 0; r < 4; r++) arb_vp_local(r, L[r]);
+        if (attr_read(g_arr[ARR_VERTEX].on ? ARR_VERTEX : ARR_ATTR0, 0, x)) {
+            x[3] = 1;
+            for (int r = 0; r < 4; r++) cl[r] = L[r][0] * x[0] + L[r][1] * x[1] + L[r][2] * x[2] + L[r][3] * x[3];
+            stereo_reproject_view(0, RR);
+            for (int r = 0; r < 4; r++) fc[r] = RR[r] * cl[0] + RR[4 + r] * cl[1] + RR[8 + r] * cl[2] + RR[12 + r] * cl[3];
+            fprintf(stderr, "[emu] body vp 165 fp %u v0 %.2f %.2f %.2f game-ndc %.3f %.3f eye-ndc %.3f %.3f w %.1f\n", arb_bound_fp(), x[0], x[1], x[2],
+                    cl[0] / cl[3], cl[1] / cl[3], fc[0] / fc[3], fc[1] / fc[3], fc[3]);
+        }
+        return;
+    }
+    if (want < 0 || arb_bound_vp() != (unsigned)want) return;
+    extern int arb_vp_local(int i, float v[4]);
+    extern volatile float g_game_world_P[16], g_game_view[12];
+    float L[4][4], L8[4];
+    for (int r = 0; r < 4; r++) arb_vp_local(r, L[r]);
+    arb_vp_local(8, L8);
+    Arr *a1 = &g_arr[ARR_ATTR0 + 1], *a7 = &g_arr[ARR_ATTR0 + 7];
+    fprintf(stderr, "[emu] frame %u vp %u L8 %g %g %g %g attr1 %d x %#x n%d attr7 %d x %#x n%d\n", g_frame, arb_bound_vp(), L8[0], L8[1], L8[2], L8[3],
+            a1->on ? a1->size : 0, a1->type, a1->norm, a7->on ? a7->size : 0, a7->type, a7->norm);
+    const volatile float *P = g_game_world_P, *V = g_game_view;
+    for (uint32_t v = 0; v < 400; v += 40) {
+        float x[4], q1[4], q7[4];
+        if (!attr_read(g_arr[ARR_VERTEX].on ? ARR_VERTEX : ARR_ATTR0, v, x)) return;
+        if (!g_arr[ARR_VERTEX].on && g_arr[ARR_ATTR0].size == 3) x[3] = 1;
+        attr_read(ARR_ATTR0 + 1, v, q1); attr_read(ARR_ATTR0 + 7, v, q7);
+        float t[4] = { q1[1], q1[3], q7[1], q7[3] };
+        for (int k = 0; k < 4; k++) t[k] *= L8[1];
+        int A[4] = { (int)floorf(t[3]), (int)floorf(t[2]), (int)floorf(t[0]), (int)floorf(t[1]) };   /* .wzxy */
+        float wgt[4] = { q7[0], q7[2], q1[2], q1[0] };   /* for A.x, A.y, A.z, A.w */
+        float R0[4] = { 0, 0, 0, L8[0] };
+        for (int j = 0; j < 4; j++) for (int r = 0; r < 3; r++) {
+            float b[4]; arb_vp_local(9 + r + A[j], b);
+            R0[r] += wgt[j] * (b[0] * x[0] + b[1] * x[1] + b[2] * x[2] + b[3] * x[3]);
+        }
+        float cl[4];
+        for (int r = 0; r < 4; r++) cl[r] = L[r][0] * R0[0] + L[r][1] * R0[1] + L[r][2] * R0[2] + L[r][3] * R0[3];
+        float z = -cl[3], w = (cl[2] - P[10] * z) / P[14];
+        float e[3] = { (cl[0] - P[8] * z) / P[0], (cl[1] - P[9] * z) / P[5], z };
+        float ex[3], wo[3] = { 0, 0, 0 };
+        for (int r = 0; r < 3; r++) ex[r] = (fabsf(w) > 1e-6f ? e[r] / w : e[r]) - V[r * 4 + 3];
+        for (int c = 0; c < 3; c++) wo[c] = V[c] * ex[0] + V[4 + c] * ex[1] + V[8 + c] * ex[2];
+        float RR[16], fc[4]; stereo_reproject_view(0, RR);
+        for (int r = 0; r < 4; r++) fc[r] = RR[r] * cl[0] + RR[4 + r] * cl[1] + RR[8 + r] * cl[2] + RR[12 + r] * cl[3];
+        fprintf(stderr, "[emu]  v%u ndc %.3f %.3f %.3f w %.1f |", v, fc[0] / fc[3], fc[1] / fc[3], fc[2] / fc[3], fc[3]);
+        fprintf(stderr, "[emu]  v%u pos %.2f %.2f %.2f a1 %.2f %.2f %.2f %.2f a7 %.2f %.2f %.2f %.2f idx %d %d %d %d R0 %.2f %.2f %.2f %.2f eye-w %.4f world %.2f %.2f %.2f\n",
+                v, x[0], x[1], x[2], q1[0], q1[1], q1[2], q1[3], q7[0], q7[1], q7[2], q7[3], A[0], A[1], A[2], A[3], R0[0], R0[1], R0[2], R0[3], w, wo[0], wo[1], wo[2]);
+    }
+}
+
+static int at_emu_frame(void)
+{
+    static long at = -2, last;
+    if (at == -2) { const char *v = getenv("LINDBERGH_VERT_DUMP"); at = v && *v ? atol(v) : -1; last = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : at + 1; }
+    return at >= 0 && (long)g_frame >= at && (long)g_frame <= last;
+}
+
 static void vert_dump(uint32_t lo, uint32_t hi, GLsizei count)
 {
+    if (at_emu_frame()) vp141_emu();
     static long at = -2;
     static long last; if (at == -2) { const char *v = getenv("LINDBERGH_VERT_DUMP"); at = v && *v ? atol(v) : -1; last = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : at + 1; }   /* =<frame>[-<last>] */
     if (at < 0 || (long)g_frame < at || (long)g_frame > last) return;
@@ -2109,7 +2208,7 @@ static void vert_dump(uint32_t lo, uint32_t hi, GLsizei count)
     float M[16]; Arr *a = g_arr[ARR_VERTEX].on ? &g_arr[ARR_VERTEX] : &g_arr[ARR_ATTR0];
     {   /* the matrices: locals 0..3 (the position), and the light rows a shadow reader uses */
         extern int arb_vp_local(int i, float v[4]);
-        static const int li[] = { 0, 1, 2, 3, 8, 9, 11, 15, 225 };
+        static const int li[] = { 0, 1, 2, 3, 8, 9, 11, 15, 219, 225 };
         fprintf(stderr, "[vmat] frame %u fb %u vp %u fp %u:", g_frame, (unsigned)g_game_fb, arb_bound_vp(), arb_bound_fp());
         for (unsigned j = 0; j < sizeof li / sizeof *li; j++) {
             float v[4]; if (!arb_vp_local(li[j], v)) break;
@@ -2123,8 +2222,13 @@ static void vert_dump(uint32_t lo, uint32_t hi, GLsizei count)
                   glIsEnabled(GL_POLYGON_OFFSET_FILL), po[0], po[1], glIsEnabled(GL_BLEND), g_clipped);
           GLboolean cm[4]; GLint sc[4], vpv[4], cf = 0, ff = 0; glGetBooleanv(GL_COLOR_WRITEMASK, cm); glGetIntegerv(GL_SCISSOR_BOX, sc);
           glGetIntegerv(GL_VIEWPORT, vpv); glGetIntegerv(GL_CULL_FACE_MODE, &cf); glGetIntegerv(GL_FRONT_FACE, &ff);
+          GLint bs = 0, bd = 0, be = 0; glGetIntegerv(GL_BLEND_SRC_RGB, &bs); glGetIntegerv(GL_BLEND_DST_RGB, &bd); glGetIntegerv(GL_BLEND_EQUATION_RGB, &be);
+          fprintf(stderr, " bfunc %#x %#x %#x", bs, bd, be);
           fprintf(stderr, " cmask %d%d%d%d scissor %d %d,%d %dx%d vp %d,%d %dx%d cull %d %#x front %#x", cm[0], cm[1], cm[2], cm[3],
                   glIsEnabled(GL_SCISSOR_TEST), sc[0], sc[1], sc[2], sc[3], vpv[0], vpv[1], vpv[2], vpv[3], glIsEnabled(GL_CULL_FACE), cf, ff); }
+        { const float *pp = g_proj[g_proj_top]; extern volatile float g_game_world_P[16];
+          fprintf(stderr, " | proj %g %g %g %g %g %g game %g %g %g %g", pp[0], pp[5], pp[8], pp[9], pp[10], pp[14],
+                  g_game_world_P[0], g_game_world_P[5], g_game_world_P[10], g_game_world_P[14]); }
         fprintf(stderr, " | hud %d persp %d R0", g_loaded_hud, is_perspective(g_proj[g_proj_top]));
         for (int i = 0; i < 16; i++) fprintf(stderr, " %.3g", R0[i]);
         fprintf(stderr, " R1");
