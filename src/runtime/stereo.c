@@ -1280,9 +1280,22 @@ static unsigned g_nscreen_copy;
 static int      g_skip_begin;           /* inside a glBegin/glEnd that is left out */
 static HleId    g_cur_id;               /* the call transform_call is looking at */
 
+static float    g_screen_map[MAX_SCREEN_COPIES][4];   /* the eyes' screen (0..1) -> the copy's texture coordinates */
 static int screen_copy(GLuint tex)
 {
     for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == tex) return 1;
+    return 0;
+}
+
+/* A texture holding a copy of the whole screen - copied from the first eye -
+ * and where a point of that eye's screen (0..1 across) lies in it: u =
+ * s * map.xy + map.zw. Virtua Tennis 3's ground reads its shadow mask so,
+ * looking it up from the game camera's screen position, which in world mode
+ * is not where the eye drew it (arbprog.c, lg_eye0). */
+int stereo_screen_copy_map(unsigned tex, float out[4])
+{
+    for (unsigned i = 0; i < g_nscreen_copy; i++)
+        if (g_screen_copy[i] == tex) { memcpy(out, g_screen_map[i], 16); return out[0] != 0; }
     return 0;
 }
 
@@ -1377,6 +1390,18 @@ static int copy_from_eyes(CPU *c, int k)
         g_screen_copy[g_nscreen_copy++] = (GLuint)tex;
         fprintf(stderr, "[stereo] frame %u: texture %d is a copy of the whole screen\n", g_frame, tex);
     }
+    if (!g_side && w >= GAME_W * 9 / 10 && h >= GAME_H * 9 / 10)
+        for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == (GLuint)tex) {
+            GLint tw = 0, th = 0;
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &tw);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &th);
+            if (tw <= 0 || th <= 0) { tw = xo + w; th = yo + h; }
+            float m[4] = { (float)GAME_W / tw, (float)GAME_H / th, (float)(xo - x) / tw, (float)(yo - y) / th };
+            if (memcmp(m, g_screen_map[i], 16)) {
+                memcpy(g_screen_map[i], m, 16);
+                fprintf(stderr, "[stereo] texture %d: the screen copy is %dx%d of %dx%d at %d,%d (from %d,%d)\n", tex, w, h, tw, th, xo, yo, x, y);
+            }
+        }
     return 1;
 #else
     (void)c; (void)k;
@@ -1796,6 +1821,14 @@ static int transform_call(CPU *c, HleId id, const char *n)
             if (nf && (is_draw(k) || k == K_BEGIN)) {
                 unsigned f = arb_bound_fp();
                 for (int i = 0; i < nf; i++) if (f == fps[i]) { if (k == K_BEGIN) g_skip_begin = 1; return 1; }
+            }
+        }
+        {   /* LINDBERGH_STOP_AFTER=<n> (testing): each frame, the screen's draws after its n-th left out - the eyes as they stood then */
+            static long stop = -2; static unsigned fr = ~0u; static long n;
+            if (stop == -2) { const char *v = getenv("LINDBERGH_STOP_AFTER"); stop = v && *v ? atol(v) : -1; }
+            if (stop >= 0 && (is_draw(k) || k == K_BEGIN) && g_game_fb == 0) {
+                if (fr != g_frame) { fr = g_frame; n = 0; }
+                if (++n > stop) { if (k == K_BEGIN) g_skip_begin = 1; return 1; }
             }
         }
         /* LINDBERGH_SKIP_DRAWS=offscreen|main|all: whole groups of draws left
@@ -2783,6 +2816,16 @@ static void stereo_gl_call_inner(CPU *c, HleId id, HleHandler fn)
                     b[0], b[1], b[2], b[3], boxed ? "" : "?");
         } else
             fprintf(stderr, "[map] %s %#x %#x %#x %#x %#x %#x\n", nm, a[0], a[1], a[2], a[3], a[4], a[5]);
+    }
+    {   /* LINDBERGH_LIST_LOG=1: what the game compiles into each display list */
+        static int on = -1; static unsigned cur, nl;
+        if (on < 0) { const char *v = getenv("LINDBERGH_LIST_LOG"); on = v && *v == '1'; }
+        if (on) {
+            const char *nm = hle_name(id);
+            if (!strcmp(nm, "glNewList")) { cur = A32(0); fprintf(stderr, "[list] %#x begin (mode %#x)\n", cur, A32(1)); }
+            else if (!strcmp(nm, "glEndList")) { fprintf(stderr, "[list] %#x end\n", cur); cur = 0; }
+            else if (cur && nl < 20000) { nl++; fprintf(stderr, "[list] %#x %s %#x %#x %#x %#x\n", cur, nm, A32(0), A32(1), A32(2), A32(3)); }
+        }
     }
     if (!g_on) { fn(c); return; }
     const char *n = hle_name(id);

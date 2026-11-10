@@ -99,7 +99,8 @@ static int manual_compare(void)
     return on;
 #endif
 }
-static unsigned g_tr_cmp2d;        /* fragment units read as 2D whose texture compares depth (target 6) */
+static unsigned g_tr_cmp2d;
+static unsigned g_tr_scr;          /* fragment units holding a copy of the whole screen (world mode: read where the eye drew) */        /* fragment units read as 2D whose texture compares depth (target 6) */
 void gl4es_multiview_layered(unsigned texture);
 unsigned gl4es_compare_units(void);
 void gl4es_mark_shadow(int unit);
@@ -1024,6 +1025,8 @@ static int emit_instr(Tr *t, char *stmt)
         }
         else if (target == 4 && getenv("LINDBERGH_CUBE_GREY") && *getenv("LINDBERGH_CUBE_GREY") == '1')
             snprintf(r, sizeof r, "vec4(0.5, 0.5, 0.5, 1.0)");   /* LINDBERGH_CUBE_GREY=1: every cube map lookup a flat grey (is the cube map what is missing?) */
+        else if (proj && target == 2 && t->stage == 1 && (g_tr_scr >> unit & 1))   /* a screen copy, where the eye drew this point */
+            snprintf(r, sizeof r, "texture2D(s2_%d, (lg_eye0.xy / lg_eye0.w * 0.5 + 0.5) * u_scr[%d].xy + u_scr[%d].zw)", unit, unit, unit);
         else if (proj && target != 4)
             snprintf(r, sizeof r, "%sProj(%s%d, %s)", fnb[target], sm[target], unit, X(0));
         else if (bias)
@@ -1110,6 +1113,13 @@ static int vt3_ground_fix(void)
     static int on = -1;
     if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *g = getenv("LINDBERGH_VT3_GROUND");
                   on = v && *v == '1' && g && *g == '1'; }   /* opt-in (LINDBERGH_VT3_GROUND=1): the shadows' geometry proved right already */
+    return on;
+}
+static int vt3_screen_fix(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *g = getenv("LINDBERGH_VT3_SCREENFIX");
+                  on = v && *v == '1' && !(g && *g == '0'); }
     return on;
 }
 static const char k_ground_decl[] = "uniform vec4 u_gnd;\nuniform mat4 u_gP, u_gPi;\n";
@@ -1329,6 +1339,9 @@ static char *translate(int stage, const char *src_in, Tr *t)
                               "samplerCube sc_", "sampler2DRect sr_", manual_compare() ? "sampler2D ss_" : "sampler2DShadow ss_", "sampler2D sl_" };
 #endif
         for (int u = 0; u < 16; u++) if (t->tex_target[u]) bput(&g, "uniform %s%d;\n", sty[t->tex_target[u]], u);
+        /* world mode: where the first eye draws this point, for a screen copy's lookup (see g_tr_scr) */
+        if (vt3_screen_fix() && (!stage || g_tr_scr)) bput(&g, "varying vec4 lg_eye0;\n");
+        if (stage && g_tr_scr) bput(&g, "uniform vec4 u_scr[16];\n");
         for (int a = 1; a < 16; a++) if (t->attrib_used[a]) bput(&g, "attribute vec4 va_%d;\n", a);
         if (!stage && t->gen_alias) bput(&g, "uniform float u_gen[16];\n");
         bput(&g, "vec4 arb_lit(vec4 s) {\n"
@@ -1361,6 +1374,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
 #ifdef LINDBERGH_GL4ES
             /* multiview: gl4es clips to the game's screen from gl4es_mvPre */
             if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
+            if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders && vt3_screen_fix()) bput(&g, "  lg_eye0 = u_reproj[0] * gl_Position;\n");
             if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders) bput(&g, "  gl4es_mvPre = gl_Position;\n  gl_Position = u_reproj[gl_ViewID_OVR] * gl_Position;\n  gl_Position.x += u_eyex[gl_ViewID_OVR];\n");
             else
 #endif
@@ -1368,6 +1382,10 @@ static char *translate(int stage, const char *src_in, Tr *t)
             if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
 #endif
             if (!t->nmat && !t->pos_invariant) bput(&g, "  gl_Position = u_reproj * gl_Position;\n");
+#ifndef LINDBERGH_GL4ES
+            if (!t->nmat && !t->pos_invariant && vt3_screen_fix()) bput(&g, "  lg_eye0 = gl_Position;\n");
+#endif
+            if ((t->nmat || t->pos_invariant) && vt3_screen_fix()) bput(&g, "  lg_eye0 = gl_Position;\n");
         } else {
             if (t->fog_mode) {
                 const char *f = t->fog_mode == 1 ? "(gl_Fog.end - gl_FogFragCoord) * gl_Fog.scale" :
@@ -1434,7 +1452,8 @@ out:
 /* ------------------------------------------------------------------------ */
 
 typedef struct {
-    GLuint vid, fid; unsigned vgen, fgen, cmp2d;
+    GLuint vid, fid; unsigned vgen, fgen, cmp2d, scr;
+    GLint  u_scr;
     GLuint prog;
     int    ok;
     MatRef mat[2][16]; int nmat[2];
@@ -1617,9 +1636,22 @@ static Linked *link_pair(GLuint vid, GLuint fid)
         glActiveTexture((GLenum)active);
     }
 #endif
+    unsigned scr = 0;
+    if (fp && vt3_screen_fix()) {     /* units holding a copy of the whole screen now */
+        extern int stereo_screen_copy_map(unsigned tex, float out[4]);
+        GLint active = GL_TEXTURE0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+        for (int u = 0; u < 16; u++) {
+            GLint tex = 0; float m[4];
+            glActiveTexture(GL_TEXTURE0 + u);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+            if (tex && stereo_screen_copy_map((unsigned)tex, m)) scr |= 1u << u;
+        }
+        glActiveTexture((GLenum)active);
+    }
     for (int i = 0; i < g_nlinked; i++) {
         Linked *l = &g_linked[i];
-        if (l->vid == vid && l->fid == fid && l->vgen == vgen && l->fgen == fgen && l->cmp2d == cmp2d) return l;
+        if (l->vid == vid && l->fid == fid && l->vgen == vgen && l->fgen == fgen && l->cmp2d == cmp2d && l->scr == scr) return l;
     }
     clock_gettime(CLOCK_MONOTONIC, &g_link_t0);    /* translate, compile and link */
     if (g_nlinked >= MAX_LINKED) {          /* full: start over */
@@ -1628,7 +1660,7 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     }
     Linked *l = &g_linked[g_nlinked++];
     memset(l, 0, sizeof *l);
-    l->vid = vid; l->fid = fid; l->vgen = vgen; l->fgen = fgen; l->cmp2d = cmp2d;
+    l->vid = vid; l->fid = fid; l->vgen = vgen; l->fgen = fgen; l->cmp2d = cmp2d; l->scr = scr;
     l->up_env[0] = l->up_env[1] = l->up_loc[0] = l->up_loc[1] = ~0u;
     if (g_dump < 0) { const char *d = getenv("LINDBERGH_ARB_DUMP"); g_dump = d && *d && *d != '0'; }
 
@@ -1646,6 +1678,7 @@ static Linked *link_pair(GLuint vid, GLuint fid)
         g_tr_layered = 0;
 #endif
         g_tr_cmp2d = st == 1 ? cmp2d : 0;
+        g_tr_scr = st == 1 ? scr : 0;
 #ifdef LINDBERGH_GL4ES
         {   /* LINDBERGH_CMP_LOG=1: every fragment link and its compare mask (a program flipping between variants) */
             static int lg = -1;
@@ -1833,6 +1866,7 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     l->u_eyex = glGetUniformLocation(l->prog, "u_eyex");
     l->u_gen = glGetUniformLocation(l->prog, "u_gen");
     l->u_gnd = glGetUniformLocation(l->prog, "u_gnd");
+    l->u_scr = glGetUniformLocation(l->prog, "u_scr");
     l->u_gP = glGetUniformLocation(l->prog, "u_gP");
     l->u_gPi = glGetUniformLocation(l->prog, "u_gPi");
 #ifdef LINDBERGH_GL4ES
@@ -1926,6 +1960,21 @@ void arb_attrib_array(unsigned index, int on)
 
 static void upload(Linked *l)
 {
+    if (l->u_scr >= 0 && l->scr) {    /* each screen copy's place in its texture */
+        extern int stereo_screen_copy_map(unsigned tex, float out[4]);
+        float m[16][4]; memset(m, 0, sizeof m);
+        GLint active = GL_TEXTURE0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+        for (int u = 0; u < 16; u++) {
+            if (!(l->scr >> u & 1)) continue;
+            GLint tex = 0;
+            glActiveTexture(GL_TEXTURE0 + u);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+            if (!stereo_screen_copy_map((unsigned)tex, m[u])) { m[u][0] = m[u][1] = 1; }
+        }
+        glActiveTexture((GLenum)active);
+        glUniform4fv(l->u_scr, 16, &m[0][0]);
+    }
     if (l->u_gnd >= 0) {
         /* a planar shadow's signature: stencil NOTEQUAL (each pixel darkened
          * once), depth test off, blended */
