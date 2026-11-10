@@ -378,8 +378,14 @@ static void effective_projection(const float *p, int hud, float *out)
         float n = p[14] / (p[10] - 1), f = p[14] / (p[10] + 1);
         if (isfinite(n) && isfinite(f) && n > 0 && f > n) {
             float q[16]; memcpy(q, p, 64);
-            static float nk = -1;   /* LINDBERGH_VT3_NEAR: the eyes' near plane, times the camera's */
-            if (nk < 0) { const char *v = getenv("LINDBERGH_VT3_NEAR"); nk = v && *v ? (float)atof(v) : 0.05f; }
+            /* LINDBERGH_VT3_NEAR: the eyes' near plane, times the camera's.
+             * The game's own (1): the game layers its decals and its
+             * multi-pass surfaces with polygon offsets of up to ~2800 depth
+             * steps, which reach 20x further with a near plane 20x closer -
+             * at 0.05 they bled through each other in patches (the players'
+             * shirts, the crowd, the banners). */
+            static float nk = -1;
+            if (nk < 0) { const char *v = getenv("LINDBERGH_VT3_NEAR"); nk = v && *v ? (float)atof(v) : 1.0f; }
             float n2 = nk * n, f2 = 4.0f * f;
             q[10] = -(f2 + n2) / (f2 - n2); q[14] = -2.0f * f2 * n2 / (f2 - n2);
             lg_stereo_eye_projection(q,hud,&eye,out);
