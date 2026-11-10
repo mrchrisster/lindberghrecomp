@@ -1123,16 +1123,20 @@ static int vt3_screen_fix(void)
                   on = v && *v == '1' && !(g && *g == '0'); }
     return on;
 }
-static const char k_stand_decl[] = "uniform vec4 u_stand;\nuniform mat4 u_sP, u_sPi, u_sV, u_sVi;\n";
+static const char k_stand_decl[] = "uniform vec4 u_stand;\nuniform mat4 u_sP, u_sPi, u_sV, u_sVi;\nvarying vec3 lg_world;\n";
 /* Virtua Tennis 3 world mode: the stands raised (u_stand: k, from height,
  * on): a world point above the height is stretched up by k, one below
  * stays - the same for every stand program, so the crowd keeps its seats */
 static const char k_stand_code[] =
-    "  if (u_stand.z != 0.0) {\n"
+    "  lg_world = vec3(0.0);\n"
+    "  if (u_stand.w != 0.0) {\n"
     "    vec4 se = u_sPi * gl_Position;\n"
     "    vec4 sw = u_sVi * vec4(se.xyz / se.w, 1.0);\n"
-    "    if (sw.y > u_stand.y) sw.y = u_stand.y + u_stand.x * (sw.y - u_stand.y);\n"
-    "    gl_Position = u_sP * (u_sV * sw);\n"
+    "    lg_world = sw.xyz;\n"
+    "    if (u_stand.z != 0.0) {\n"
+    "      if (sw.y > u_stand.y) sw.y = u_stand.y + u_stand.x * (sw.y - u_stand.y);\n"
+    "      gl_Position = u_sP * (u_sV * sw);\n"
+    "    }\n"
     "  }\n";
 static const char k_ground_decl[] = "uniform vec4 u_gnd;\nuniform mat4 u_gP, u_gPi;\n";
 /* A planar shadow is right on the game camera's screen and nowhere else (it
@@ -1145,7 +1149,25 @@ static const char k_ground_code[] =
     "    float gk = dot(u_gnd.xyz, gd);\n"
     "    if (gk < -1e-6) gl_Position = u_gP * vec4(gd * (u_gnd.w / gk), 1.0);\n"
     "  }\n";
-static GLuint g_tr_id;      /* the program being translated, for LINDBERGH_FP_ONLY */
+static GLuint g_tr_id;
+/* Virtua Tennis 3 world mode: crowd cards with no seating under them hidden
+ * (LINDBERGH_VT3_CROWD_FP, default 230; LINDBERGH_VT3_CROWD_CUT=<z>,<y>,
+ * default 190,55; 0 = off): on the end away from the game camera, beyond the
+ * side stands (|z| > z) and above the far tier's top (y > y) - the game puts
+ * cards up there with no stand behind them, never seen from its camera */
+static int vt3_crowd_prog(GLuint fid)
+{
+    static int n = -1; static unsigned fps[16];
+    if (n < 0) {
+        n = 0;
+        const char *im = getenv("LINDBERGH_VT3_IMMERSIVE"), *v = getenv("LINDBERGH_VT3_CROWD_FP"), *c = getenv("LINDBERGH_VT3_CROWD_CUT");
+        if (!(im && *im == '1') || (c && *c == '0')) return 0;
+        if (!v || !*v) v = "230";
+        while (*v && n < 16) { fps[n++] = (unsigned)atol(v); v = strchr(v, ','); if (!v) break; v++; }
+    }
+    for (int i = 0; i < n; i++) if (fps[i] == fid) return 1;
+    return 0;
+}      /* the program being translated, for LINDBERGH_FP_ONLY */
 static char *translate(int stage, const char *src_in, Tr *t)
 {
     memset(t, 0, sizeof *t);
@@ -1355,6 +1377,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
         if (vt3_screen_fix() && (!stage || g_tr_scr)) bput(&g, "varying vec4 lg_eye0;\n");
         if (vt3_screen_fix() && !stage && !t->nmat && !t->pos_invariant) bput(&g, k_stand_decl);
         if (stage && g_tr_scr) bput(&g, "uniform vec4 u_scr[16];\n");
+        if (stage && vt3_crowd_prog(g_tr_id)) bput(&g, "varying vec3 lg_world;\nuniform vec4 u_crowd;\n");
         for (int a = 1; a < 16; a++) if (t->attrib_used[a]) bput(&g, "attribute vec4 va_%d;\n", a);
         if (!stage && t->gen_alias) bput(&g, "uniform float u_gen[16];\n");
         bput(&g, "vec4 arb_lit(vec4 s) {\n"
@@ -1443,6 +1466,8 @@ static char *translate(int stage, const char *src_in, Tr *t)
                 /* =42: the program's colour, alpha 1 (is an alpha test dropping it?) */
                 else if (solid == 42) bput(&g, "  gl_FragColor = vec4(o_col.rgb, 1.0);\n");
                 else bput(&g, "  gl_FragColor = o_col;\n");
+                if (vt3_crowd_prog(g_tr_id))
+                    bput(&g, "  if (u_crowd.w != 0.0 && lg_world.z * u_crowd.x < 0.0 && abs(lg_world.z) > u_crowd.y && lg_world.y > u_crowd.z) discard;\n");
             }
             /* The game's programs write the depth they were given
              * (MOV result.depth.z, fragment.position.z): that changes nothing
@@ -1470,7 +1495,7 @@ out:
 
 typedef struct {
     GLuint vid, fid; unsigned vgen, fgen, cmp2d, scr;
-    GLint  u_scr, u_stand, u_sP, u_sPi, u_sV, u_sVi;
+    GLint  u_scr, u_stand, u_sP, u_sPi, u_sV, u_sVi, u_crowd;
     GLuint prog;
     int    ok;
     MatRef mat[2][16]; int nmat[2];
@@ -1885,6 +1910,7 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     l->u_gnd = glGetUniformLocation(l->prog, "u_gnd");
     l->u_scr = glGetUniformLocation(l->prog, "u_scr");
     l->u_stand = glGetUniformLocation(l->prog, "u_stand");
+    l->u_crowd = glGetUniformLocation(l->prog, "u_crowd");
     l->u_sP = glGetUniformLocation(l->prog, "u_sP"); l->u_sPi = glGetUniformLocation(l->prog, "u_sPi");
     l->u_sV = glGetUniformLocation(l->prog, "u_sV"); l->u_sVi = glGetUniformLocation(l->prog, "u_sVi");
     l->u_gP = glGetUniformLocation(l->prog, "u_gP");
@@ -1994,10 +2020,10 @@ static void upload(Linked *l)
         }
         extern volatile float g_game_world_P[16], g_game_view[12]; extern volatile int g_game_world_ok;
         float st[4] = { k, y0, 0, 0 };
-        int on = 0;
+        int on = 0, cut = l->u_crowd >= 0;
         for (int i = 0; i < n; i++) if (l->fid == fps[i]) on = 1;
         extern int stereo_draw_world(void);
-        if (on && k != 1.0f && g_game_world_ok && l->u_sP >= 0 && stereo_draw_world()) {
+        if ((on || cut) && (k != 1.0f || cut) && g_game_world_ok && l->u_sP >= 0 && stereo_draw_world()) {
             float P[16], Pi[16], V[16], Vi[16];
             for (int i = 0; i < 16; i++) P[i] = g_game_world_P[i];
             memset(V, 0, sizeof V); memset(Vi, 0, sizeof Vi);
@@ -2009,10 +2035,19 @@ static void upload(Linked *l)
             if (mat_inv(P, Pi)) {
                 glUniformMatrix4fv(l->u_sP, 1, GL_FALSE, P); glUniformMatrix4fv(l->u_sPi, 1, GL_FALSE, Pi);
                 glUniformMatrix4fv(l->u_sV, 1, GL_FALSE, V); glUniformMatrix4fv(l->u_sVi, 1, GL_FALSE, Vi);
-                st[2] = 1;
+                st[2] = on && k != 1.0f; st[3] = 1;
             }
         }
         glUniform4fv(l->u_stand, 1, st);
+        if (l->u_crowd >= 0) {
+            static float cz = -1, cy = 0;
+            if (cz < 0) { const char *c = getenv("LINDBERGH_VT3_CROWD_CUT"); cz = 190; cy = 55;
+                          if (c && *c && *c != '0') { cz = (float)atof(c); const char *q = strchr(c, ','); if (q) cy = (float)atof(q + 1); } }
+            /* the game camera's z in the world: -R^T t */
+            float camz = -(g_game_view[2] * g_game_view[3] + g_game_view[6] * g_game_view[7] + g_game_view[10] * g_game_view[11]);
+            float cr[4] = { camz > 0 ? 1.0f : -1.0f, cz, cy, st[3] };
+            glUniform4fv(l->u_crowd, 1, cr);
+        }
     }
     if (l->u_scr >= 0 && l->scr) {    /* each screen copy's place in its texture (zero: the game's own lookup - not a world draw) */
         extern int stereo_screen_copy_map(unsigned tex, float out[4]);
