@@ -1122,6 +1122,17 @@ static int vt3_screen_fix(void)
                   on = v && *v == '1' && !(g && *g == '0'); }
     return on;
 }
+static const char k_stand_decl[] = "uniform vec4 u_stand;\nuniform mat4 u_sP, u_sPi, u_sV, u_sVi;\n";
+/* Virtua Tennis 3 world mode: the stands raised (u_stand: k, from height,
+ * on): a world point above the height is stretched up by k, one below
+ * stays - the same for every stand program, so the crowd keeps its seats */
+static const char k_stand_code[] =
+    "  if (u_stand.z != 0.0) {\n"
+    "    vec4 se = u_sPi * gl_Position;\n"
+    "    vec4 sw = u_sVi * vec4(se.xyz / se.w, 1.0);\n"
+    "    if (sw.y > u_stand.y) sw.y = u_stand.y + u_stand.x * (sw.y - u_stand.y);\n"
+    "    gl_Position = u_sP * (u_sV * sw);\n"
+    "  }\n";
 static const char k_ground_decl[] = "uniform vec4 u_gnd;\nuniform mat4 u_gP, u_gPi;\n";
 /* A planar shadow is right on the game camera's screen and nowhere else (it
  * moved with the head): taken along that camera's ray to the court plane
@@ -1341,6 +1352,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
         for (int u = 0; u < 16; u++) if (t->tex_target[u]) bput(&g, "uniform %s%d;\n", sty[t->tex_target[u]], u);
         /* world mode: where the first eye draws this point, for a screen copy's lookup (see g_tr_scr) */
         if (vt3_screen_fix() && (!stage || g_tr_scr)) bput(&g, "varying vec4 lg_eye0;\n");
+        if (vt3_screen_fix() && !stage && !t->nmat && !t->pos_invariant) bput(&g, k_stand_decl);
         if (stage && g_tr_scr) bput(&g, "uniform vec4 u_scr[16];\n");
         for (int a = 1; a < 16; a++) if (t->attrib_used[a]) bput(&g, "attribute vec4 va_%d;\n", a);
         if (!stage && t->gen_alias) bput(&g, "uniform float u_gen[16];\n");
@@ -1374,12 +1386,16 @@ static char *translate(int stage, const char *src_in, Tr *t)
 #ifdef LINDBERGH_GL4ES
             /* multiview: gl4es clips to the game's screen from gl4es_mvPre */
             if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
+            if (!t->nmat && !t->pos_invariant && vt3_screen_fix()) bput(&g, k_stand_code);
             if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders && vt3_screen_fix()) bput(&g, "  lg_eye0 = u_reproj[0] * gl_Position;\n");
             if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders) bput(&g, "  gl4es_mvPre = gl_Position;\n  gl_Position = u_reproj[gl_ViewID_OVR] * gl_Position;\n  gl_Position.x += u_eyex[gl_ViewID_OVR];\n");
             else
 #endif
 #ifndef LINDBERGH_GL4ES
             if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
+#endif
+#ifndef LINDBERGH_GL4ES
+            if (!t->nmat && !t->pos_invariant && vt3_screen_fix()) bput(&g, k_stand_code);
 #endif
             if (!t->nmat && !t->pos_invariant) bput(&g, "  gl_Position = u_reproj * gl_Position;\n");
 #ifndef LINDBERGH_GL4ES
@@ -1453,7 +1469,7 @@ out:
 
 typedef struct {
     GLuint vid, fid; unsigned vgen, fgen, cmp2d, scr;
-    GLint  u_scr;
+    GLint  u_scr, u_stand, u_sP, u_sPi, u_sV, u_sVi;
     GLuint prog;
     int    ok;
     MatRef mat[2][16]; int nmat[2];
@@ -1867,6 +1883,9 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     l->u_gen = glGetUniformLocation(l->prog, "u_gen");
     l->u_gnd = glGetUniformLocation(l->prog, "u_gnd");
     l->u_scr = glGetUniformLocation(l->prog, "u_scr");
+    l->u_stand = glGetUniformLocation(l->prog, "u_stand");
+    l->u_sP = glGetUniformLocation(l->prog, "u_sP"); l->u_sPi = glGetUniformLocation(l->prog, "u_sPi");
+    l->u_sV = glGetUniformLocation(l->prog, "u_sV"); l->u_sVi = glGetUniformLocation(l->prog, "u_sVi");
     l->u_gP = glGetUniformLocation(l->prog, "u_gP");
     l->u_gPi = glGetUniformLocation(l->prog, "u_gPi");
 #ifdef LINDBERGH_GL4ES
@@ -1960,6 +1979,39 @@ void arb_attrib_array(unsigned index, int on)
 
 static void upload(Linked *l)
 {
+    if (l->u_stand >= 0) {
+        /* the stands' programs (LINDBERGH_VT3_STAND_FP, default the seating 158, the
+         * crowd 230 and the lower tier 229), stretched up by LINDBERGH_VT3_STAND_Y
+         * (default 1.5) above LINDBERGH_VT3_STAND_FROM game units (default 10, ~1 m) */
+        static int n = -1; static unsigned fps[16]; static float k = 1.5f, y0 = 10.0f;
+        if (n < 0) {
+            const char *v = getenv("LINDBERGH_VT3_STAND_FP"), *kv = getenv("LINDBERGH_VT3_STAND_Y"), *yv = getenv("LINDBERGH_VT3_STAND_FROM");
+            if (!v || !*v) v = "158,229,230";
+            n = 0; while (*v && n < 16) { fps[n++] = (unsigned)atol(v); v = strchr(v, ','); if (!v) break; v++; }
+            if (kv && *kv) k = (float)atof(kv);
+            if (yv && *yv) y0 = (float)atof(yv);
+        }
+        extern volatile float g_game_world_P[16], g_game_view[12]; extern volatile int g_game_world_ok;
+        float st[4] = { k, y0, 0, 0 };
+        int on = 0;
+        for (int i = 0; i < n; i++) if (l->fid == fps[i]) on = 1;
+        if (on && k != 1.0f && g_game_world_ok && l->u_sP >= 0) {
+            float P[16], Pi[16], V[16], Vi[16];
+            for (int i = 0; i < 16; i++) P[i] = g_game_world_P[i];
+            memset(V, 0, sizeof V); memset(Vi, 0, sizeof Vi);
+            for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) V[c * 4 + r] = g_game_view[r * 4 + c];
+            V[15] = 1;
+            for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) Vi[c * 4 + r] = g_game_view[c * 4 + r];   /* R^T */
+            for (int r = 0; r < 3; r++) Vi[12 + r] = -(Vi[r] * g_game_view[3] + Vi[4 + r] * g_game_view[7] + Vi[8 + r] * g_game_view[11]);
+            Vi[15] = 1;
+            if (mat_inv(P, Pi)) {
+                glUniformMatrix4fv(l->u_sP, 1, GL_FALSE, P); glUniformMatrix4fv(l->u_sPi, 1, GL_FALSE, Pi);
+                glUniformMatrix4fv(l->u_sV, 1, GL_FALSE, V); glUniformMatrix4fv(l->u_sVi, 1, GL_FALSE, Vi);
+                st[2] = 1;
+            }
+        }
+        glUniform4fv(l->u_stand, 1, st);
+    }
     if (l->u_scr >= 0 && l->scr) {    /* each screen copy's place in its texture */
         extern int stereo_screen_copy_map(unsigned tex, float out[4]);
         float m[16][4]; memset(m, 0, sizeof m);
@@ -2328,6 +2380,21 @@ void arb_before_draw(void)
     {   static int nost = -1;   /* LINDBERGH_NO_STENCIL=1 (testing): every draw without its stencil test */
         if (nost < 0) { const char *v = getenv("LINDBERGH_NO_STENCIL"); nost = v && *v == '1'; }
         if (nost) glDisable(GL_STENCIL_TEST); }
+    {   /* Virtua Tennis 3 world mode: a decal (blended or alpha-tested, depth-tested, no offset of
+         * the game's own) pulled a little toward the eye. Its depth equals the
+         * surface's under it; from the game camera the two round alike, through
+         * the headset's reprojection not - the ads on the boards flickered
+         * (blended or alpha-tested: the far board's logos are cut-outs).
+         * LINDBERGH_VT3_DECAL_OFFSET=<units> (default 32, ~2 cm at the far boards; 0 = off). The game sets
+         * its polygon offset before every draw, so this never outlives the draw. */
+        static float du = -1;
+        if (du < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *o = getenv("LINDBERGH_VT3_DECAL_OFFSET");
+                      du = !(v && *v == '1') ? 0 : o && *o ? (float)atof(o) : 32.0f; }
+        if (du > 0 && (glIsEnabled(GL_BLEND) || glIsEnabled(GL_ALPHA_TEST)) && glIsEnabled(GL_DEPTH_TEST) && !glIsEnabled(GL_POLYGON_OFFSET_FILL)) {
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1.0f, -du);
+        }
+    }
     {   static long w1 = -2;    /* LINDBERGH_VT3_W1=<vp> (testing): that vertex program's local 8.x, 0, read as 1 */
         if (w1 == -2) { const char *v = getenv("LINDBERGH_VT3_W1"); w1 = v && *v ? atol(v) : -1; }
         if (w1 > 0 && g_enabled[0] && g_bound[0] == (GLuint)w1) {

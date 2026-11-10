@@ -662,6 +662,17 @@ static void scale_target(GLenum textarget, GLuint tex, GLenum attachment)
         if (cap < 0) { const char *v = getenv("LINDBERGH_XR_TARGET_K"); cap = v && *v ? (float)atof(v) : 0; }
         if (cap > 0) { if (kx > cap) kx = cap; if (ky > cap) ky = cap; }
     }
+    if (fmt == GL_DEPTH_COMPONENT && tg == GL_TEXTURE_2D && !(w == g_pic_w && h == g_pic_h) && !(w == GAME_W && h == GAME_H)) {
+        /* A shadow map (a depth-only texture of its own size): LINDBERGH_SHADOW_SCALE
+         * times its size, default 2 in Virtua Tennis 3's world mode - the headset
+         * brings the players close, and 1024 pixels made their shadows blocky.
+         * The shadow pass's viewports scale with the target (note_fb_scale), and
+         * the lookups are normalised, the soft compare reading the size it has. */
+        static float sk = -1;
+        if (sk < 0) { const char *v = getenv("LINDBERGH_SHADOW_SCALE"), *im = getenv("LINDBERGH_VT3_IMMERSIVE");
+                      sk = v && *v ? (float)atof(v) : im && *im == '1' ? 2.0f : 0; }
+        if (sk > 0) { kx = ky = sk; if (w * kx > 4096) kx = ky = 4096.0f / w; }
+    }
     int nw = (int)lroundf(w * kx), nh = (int)lroundf(h * ky);
     g_scaled_w[g_nscaled - 1] = (short)w; g_scaled_h[g_nscaled - 1] = (short)h;
     g_scaled_k[g_nscaled - 1][0] = kx; g_scaled_k[g_nscaled - 1][1] = ky;
@@ -1597,6 +1608,8 @@ static void fill_track(CPU *c, int k)
     }
 }
 
+static void sky_draw(void);
+static int sky_on(void);
 static int transform_call(CPU *c, HleId id, const char *n)
 {
     int k = cls(id)->kind;
@@ -1679,6 +1692,12 @@ static int transform_call(CPU *c, HleId id, const char *n)
             else if (g_side && whole) side_pass(0);
         }
         if (g_side) return 0;
+        {   /* world mode: the sky, at the frame's first depth-only clear of the eyes
+             * (the shadow mask already copied off, the stadium about to be drawn) */
+            static unsigned sky_frame = ~0u;
+            if (sky_on() && g_mv && !g_flat && !g_replaying && g_game_fb == 0 && mask == GL_DEPTH_BUFFER_BIT &&
+                g_scene_draws && sky_frame != g_frame) { sky_frame = g_frame; sky_draw(); }
+        }
         /* Only the frame's first such clear, and not for a flat picture: the
          * game clears depth again to draw over its finished scene (the
          * scope's reload), and clearing the colour there wiped the scene.
@@ -2037,6 +2056,114 @@ static void exec(CPU *c, HleId id, HleHandler fn)
         if (g_hud_offset) { glDisable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(0, 0); g_hud_offset = 0; }
     }
     if (!g_replaying && (k == K_GETINTEGERV || k == K_GETFLOATV)) fix_query(c, k);
+}
+
+
+/* ---- a sky for Virtua Tennis 3's world mode ----
+ * The broadcast camera never looks up, so the game draws no sky and the
+ * headset saw black above the stands. A sky of our own (original, made
+ * here: a blue gradient and soft fair-weather clouds from value noise),
+ * drawn into both eyes before the stadium. Each pixel's direction is taken
+ * back to the world (the inverse of that eye's projection and the game
+ * camera's view), so it stays put as the head turns. LINDBERGH_VT3_SKY=0
+ * turns it off. */
+#ifdef LINDBERGH_GL4ES
+extern int gl4es_mv_shaders;
+#endif
+static int sky_on(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *k = getenv("LINDBERGH_VT3_SKY");
+                  on = v && *v == '1' && !(k && *k == '0'); }
+    return on;
+}
+static const char k_sky_vs[] =
+    "#version 120\n"
+    "uniform mat4 u_reproj[2];\n"           /* named so gl4es takes the per-view step as ours */
+    "uniform mat4 u_skyinv[2];\n"
+    "varying vec3 v_dir;\n"
+    "void main() {\n"
+    "  vec2 q = gl_Vertex.xy;\n"
+    "  mat4 m = u_skyinv[gl_ViewID_OVR];\n"
+    "  vec4 a = m * vec4(q, -1.0, 1.0), b = m * vec4(q, 1.0, 1.0);\n"
+    "  v_dir = b.xyz / b.w - a.xyz / a.w;\n"
+    "  gl_Position = vec4(q, 0.0, 1.0);\n"
+    "  gl4es_mvPre = gl_Position;\n"
+    "}\n";
+static const char k_sky_fs[] =
+    "#version 120\n"
+    "varying vec3 v_dir;\n"
+    "float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\n"
+    "float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);\n"
+    "  return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), f.x), mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), f.x), f.y); }\n"
+    "float fbm(vec2 p) { float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { s += a * vn(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5; } return s; }\n"
+    "void main() {\n"
+    "  vec3 d = normalize(v_dir);\n"
+    "  float up = max(d.y, 0.0);\n"
+    "  vec3 zen = vec3(0.24, 0.47, 0.82), hor = vec3(0.72, 0.84, 0.95);\n"
+    "  vec3 col = mix(hor, zen, pow(up, 0.55));\n"
+    "  vec2 uv = d.xz / max(d.y, 0.06) * 0.9;\n"         /* a cloud plane high above */
+    "  float c = fbm(uv + vec2(3.0, 1.0));\n"
+    "  c = smoothstep(0.52, 0.80, c) * smoothstep(0.02, 0.18, d.y);\n"
+    "  col = mix(col, vec3(0.97, 0.98, 1.0), c * 0.85);\n"
+    "  gl_FragColor = vec4(col, 1.0);\n"
+    "}\n";
+
+static void sky_draw(void)
+{
+    static GLuint prog; static GLint u_inv = -1; static int failed;
+    extern volatile float g_game_world_P[16], g_game_view[12]; extern volatile int g_game_world_ok;
+    if (failed || !g_game_world_ok) return;
+    if (!prog) {
+        GLuint vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
+        const char *a = k_sky_vs, *b = k_sky_fs; GLint ok = 0;
+        glShaderSource(vs, 1, &a, NULL); glCompileShader(vs);
+        glShaderSource(fs, 1, &b, NULL); glCompileShader(fs);
+        prog = glCreateProgram(); glAttachShader(prog, vs); glAttachShader(prog, fs);
+        glBindAttribLocation(prog, 0, "gl_Vertex");
+        glLinkProgram(prog); glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+        if (!ok) { char log[1024] = ""; glGetProgramInfoLog(prog, sizeof log, NULL, log);
+                   fprintf(stderr, "[sky] the sky program did not link: %s\n", log); failed = 1; return; }
+        u_inv = glGetUniformLocation(prog, "u_skyinv");
+        fprintf(stderr, "[sky] drawing a sky behind the stadium (LINDBERGH_VT3_SKY=0: none)\n");
+    }
+    /* world -> each eye's clip: the eye's projection (head, dolly) x the game camera's view */
+    float P[16], V[16], inv[32];
+    for (int i = 0; i < 16; i++) P[i] = g_game_world_P[i];
+    memset(V, 0, sizeof V);
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) V[c * 4 + r] = g_game_view[r * 4 + c];
+    V[15] = 1;
+    int e = g_eye;
+    for (int v = 0; v < 2; v++) {
+        float E[16], M[16];
+        g_eye = v; effective_projection(P, LG_STEREO_WORLD, E);
+        mat_mul(M, E, V);
+        if (!mat_invert(M, inv + 16 * v)) { g_eye = e; return; }
+    }
+    g_eye = e;
+    /* the game's state, put back after */
+    GLint pr = 0, ab = 0, dm = 0; GLboolean cm[4];
+    glGetIntegerv(GL_CURRENT_PROGRAM, &pr); glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &ab);
+    glGetIntegerv(GL_DEPTH_WRITEMASK, &dm); glGetBooleanv(GL_COLOR_WRITEMASK, cm);
+    GLboolean dt = glIsEnabled(GL_DEPTH_TEST), bl = glIsEnabled(GL_BLEND), cf = glIsEnabled(GL_CULL_FACE),
+              st = glIsEnabled(GL_STENCIL_TEST), at = glIsEnabled(GL_ALPHA_TEST), po = glIsEnabled(GL_POLYGON_OFFSET_FILL);
+    GLboolean vp_on = glIsEnabled(GL_VERTEX_PROGRAM_ARB), fp_on = glIsEnabled(GL_FRAGMENT_PROGRAM_ARB);
+    glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST); glDisable(GL_ALPHA_TEST); glDisable(GL_POLYGON_OFFSET_FILL);
+    glDisable(GL_VERTEX_PROGRAM_ARB); glDisable(GL_FRAGMENT_PROGRAM_ARB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(prog);
+    glUniformMatrix4fv(u_inv, 2, GL_FALSE, inv);
+    glBegin(GL_TRIANGLE_STRIP);
+    glVertex2f(-1, -1); glVertex2f(1, -1); glVertex2f(-1, 1); glVertex2f(1, 1);
+    glEnd();
+    glUseProgram((GLuint)pr);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)ab);
+    glDepthMask((GLboolean)dm); glColorMask(cm[0], cm[1], cm[2], cm[3]);
+    if (dt) glEnable(GL_DEPTH_TEST); if (bl) glEnable(GL_BLEND); if (cf) glEnable(GL_CULL_FACE);
+    if (st) glEnable(GL_STENCIL_TEST); if (at) glEnable(GL_ALPHA_TEST); if (po) glEnable(GL_POLYGON_OFFSET_FILL);
+    if (vp_on) glEnable(GL_VERTEX_PROGRAM_ARB); if (fp_on) glEnable(GL_FRAGMENT_PROGRAM_ARB);
 }
 
 /* ---- recording ---- */
