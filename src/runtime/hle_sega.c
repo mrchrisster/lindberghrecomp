@@ -1070,10 +1070,12 @@ static void vt3_camlog_install(void)
     static void h_flow_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[flow] frame %u: %s\n", g_frame, #n); \
                                      push32(c, 0xDEADBEEFu); g_flow_##n(c); }
 FLOW_STATES(FLOW_DEF)
+static int g_vt3_flowlog;
 static void vt3_flowlog_install(void)
 {
     const char *v = getenv("LINDBERGH_VT3_FLOWLOG");
     if (!v || *v != '1') return;
+    g_vt3_flowlog = 1;
 #define FLOW_INST(n, sym) if (!vt3_wrap(sym, &g_flow_##n, h_flow_##n)) fprintf(stderr, "[flow] %s not wrapped\n", sym);
     FLOW_STATES(FLOW_INST)
 }
@@ -1222,9 +1224,56 @@ static void (*g_vt3_is_replay)(CPU *);
 static void h_vt3_is_replay(CPU *c)
 {
     extern unsigned g_frame; static unsigned told = ~0u;     /* asked every frame at a point's end: told once */
-    if (!g_replays) { if (g_vt3_log && g_frame - told > 120) fprintf(stderr, "[vt3] frame %u: point replay skipped (Replays off)\n", g_frame); told = g_frame; RET(0); return; }
+    uint32_t m = rd32(rd32(0x085061A4u) + 0x1c);             /* the match: +0xd6 match over (match::isMatch), +0x1c events */
+    if (g_vt3_log && g_frame - told > 120)
+        fprintf(stderr, "[vt3] frame %u: point over (match over %u, events %#x)%s\n", g_frame, rd8(m + 0xd6), rd32(m + 0x1c),
+                g_replays ? "" : ": point replay skipped (Replays off)");
+    if (!g_replays) { told = g_frame; RET(0); return; }
     push32(c, 0xDEADBEEFu); g_vt3_is_replay(c);
-    if (g_vt3_log && c->eax) fprintf(stderr, "[vt3] point replayed\n");
+    if (g_vt3_log && c->eax && g_frame - told > 120) fprintf(stderr, "[vt3] point replayed\n");
+    told = g_frame;
+}
+/* The match's end with Replays off. Between points usrAcPassLoop::exec picks
+ * the next screen: a replay (mtrLoopManager mode 7) when isReplay_point says
+ * so, else straight to the next point (mode 8). The match's end is decided
+ * only where a replay finishes: usrAcReplayLoop::exec sees the match event
+ * (match::setEvent(12): bit 0x1000 of the match's +0x1c, and +0xd6 =
+ * match::isMatch), clears it and sets mode 0xa (game set and match) for the
+ * winner or 0xb for the loser. isReplay_point answers yes whenever the match
+ * is over, so with replays on the closing replay always runs and the match
+ * ends; the switch answering no sent the last point to mode 8, and the match
+ * went on into new games. So: when the pass loop sets mode 8 while the match
+ * event is up, do what the replay loop's end does instead - the closing
+ * replay is skipped and the match ends. Arcade path only (the replay loop's
+ * own checks for the attract demo and challenge mode pick other modes). */
+static void (*g_vt3_set_mode)(CPU *);
+static void h_vt3_set_mode(CPU *c)
+{
+    extern unsigned g_frame;
+    uint32_t from = rd32(c->esp - 4u);                      /* the caller's return address (popped, still there) */
+    uint32_t self = A32(0), mode = A32(1), mgr = rd32(0x085061A4u);
+    uint32_t m = mgr ? rd32(mgr + 0x1c) : 0, loser = 0;
+    if (!g_replays && from == 0x08086C6Du && mode == 8 && m && (rd32(m + 0x1c) & 0x1000u) &&
+        mgr && self == rd32(rd32(mgr + 0x104) + 0x14)) {
+        wr32(m + 0x1c, rd32(m + 0x1c) & ~0x1000u);
+        uint32_t kind = rd32(mgr + 0x24);
+        if (kind == 0 || kind == 2) {                       /* as usrAcReplayLoop::exec: winner or loser */
+            uint32_t gm = guest_symbol("_ZN2vs19getGame_master_plnoEv"), iw = guest_symbol("_ZN5match8isWinnerEl");
+            uint32_t a[2] = { rd32(mgr + 0x94), 0 };
+            if (gm && iw) { a[1] = guest_call(c, gm, a, 1); a[0] = m; loser = !(guest_call(c, iw, a, 2) & 0xff); }
+        }
+        mode = loser ? 0xb : 0xa;
+        wr32(c->esp + 4u, mode);
+        fprintf(stderr, "[vt3] frame %u: match over with Replays off - closing replay skipped, %s\n", g_frame,
+                loser ? "lost (mode 0xb)" : "game set and match (mode 0xa)");
+    }
+    if (g_vt3_flowlog && from >= 0x0807E000u && from < 0x0808F000u)    /* the arcade screen loops' choices */
+        fprintf(stderr, "[flow] frame %u: setMode(%#x, %u) from %#x\n", g_frame, self, mode, from);
+    push32(c, 0xDEADBEEFu); g_vt3_set_mode(c);
+    if (loser) {
+        uint32_t ss = guest_symbol("_ZN5sound12stopSoundAllEv"), a[1] = { rd32(mgr + 0x88) };
+        if (ss) guest_call(c, ss, a, 1);
+    }
 }
 static void vt3_jumps(void)
 {
@@ -1316,7 +1365,11 @@ void hle_register_sega(void)
             fprintf(stderr, "[sega] every point is replayed (LINDBERGH_FORCE_REPLAY)\n");
         /* the headset menu's Replays switch: off, no point earns one */
         else if ((getenv("LINDBERGH_REPLAYS") && (g_replays = *getenv("LINDBERGH_REPLAYS") != '0'), 1) &&
-                 vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) { g_replay_hook = 1; fprintf(stderr, "[sega] Virtua Tennis 3: replays %s (headset menu)\n", g_replays ? "on" : "off"); }
+                 vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) {
+            g_replay_hook = 1; fprintf(stderr, "[sega] Virtua Tennis 3: replays %s (headset menu)\n", g_replays ? "on" : "off");
+            if (!vt3_wrap("_ZN14mtrLoopManager7setModeEl", &g_vt3_set_mode, h_vt3_set_mode))   /* the match's end with replays off */
+                fprintf(stderr, "[sega] Virtua Tennis 3: mtrLoopManager::setMode not wrapped - a match will not end with Replays off\n");
+        }
     }
 #if defined(__ANDROID__)
     if (pace_by_display()) fprintf(stderr, "[sega] idle_wait_func: paced by the headset, not the wall clock\n");
