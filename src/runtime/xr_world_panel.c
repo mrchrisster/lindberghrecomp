@@ -4,9 +4,9 @@
  * Main page: Mode (Classic / Immersive, applies on the next start), Restart
  * now (only while the saved mode is not the running one), Advanced settings
  * (the saved mode's page), then the shared rows. Classic advanced: replays,
- * point cutaways, arcade overlays, shadow quality. Immersive advanced: stand
- * height, camera closer, step back, the same three, sky, shadow quality.
- * Replays, cutaways, overlays, stand, closer, step back and sky are live for
+ * point cutaways, arcade overlays, shadow quality. Immersive advanced: camera
+ * closer, step back, the same three, sky (Stadium / Painted / Off), shadow
+ * quality. Replays, cutaways, overlays, closer, step back and sky are live for
  * the running mode; shadow quality and the mode apply on restart. A row whose
  * env variable is set shows "(env.txt)" with the run's value and ignores clicks.
  * With XwState.live (switching live, Phase B; host_xr.c keeps it 0 for now)
@@ -17,7 +17,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static const float STANDS[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
 static const int SHADOWS[] = { 1024, 2048, 4096 };
 
 /* the WM_ value behind an item, -1 for none */
@@ -29,7 +28,6 @@ static int wm_key(int item)
     case XW_CUTAWAYS: return WM_CUTAWAYS;
     case XW_OVERLAYS: return WM_OVERLAYS;
     case XW_SHADOW: return WM_SHADOW;
-    case XW_STAND: return WM_STAND;
     case XW_DOLLY: return WM_DOLLY;
     case XW_STEPBACK: return WM_BACK;
     case XW_SKY: return WM_SKY;
@@ -59,7 +57,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
-        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_STAND), XW_ROW(XW_DOLLY), XW_ROW(XW_STEPBACK),
+        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_DOLLY), XW_ROW(XW_STEPBACK),
                                  XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
                                  XW_ROW(XW_SHADOW), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
@@ -77,7 +75,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
 
 static const char *on_off(int v) { return v ? "On" : "Off"; }
 static void metres(char *s, float units) { if (fabsf(units - roundf(units / 10) * 10) < 0.01f) snprintf(s, 40, "%.0f m", units / 10); else snprintf(s, 40, "%.1f m", units / 10); }
-static void stand(char *s, float k) { if (fabsf(k - 1) < 0.01f) snprintf(s, 40, "x1.0 (off)"); else snprintf(s, 40, "x%g", k); }
+static const char *sky_label(int v) { return v == LG_SKY_OFF ? "Off" : v == LG_SKY_PAINTED ? "Painted" : "Stadium"; }
 static void shadow(char *s, int size)
 {
     snprintf(s, 40, "%s %d", size <= 1024 ? "Standard" : size <= 2048 ? "High" : "Very high", size);
@@ -96,7 +94,6 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_RESTART].label = cfg->world_mode ? "Restart now in Immersive mode" : "Restart now in Classic mode";
     it[XW_ADVANCED].label = cfg->world_mode ? "Advanced settings (Immersive) >" : "Advanced settings (Classic) >";
     it[XW_BACK].label = "< Back";
-    it[XW_STAND].label = "Stand height";
     it[XW_DOLLY].label = "Camera closer";
     it[XW_STEPBACK].label = "Step back";
     it[XW_REPLAYS].label = "Replays";
@@ -109,20 +106,18 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     const WmValues *e = &w->eff;
     int replays = im ? cfg->imm_replays : cfg->replays, cut = im ? cfg->imm_cutaways : cfg->classic_cutaways;
     int over = im ? cfg->imm_overlays : cfg->arcade_overlays, sh = im ? cfg->imm_shadow : cfg->classic_shadow;
-    float st = cfg->imm_stand_y, dl = (float)cfg->imm_dolly, bk = (float)cfg->imm_back; int sky = cfg->imm_sky;
+    float dl = (float)cfg->imm_dolly, bk = (float)cfg->imm_back; int sky = cfg->imm_sky;
     if (pinned(w, XW_REPLAYS)) replays = e->replays;
     if (pinned(w, XW_CUTAWAYS)) cut = e->cutaways;
     if (pinned(w, XW_OVERLAYS)) over = e->overlays;
     if (pinned(w, XW_SHADOW)) sh = e->shadow;
-    if (pinned(w, XW_STAND)) st = e->stand_y;
     if (pinned(w, XW_DOLLY)) dl = e->dolly;
     if (pinned(w, XW_STEPBACK)) bk = e->back;
     if (pinned(w, XW_SKY)) sky = e->sky;
     snprintf(it[XW_REPLAYS].value, 40, "%s", on_off(replays));
     snprintf(it[XW_CUTAWAYS].value, 40, "%s", on_off(cut));
     snprintf(it[XW_OVERLAYS].value, 40, "%s", over ? "Shown" : "Hidden");
-    snprintf(it[XW_SKY].value, 40, "%s", on_off(sky));
-    stand(it[XW_STAND].value, st);
+    snprintf(it[XW_SKY].value, 40, "%s", sky_label(sky));
     metres(it[XW_DOLLY].value, dl);
     metres(it[XW_STEPBACK].value, bk);
     shadow(it[XW_SHADOW].value, sh);
@@ -142,7 +137,7 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
     const LgXrSettings d = LG_XR_SETTINGS_DEFAULT;
     if (immersive) {
         c->imm_replays = d.imm_replays; c->imm_overlays = d.imm_overlays; c->imm_cutaways = d.imm_cutaways;
-        c->imm_stand_y = d.imm_stand_y; c->imm_dolly = d.imm_dolly; c->imm_back = d.imm_back;
+        c->imm_dolly = d.imm_dolly; c->imm_back = d.imm_back;
         c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow;
     } else {
         c->replays = d.replays; c->arcade_overlays = d.arcade_overlays;
@@ -167,11 +162,10 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_REPLAYS: if (im) c->imm_replays = !c->imm_replays; else c->replays = !c->replays; fx |= live; break;
     case XW_CUTAWAYS: if (im) c->imm_cutaways = !c->imm_cutaways; else c->classic_cutaways = !c->classic_cutaways; fx |= live; break;
     case XW_OVERLAYS: if (im) c->imm_overlays = !c->imm_overlays; else c->arcade_overlays = !c->arcade_overlays; fx |= live; break;
-    case XW_SKY: if (!im) return 0; c->imm_sky = !c->imm_sky; fx |= live; break;
-    case XW_STAND: {
+    case XW_SKY:        /* Stadium -> Painted -> Off -> Stadium */
         if (!im) return 0;
-        int k = 0; while (k < 5 && STANDS[k] <= c->imm_stand_y + 0.01f) k++;
-        c->imm_stand_y = STANDS[k % 5]; fx |= live; break; }
+        c->imm_sky = c->imm_sky == LG_SKY_STADIUM ? LG_SKY_PAINTED : c->imm_sky == LG_SKY_PAINTED ? LG_SKY_OFF : LG_SKY_STADIUM;
+        fx |= live; break;
     case XW_DOLLY: if (!im) return 0; c->imm_dolly = c->imm_dolly >= 300 ? 0 : (c->imm_dolly / 50 + 1) * 50; fx |= live; break;
     case XW_STEPBACK: if (!im) return 0; c->imm_back = c->imm_back >= 120 ? 0 : (c->imm_back / 30 + 1) * 30; fx |= live; break;
     case XW_SHADOW: {

@@ -514,9 +514,9 @@ static void menu_choose(int row)
     if (effects & (XP_OVERLAYS_CHANGED | XP_REPLAYS_CHANGED | XW_LIVE_CHANGED)) {
         cfg_apply_live();
         const WmValues *w = world_mode_values();
-        fprintf(stderr, "[xr] live (%s mode): replays %s, arcade overlays %s, point cutaways %s, stand %.2f, dolly %.0f, back %.0f, sky %s\n",
+        fprintf(stderr, "[xr] live (%s mode): replays %s, arcade overlays %s, point cutaways %s, dolly %.0f, back %.0f, sky %s\n",
                 w->immersive ? "immersive" : "classic", w->replays ? "on" : "off", w->overlays ? "shown" : "hidden",
-                w->cutaways ? "on" : "off", w->stand_y, w->dolly, w->back, w->sky ? "on" : "off");
+                w->cutaways ? "on" : "off", w->dolly, w->back, w->sky == LG_SKY_OFF ? "off" : w->sky == LG_SKY_PAINTED ? "painted" : "stadium");
     }
     if(effects&XP_CROSSHAIR_CHANGED)stereo_show_game_sight(cfg.crosshair && !game_profile()->joystick);
     if(effects&XP_SCREEN_CHANGED)stereo_set_screen_distance(cfg.screen*cfg.scale);

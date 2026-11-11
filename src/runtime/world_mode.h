@@ -18,15 +18,16 @@ extern "C" {
 #endif
 
 /* the values, for their env variables, sources and pins */
-enum { WM_MODE, WM_REPLAYS, WM_OVERLAYS, WM_CUTAWAYS, WM_SHADOW, WM_STAND, WM_DOLLY, WM_BACK, WM_SKY, WM_COUNT };
+enum { WM_MODE, WM_REPLAYS, WM_OVERLAYS, WM_CUTAWAYS, WM_SHADOW, WM_DOLLY, WM_BACK, WM_SKY, WM_COUNT };
 enum { WM_SRC_DEFAULT, WM_SRC_FILE, WM_SRC_ENV };
 
 typedef struct {
     int immersive;              /* the running mode: 0 Classic, 1 Immersive */
-    int replays, overlays, cutaways, sky;
+    int replays, overlays, cutaways;
+    int sky;                    /* LG_SKY_OFF / _STADIUM (the stadium's own dome) / _PAINTED (stereo.c's) */
     int shadow;                 /* shadow map size: 1024 (the game's own), 2048, 4096 */
     float shadow_scale;         /* what stereo.c scales shadow maps by: 0 = as the game makes them */
-    float stand_y, dolly, back; /* stand stretch, viewpoint forward / back in game units (immersive) */
+    float dolly, back;          /* viewpoint forward / back in game units (immersive) */
 } WmValues;
 
 /* the env variable that pins a value for a run (LINDBERGH_REPLAYS, ...) */
@@ -47,7 +48,7 @@ const char *world_mode_key(int key, int immersive);
  * called before it resolves from env alone, as an incapable game. */
 void world_mode_init(int capable);
 /* The menu changed a stored setting: the live values again (replays, overlays,
- * cutaways, stand, dolly, back, sky) for the running mode; the shadow size
+ * cutaways, dolly, back, sky) for the running mode; the shadow size
  * stays as started. The mode stays as started too unless switching is live
  * (world_mode_live): then the stored mode (an env-pinned one wins; a game
  * that cannot draw a world keeps its start) becomes the target, which the
@@ -83,9 +84,12 @@ int world_mode_frame(unsigned frame);
 int world_mode_replays(void);
 int world_mode_overlays(void);
 int world_mode_cutaways(void);
+/* Immersive's sky: LG_SKY_OFF, LG_SKY_STADIUM, LG_SKY_PAINTED (LINDBERGH_VT3_SKY
+ * 0|off, 1|on|stadium, 2|painted; vr.cfg immersive.sky) */
 int world_mode_sky(void);
+/* parses an env / vr.cfg sky value (as above) */
+int world_mode_sky_value(const char *v);
 float world_mode_shadow_scale(void);
-float world_mode_stand_y(void);
 float world_mode_dolly(void);
 float world_mode_back(void);
 

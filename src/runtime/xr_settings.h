@@ -3,6 +3,9 @@
 extern "C" {
 #endif
 enum { LASER_ON, LASER_DOT, LASER_OFF };
+/* Immersive's sky: none, the stadium model's own sky dome (Sega's), or the
+ * runtime's painted sky (stereo.c sky_draw) */
+enum { LG_SKY_OFF, LG_SKY_STADIUM, LG_SKY_PAINTED };
 typedef struct {
     float scale,screen,aim;
     int resolution,width,refresh,left_handed,laser,auto_coins;
@@ -17,9 +20,8 @@ typedef struct {
     int classic_shadow;         /* "classic.shadow": shadow map size 1024 (the game's) / 2048 / 4096 */
     int classic_cutaways;       /* "classic.cutaways": the close-up of the winner after each point */
     int imm_replays, imm_overlays, imm_cutaways;   /* "immersive.replays" / ".overlays" / ".cutaways" */
-    float imm_stand_y;          /* "immersive.stand_y": the stands stretched up (1 = off) */
     int imm_dolly, imm_back;    /* "immersive.dolly" / ".back": the viewpoint forward / back, game units (0.1 m) */
-    int imm_sky;                /* "immersive.sky" */
+    int imm_sky;                /* "immersive.sky stadium|painted|off" (old "on" = stadium): LG_SKY_ */
     int imm_shadow;             /* "immersive.shadow" */
 } LgXrSettings;
 /* Each eye's image by default: the headset's own panel, pixel for pixel.
@@ -37,10 +39,11 @@ typedef struct {
 #define LG_XR_NATIVE_HEIGHT 2280
 #endif
 /* ... dual off, stats panel on (vr.cfg "stats off" hides it), medium foveation, arcade overlays shown, replays on;
- * Classic mode, shadows 1024, cutaways on; Immersive: replays, overlays and cutaways off, stands x1.5,
- * 200 units closer, 60 back, sky on, shadows 2048 */
+ * Classic mode, shadows 1024, cutaways on; Immersive: replays, overlays and cutaways off,
+ * 200 units closer, 60 back, the stadium's own sky, shadows 2048. (The stands' stretch,
+ * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,1.5f,200,60,1,2048}
+                                0,1024,1,0,0,0,200,60,LG_SKY_STADIUM,2048}
 void xr_settings_load(LgXrSettings *settings);
 void xr_settings_set(LgXrSettings *settings,const char *key,const char *value);
 void xr_settings_save(const LgXrSettings *settings);

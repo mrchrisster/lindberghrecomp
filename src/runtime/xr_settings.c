@@ -12,14 +12,14 @@ static int render(const LgXrSettings *c, char *b, size_t n)
     return snprintf(b, n, "scale %g\nscreen %g\naim %g\nresolution %d\nwidth %d\nrefresh %d\nhand %s\nlaser %s\ncoins %s\n"
                "sight %s\ncrosshair %s\ngun %s\nhud_pitch %d\ndual %s\nstats %s\nfoveation %s\noverlays %s\nreplays %s\n"
                "mode %s\nclassic.shadow %d\nclassic.cutaways %s\nimmersive.replays %s\nimmersive.overlays %s\n"
-               "immersive.cutaways %s\nimmersive.stand_y %g\nimmersive.dolly %d\nimmersive.back %d\nimmersive.sky %s\nimmersive.shadow %d\n",
+               "immersive.cutaways %s\nimmersive.dolly %d\nimmersive.back %d\nimmersive.sky %s\nimmersive.shadow %d\n",
             c->scale, c->screen, c->aim, c->resolution, c->width, c->refresh, c->left_handed ? "left" : "right",
             LASER_NAME[c->laser], c->auto_coins ? "auto" : "manual",
             SIGHT_NAME[c->sight], c->crosshair ? "on" : "off", c->show_gun ? "on" : "off", c->hud_pitch, c->dual ? "on" : "off", c->show_stats ? "on" : "off",
             FOVEATION_NAME[c->foveation < 0 || c->foveation > 3 ? 3 : c->foveation], c->arcade_overlays ? "on" : "off", c->replays ? "on" : "off",
             c->world_mode ? "immersive" : "classic", c->classic_shadow, c->classic_cutaways ? "on" : "off",
             c->imm_replays ? "on" : "off", c->imm_overlays ? "on" : "off", c->imm_cutaways ? "on" : "off",
-            c->imm_stand_y, c->imm_dolly, c->imm_back, c->imm_sky ? "on" : "off", c->imm_shadow);
+            c->imm_dolly, c->imm_back, c->imm_sky == LG_SKY_OFF ? "off" : c->imm_sky == LG_SKY_PAINTED ? "painted" : "stadium", c->imm_shadow);
 }
 
 /* LINDBERGH_XR_SET's keys are for its run only: the save writes those keys as
@@ -82,7 +82,7 @@ void xr_settings_load(LgXrSettings *c)
     const LgXrSettings d = LG_XR_SETTINGS_DEFAULT;
     if (c->classic_shadow != 1024 && c->classic_shadow != 2048 && c->classic_shadow != 4096) c->classic_shadow = d.classic_shadow;
     if (c->imm_shadow != 1024 && c->imm_shadow != 2048 && c->imm_shadow != 4096) c->imm_shadow = d.imm_shadow;
-    if (!(c->imm_stand_y >= 1.0f && c->imm_stand_y <= 3.0f)) c->imm_stand_y = d.imm_stand_y;
+    if (c->imm_sky < LG_SKY_OFF || c->imm_sky > LG_SKY_PAINTED) c->imm_sky = d.imm_sky;
     if (c->imm_dolly < 0 || c->imm_dolly > 400) c->imm_dolly = d.imm_dolly;
     if (c->imm_back < 0 || c->imm_back > 300) c->imm_back = d.imm_back;
 }
@@ -113,10 +113,10 @@ void xr_settings_set(LgXrSettings *c,const char *key,const char *val)
         else if (!strcmp(key, "immersive.replays")) c->imm_replays = !strcmp(val, "on");
         else if (!strcmp(key, "immersive.overlays")) c->imm_overlays = !strcmp(val, "on");
         else if (!strcmp(key, "immersive.cutaways")) c->imm_cutaways = !strcmp(val, "on");
-        else if (!strcmp(key, "immersive.stand_y")) c->imm_stand_y = (float)atof(val);
+        /* "immersive.stand_y" (the stands' old stretch) is ignored: it is not a key any more */
         else if (!strcmp(key, "immersive.dolly")) c->imm_dolly = atoi(val);
         else if (!strcmp(key, "immersive.back")) c->imm_back = atoi(val);
-        else if (!strcmp(key, "immersive.sky")) c->imm_sky = strcmp(val, "off") != 0;
+        else if (!strcmp(key, "immersive.sky")) c->imm_sky = !strcmp(val, "off") ? LG_SKY_OFF : !strcmp(val, "painted") ? LG_SKY_PAINTED : LG_SKY_STADIUM;   /* "on" (before 2026-11-12): a sky, now the stadium's */
         else if (!strcmp(key, "immersive.shadow")) c->imm_shadow = atoi(val);
         else if (!strcmp(key, "foveation")) {
             for (int i = 0; i < 4; i++) if (!strcmp(val, FOVEATION_NAME[i])) c->foveation = i;

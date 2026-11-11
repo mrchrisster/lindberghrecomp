@@ -382,6 +382,31 @@ static void eye_projection(const float *p, int hud, int which, float *out)
             float n2 = (n > 10.0f ? 0.05f : nk) * n, f2 = 4.0f * f;
             q[10] = -(f2 + n2) / (f2 - n2); q[14] = -2.0f * f2 * n2 / (f2 - n2);
             lg_stereo_eye_projection(q,hud,&eye,out);
+            {   /* LINDBERGH_VT3_VIEW_TURN=<yaw>[,<pitch>] degrees (test only): the eyes
+                 * turned about the viewpoint - yaw left about the world's up, then
+                 * pitch up - so a game shot of the unworn headset (whose head
+                 * pose does not move) shows the stand behind or the sky above */
+                static float ty = -1000, tp;
+                if (ty == -1000) { const char *v = getenv("LINDBERGH_VT3_VIEW_TURN"); ty = 0; tp = 0;
+                                   if (v && *v) { ty = (float)atof(v) * 0.0174533f; const char *c = strchr(v, ','); if (c) tp = (float)atof(c + 1) * 0.0174533f; } }
+                extern volatile float g_game_up_eye[3];
+                float u[3] = { g_game_up_eye[0], g_game_up_eye[1], g_game_up_eye[2] };
+                float ul = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+                if ((ty != 0 || tp != 0) && ul > 0.5f) {
+                    float R[16], A[16], B[16], o2[16];
+                    for (int k = 0; k < 3; k++) u[k] /= ul;
+                    /* Rodrigues, column-major: points turned by -a about axis r (the view by +a) */
+                    #define VT_ROT(M, r, a) do { float c_ = cosf(a), s_ = -sinf(a); mat_identity(M); \
+                        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { \
+                            float k_ = i == j ? 0 : (((i + 1) % 3 == j) ? -(r)[3 - i - j] : (r)[3 - i - j]); \
+                            M[j * 4 + i] = (i == j ? c_ : 0) + s_ * k_ + (1 - c_) * (r)[i] * (r)[j]; } } while (0)
+                    static const float xr[3] = { 1, 0, 0 };
+                    VT_ROT(A, u, ty); VT_ROT(B, xr, tp);
+                    #undef VT_ROT
+                    mat_mul(R, B, A);
+                    mat_mul(o2, out, R); memcpy(out, o2, 64);
+                }
+            }
             /* The broadcast camera's lens is narrow (about 20 degrees down):
              * around the head its stadium was a small model far off. The
              * viewpoint moved in along the camera's own view by

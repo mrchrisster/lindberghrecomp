@@ -1623,6 +1623,35 @@ static void h_vt3_is_visible(CPU *c)
     }
     RET(vis);
 }
+/* Virtua Tennis 3, Immersive: Sega's whole stadium drawn. field::createTree
+ * (0x080FFF8E) gives each tree of the stadium model a type byte in
+ * [field+0x3c][i]: GAME_SOUTH 1, GAME_NORTH 2, GAME_NO 3 (the upper tiers,
+ * roof, walls, upper scoreboards, the sky dome and the sun), else 0.
+ * field::draw (0x080FFB86) leaves out type 3 and the end stand behind the
+ * camera while the camera is the court camera (camera mode 1 or 2: the
+ * broadcast camera never frames them); every other camera draws all. The
+ * crowd cards ignore that rule, so in the headset they floated on seats that
+ * were not drawn. Here the type bytes are zeroed (0 = drawn by every camera)
+ * for the length of the call and put back after - per call, so Classic, or a
+ * later switch of the mode, gets the game's own rule.
+ * LINDBERGH_VT3_STANDS=0 keeps the game's rule in Immersive too. */
+static void (*g_vt3_field_draw)(CPU *);
+static int g_vt3_stands = 1;
+static void h_vt3_field_draw(CPU *c)
+{
+    uint32_t self = A32(0);
+    if (!g_vt3_stands || !world_mode_immersive() || self < 0x08000000u) { push32(c, 0xDEADBEEFu); g_vt3_field_draw(c); return; }
+    uint32_t types = rd32(self + 0x3c), db = rd32(self + 0x2c);
+    uint32_t n = db ? guest_call(c, 0x081A7718u, &db, 1) : 0;   /* the scene database's tree count, as field::draw counts */
+    uint8_t save[64];
+    if (n > 64) n = 64;
+    if (types < 0x08000000u) n = 0;
+    for (uint32_t i = 0; i < n; i++) { save[i] = rd8(types + i); wr8(types + i, 0); }
+    {   static int told; extern unsigned g_frame;
+        if (!told++) fprintf(stderr, "[vt3] frame %u: the whole stadium drawn (%u trees; LINDBERGH_VT3_STANDS=0: the court camera's own cut)\n", g_frame, n); }
+    push32(c, 0xDEADBEEFu); g_vt3_field_draw(c);
+    for (uint32_t i = 0; i < n; i++) wr8(types + i, save[i]);
+}
 /* the game can draw its match as a world (Virtua Tennis 3's camera symbols
  * resolve): the headset panel's Mode row and Advanced pages (host_xr.c) */
 int g_world_capable;
@@ -1690,6 +1719,12 @@ static void vt3_jumps(void)
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - scene culling off\n");
             else if (im && cmode == 2 && vt3_wrap("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", &g_vt3_is_visible, h_vt3_is_visible))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - scene culled to the eyes' view, %.0f deg margin\n", g_vt3_cull_margin);
+            {   const char *u = getenv("LINDBERGH_VT3_STANDS");
+                g_vt3_stands = !(u && *u == '0');
+                /* installed whenever the game can be Immersive; gated per call by the mode */
+                if (g_world_capable && vt3_wrap("_ZN5field4drawEv", &g_vt3_field_draw, h_vt3_field_draw))
+                    fprintf(stderr, "[sega] Virtua Tennis 3: stadium draw wrapped (Immersive: %s)\n",
+                            g_vt3_stands ? "upper stands, both ends and the sky dome drawn" : "the game's court-camera cut kept"); }
             if (im && vt3_wrap("_ZN8_sRender22setProjectCameraMatrixEv", &g_vt3_proj_cam, h_vt3_proj_cam))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - the camera's own projection read\n");
         }

@@ -45,19 +45,22 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 12 && r[0] == XW_ROW(XW_BACK) && r[1] == XW_ROW(XW_STAND) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 11 && r[0] == XW_ROW(XW_BACK) && r[1] == XW_ROW(XW_DOLLY) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
     xw_items(&w, &c, it);
-    assert(!strcmp(it[XW_STAND].value, "x1.5") && !strcmp(it[XW_DOLLY].value, "20 m") && !strcmp(it[XW_STEPBACK].value, "6 m"));
+    assert(!strcmp(it[XW_DOLLY].value, "20 m") && !strcmp(it[XW_STEPBACK].value, "6 m"));
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
-    assert(!strcmp(it[XW_SKY].value, "On") && !strcmp(it[XW_SHADOW].value, "High 2048"));
+    assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
+    assert(!strcmp(it[XW_SKY].label, "Sky"));
     assert(!strcmp(xw_hint(&w), "Applies when Immersive mode runs."));
     /* the non-running mode's page: saved, not live */
     fx = xw_choose(&w, &c, XW_REPLAYS);
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
     /* cycles */
-    xw_choose(&w, &c, XW_STAND); assert(c.imm_stand_y == 1.75f);
-    xw_choose(&w, &c, XW_STAND); xw_choose(&w, &c, XW_STAND); assert(c.imm_stand_y == 1.0f);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_STAND].value, "x1.0 (off)"));
+    xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_PAINTED);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_SKY].value, "Painted"));
+    xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_OFF);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_SKY].value, "Off"));
+    xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_STADIUM);
     xw_choose(&w, &c, XW_DOLLY); assert(c.imm_dolly == 250);
     xw_choose(&w, &c, XW_DOLLY); xw_choose(&w, &c, XW_DOLLY); assert(c.imm_dolly == 0);
     xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 90);
@@ -68,15 +71,15 @@ int main(void) {
     fx = xw_choose(&w, &c, XW_RESTORE); assert(w.restore_armed && !(fx & XP_SAVE));
     xw_items(&w, &c, it); assert(!strcmp(it[XW_RESTORE].value, "Pull again to restore"));
     fx = xw_choose(&w, &c, XW_RESTORE); assert((fx & XP_SAVE) && !w.restore_armed);
-    assert(c.imm_stand_y == 1.5f && c.imm_dolly == 200 && c.imm_back == 60 && c.imm_shadow == 2048 && c.imm_replays == 0);
+    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_dolly == 200 && c.imm_back == 60 && c.imm_shadow == 2048 && c.imm_replays == 0);
     xw_choose(&w, &c, XW_RESTORE); xw_choose(&w, &c, XW_SKY); assert(!w.restore_armed);    /* another row disarms */
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_MAIN);
     /* the running mode's page: live; a pinned row shows the run's value and ignores clicks */
     c.world_mode = 0; w.page = XW_PAGE_CLASSIC;
     fx = xw_choose(&w, &c, XW_CUTAWAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 8 && !has(r, n, XW_ROW(XW_STAND)) && !has(r, n, XW_ROW(XW_SKY)));
-    assert(xw_choose(&w, &c, XW_STAND) == 0);           /* not a Classic row */
+    assert(n == 8 && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
     assert(xw_choose(&w, &c, XW_REPLAYS) == 0 && c.replays == 1);
