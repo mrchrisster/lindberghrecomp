@@ -1087,8 +1087,21 @@ static void (*g_vt3_init_uva)(CPU *);
 static void h_vt3_init_uva(CPU *c)
 {
     extern unsigned g_frame;
-    if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: intro fly-by camera skipped\n", g_frame);
-    (void)g_vt3_init_uva;
+    uint32_t self = A32(0), mode = self >= 0x08000000u ? rd32(self + 0x38) : 0;
+    /* camera::reset starts a fly-by (initUva(-1): the animation chosen at
+     * +0x228) for camera modes 4 (usrAcEntranceLoop: the match intro), 8
+     * (usrAcChangeendLoop: between games), 0xa (usrAcStatsLoop, usrChResultLoop,
+     * usrChTotalResultLoop: the result slates), 0xe (usrAcEndingLoop) and 0x10
+     * (usrPlayerintroLoop). Only the first two are the intro fly-by this skips.
+     * The result slate's exec() ends when camera::isUvaFinished() - no
+     * animation at +0x224 counts as finished - so skipping its fly-by ended the
+     * slate after ~4 frames (the slate is a flat menu screen in world mode
+     * anyway); the others are kept for the same reason. */
+    if (mode != 4 && mode != 8) {
+        if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: fly-by camera kept (camera mode %#x)\n", g_frame, mode);
+        push32(c, 0xDEADBEEFu); g_vt3_init_uva(c); return;
+    }
+    if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: intro fly-by camera skipped (camera mode %#x)\n", g_frame, mode);
     RET(0);
 }
 /* LINDBERGH_VT3_CAMFIELDS=<from>-<to>: during those frames, each small integer
