@@ -1320,6 +1320,14 @@ static void h_vt3_set_mode(CPU *c)
     uint32_t from = rd32(c->esp - 4u);                      /* the caller's return address (popped, still there) */
     uint32_t self = A32(0), mode = A32(1), mgr = rd32(0x085061A4u);
     uint32_t m = mgr ? rd32(mgr + 0x1c) : 0, loser = 0;
+    /* The one way into a replay: usrAcPassLoop::exec's setMode at return
+     * 0x08086B17, taken only when replay::isReplay_point says yes - mode 7
+     * on the arcade manager ([mgr+0x104]), 6 on the attract demo's, 9 on
+     * challenge mode's ([mgr+0x108]). With Replays off the isReplay_point
+     * wrap answers no, so this must not happen: logged, not redirected. */
+    if (!g_replays && from == 0x08086B17u && (mode == 6 || mode == 7 || mode == 9))
+        fprintf(stderr, "[vt3] frame %u: replay requested with Replays off (setMode(%#x, %u) from %#x) - isReplay_point not answered?\n",
+                g_frame, self, mode, from);
     if (!g_replays && from == 0x08086C6Du && mode == 8 && m && (rd32(m + 0x1c) & 0x1000u) &&
         mgr && self == rd32(rd32(mgr + 0x104) + 0x14)) {
         wr32(m + 0x1c, rd32(m + 0x1c) & ~0x1000u);
@@ -1400,6 +1408,19 @@ static void h_vt3_skip_winner(CPU *c)
             fprintf(stderr, "[flow] frame %u: point cutaway skipped (Point cutaways off, after %d frames)\n",
                     g_frame, pm ? (int)rd32(pm + 0x78) + 1 : -1);
         }
+        told = g_frame;
+        RET(1); return;
+    }
+    /* Replays switched off while one plays (the panel applies at once): the
+     * replay loop (usrAcReplayLoop::exec, return 0x0808A850) asks the same
+     * question each frame of a replay; answered yes, it ends as the game's
+     * own skip does - once past getCnt_skip_max() frames, still held while a
+     * card is written (isCard_writing / cardManager::isFinishedCue) - and
+     * takes its usual exit (next point, change of ends, game set and match). */
+    if (!g_replays && from == 0x0808A850u) {
+        extern unsigned g_frame; static unsigned told = ~0u;
+        if (g_frame - told > 30)
+            fprintf(stderr, "[vt3] frame %u: replay playing with Replays off - skipped\n", g_frame);
         told = g_frame;
         RET(1); return;
     }
@@ -1706,17 +1727,28 @@ void hle_register_sega(void)
             fprintf(stderr, "[sega] the player takes no damage (LINDBERGH_GOD)\n");
     }
     if (widen_culling()) fprintf(stderr, "[sega] model culling widened to %.0f degrees\n", g_cull_fov);
-    {   /* LINDBERGH_FORCE_REPLAY=1: every point earns a replay (Virtua Tennis 3) -
-         * the replay camera reached in seconds, for tests nobody watches */
+    if (guest_symbol("_ZN6replay14isReplay_pointEv")) {   /* Virtua Tennis 3 */
+        /* LINDBERGH_FORCE_REPLAY=1: every point earns a replay - the replay
+         * camera reached in seconds, for tests nobody watches */
         const char *r = getenv("LINDBERGH_FORCE_REPLAY");
-        if (r && *r == '1' && guest_override("_ZN6replay14isReplay_pointEv", h_true))
-            fprintf(stderr, "[sega] every point is replayed (LINDBERGH_FORCE_REPLAY)\n");
-        /* the headset menu's Replays switch: off, no point earns one */
+        if (r && *r == '1') {
+            if (guest_override("_ZN6replay14isReplay_pointEv", h_true))
+                fprintf(stderr, "[sega] every point is replayed (LINDBERGH_FORCE_REPLAY)\n");
+            else
+                fprintf(stderr, "[sega] Virtua Tennis 3: WARNING replay::isReplay_point not overridden (override table full?) - LINDBERGH_FORCE_REPLAY has no effect\n");
+        }
+        /* the headset menu's Replays switch: off, no point earns one
+         * (isReplay_point is the only way into the replay loop) */
         else if (vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) {
             g_replay_hook = 1; fprintf(stderr, "[sega] Virtua Tennis 3: replays %s (headset menu)\n", g_replays ? "on" : "off");
-            if (!vt3_wrap("_ZN14mtrLoopManager7setModeEl", &g_vt3_set_mode, h_vt3_set_mode))   /* the match's end with replays off */
-                fprintf(stderr, "[sega] Virtua Tennis 3: mtrLoopManager::setMode not wrapped - a match will not end with Replays off\n");
-        }
+        } else
+            fprintf(stderr, "[sega] Virtua Tennis 3: WARNING replay::isReplay_point not wrapped (override table full?) - "
+                            "the Replays switch does nothing, every replay plays\n");
+        /* the match's end with replays off, point cutaways off, the flow log -
+         * installed whether or not isReplay_point is forced */
+        if (!vt3_wrap("_ZN14mtrLoopManager7setModeEl", &g_vt3_set_mode, h_vt3_set_mode))
+            fprintf(stderr, "[sega] Virtua Tennis 3: WARNING mtrLoopManager::setMode not wrapped - a match will not end with Replays off, "
+                            "point cutaways stay\n");
     }
 #if defined(__ANDROID__)
     if (pace_by_display()) fprintf(stderr, "[sega] idle_wait_func: paced by the headset, not the wall clock\n");
