@@ -339,6 +339,7 @@ static void menu_world_state(void)
     wpanel.pins = 0;
     for (int k = 0; k < WM_COUNT; k++) if (world_mode_pinned(k)) wpanel.pins |= 1u << k;
     wpanel.eff = *world_mode_values();
+    wpanel.live = 0;            /* the Mode row applies on restart (live switching: world_mode_live, a later step) */
 }
 static void menu_rows(void)
 {

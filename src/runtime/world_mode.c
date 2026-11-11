@@ -2,6 +2,11 @@
  * world_mode.c - which mode the run is in (Classic / Immersive) and the
  * values that go with it, resolved once at start (world_mode.h).
  *
+ * Switching live (Phase B) is groundwork only: the target / game / GL
+ * latches, world_mode_frame and the test switch work, but nothing changes
+ * mode until a switch callback is registered (world_mode_on_switch), and none
+ * is yet - so world_mode_update keeps the started mode, as before.
+ *
  * Each value: the env variable when it is set (a run's own choice, env.txt on
  * the headset), else the stored setting (vr.cfg; a key missing there has the
  * mode's default), else the mode's default. Classic keeps the old keys
@@ -11,6 +16,8 @@
  * (hle_register_sega -> vt3_jumps), before xr_init.
  */
 #include "world_mode.h"
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,8 +75,21 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     if (src) memcpy(src, k, sizeof k);
 }
 
-static WmValues g_wm;
+/* g_wm: the game's mode's values (the getters); g_by_mode: both modes' values
+ * from the last stored settings, so a switch takes the new mode's values on
+ * the frame it latches. The lock covers the two between the panel's thread
+ * (world_mode_update) and the game thread (world_mode_frame); the getters
+ * read single fields without it, as before. */
+static WmValues g_wm, g_by_mode[2];
 static int g_wm_done, g_wm_capable;
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_start;                     /* the mode the run started in */
+static atomic_int g_target;             /* the mode asked for: panel (world_mode_update) or test switch */
+static atomic_int g_target_test;        /* the target was set by the test switch */
+static int g_game;                      /* the game thread's mode (world_mode_frame) */
+static atomic_int g_gl;                 /* the GL thread's mode (world_mode_gl_latch) */
+static int g_panel_req;                 /* the mode the stored settings last asked for */
+static _Atomic(WmSwitchFn) g_switch_fn;
 
 #ifdef LINDBERGH_OPENXR
 /* which of the running mode's keys vr.cfg holds (for the [world] line) */
@@ -112,21 +132,95 @@ void world_mode_init(int capable)
             g_wm.sky ? "on" : "off", SRC[src[WM_SKY]], g_wm.shadow, SRC[src[WM_SHADOW]],
             g_wm.replays ? "on" : "off", SRC[src[WM_REPLAYS]], g_wm.overlays ? "on" : "off", SRC[src[WM_OVERLAYS]],
             g_wm.cutaways ? "on" : "off", SRC[src[WM_CUTAWAYS]], capable ? "" : " - this game has no world mode");
+    g_start = g_game = g_panel_req = g_wm.immersive;
+    atomic_store(&g_target, g_start);
+    atomic_store(&g_gl, g_start);
+    for (int m = 0; m < 2; m++) {
+        world_mode_resolve(&s, m, capable, 0, &g_by_mode[m], NULL);
+        g_by_mode[m].shadow = g_wm.shadow; g_by_mode[m].shadow_scale = g_wm.shadow_scale;
+    }
 }
+
+static int kill_switch(void) { const char *v = getenv("LINDBERGH_VT3_LIVE_SWITCH"); return v && *v == '0'; }
+int world_mode_live(void) { return atomic_load(&g_switch_fn) != NULL && !kill_switch(); }
+void world_mode_on_switch(WmSwitchFn fn) { atomic_store(&g_switch_fn, fn); }
 
 void world_mode_update(const LgXrSettings *s)
 {
     if (!g_wm_done) world_mode_init(0);
-    WmValues v;
-    world_mode_resolve(s, g_wm.immersive, g_wm_capable, 0, &v, NULL);
-    v.shadow = g_wm.shadow; v.shadow_scale = g_wm.shadow_scale;     /* the shadow map is made at start */
-    g_wm = v;
+    WmValues v[2];
+    for (int m = 0; m < 2; m++) {
+        world_mode_resolve(s, m, g_wm_capable, 0, &v[m], NULL);
+        v[m].shadow = g_wm.shadow; v[m].shadow_scale = g_wm.shadow_scale;  /* the shadow map is made at start */
+    }
+    pthread_mutex_lock(&g_lock);
+    if (world_mode_live()) {
+        /* the mode asked for: env's pin, else the stored mode (a game that
+         * cannot draw a world keeps its start). Only a change of it moves the
+         * target, so a click on another row keeps a test switch's mode. */
+        const char *e = env(WM_MODE);
+        const int req = e ? *e == '1' : g_wm_capable ? s && s->world_mode == 1 : g_start;
+        if (req != g_panel_req) {
+            g_panel_req = req;
+            atomic_store(&g_target_test, 0);
+            atomic_store(&g_target, req);
+        }
+    }
+    g_by_mode[0] = v[0]; g_by_mode[1] = v[1];
+    g_wm = v[g_game];       /* the running mode's values at once; another mode's when it latches */
+    pthread_mutex_unlock(&g_lock);
+}
+
+/* LINDBERGH_VT3_MODE_AT=<frame>:<0|1>,... - test mode switches */
+#define WM_TESTS_MAX 32
+static struct { unsigned at; int mode, done; } g_tests[WM_TESTS_MAX];
+static int g_ntests = -1;
+static void tests_parse(void)
+{
+    g_ntests = 0;
+    const char *v = getenv("LINDBERGH_VT3_MODE_AT");
+    while (v && *v && g_ntests < WM_TESTS_MAX) {
+        unsigned at; int mode, used = 0;
+        if (sscanf(v, "%u:%d%n", &at, &mode, &used) == 2 && (mode == 0 || mode == 1)) {
+            g_tests[g_ntests].at = at; g_tests[g_ntests].mode = mode; g_tests[g_ntests].done = 0; g_ntests++;
+        } else fprintf(stderr, "[world] LINDBERGH_VT3_MODE_AT: cannot read \"%s\" (want <frame>:<0|1>,...)\n", v);
+        v = strchr(v, ',');
+        if (v) v++;
+        (void)used;
+    }
+}
+
+int world_mode_frame(unsigned frame)
+{
+    if (!g_wm_done) world_mode_init(0);
+    WmSwitchFn fn = atomic_load(&g_switch_fn);
+    if (!fn) return g_game;         /* nothing follows a switch yet: the start mode */
+    if (g_ntests < 0) tests_parse();
+    for (int i = 0; i < g_ntests; i++)
+        if (!g_tests[i].done && frame >= g_tests[i].at) {
+            g_tests[i].done = 1;
+            atomic_store(&g_target_test, 1);
+            atomic_store(&g_target, g_tests[i].mode);
+        }
+    const int t = atomic_load(&g_target);
+    if (t == g_game) return g_game;
+    pthread_mutex_lock(&g_lock);
+    g_game = t;
+    g_wm = g_by_mode[t];
+    pthread_mutex_unlock(&g_lock);
+    fprintf(stderr, "[world] frame %u: mode -> %s (%s)\n", frame, t ? "immersive" : "classic",
+            atomic_load(&g_target_test) ? "test" : "panel");
+    fn(t);
+    return g_game;
 }
 
 static const WmValues *wm(void) { if (!g_wm_done) world_mode_init(0); return &g_wm; }
 const WmValues *world_mode_values(void) { return wm(); }
 int world_mode_capable(void) { wm(); return g_wm_capable; }
-int world_mode_immersive(void) { return wm()->immersive; }
+int world_mode_immersive(void) { wm(); return g_game; }
+int world_mode_target(void) { wm(); return atomic_load(&g_target); }
+int world_mode_drawing_immersive(void) { wm(); return atomic_load(&g_gl); }
+void world_mode_gl_latch(int immersive) { atomic_store(&g_gl, immersive != 0); }
 int world_mode_replays(void) { return wm()->replays; }
 int world_mode_overlays(void) { return wm()->overlays; }
 int world_mode_cutaways(void) { return wm()->cutaways; }

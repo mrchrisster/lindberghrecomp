@@ -1087,6 +1087,7 @@ static void pace(void)
 
 /* Shared worker: guest ABI snapshots, state filtering, one-frame overlap. */
 #include "render_queue.h"
+#include "world_mode.h"
 
 #ifndef LINDBERGH_VULKAN
 static int gl_release(void) { return SDL_GL_MakeCurrent(g_win.win, NULL) == 0; }
@@ -1120,6 +1121,9 @@ void host_swap(void)
 #endif
         }
     }
+    /* Classic / Immersive: a new target becomes the game's mode for the next
+     * frame (world_mode.c; off until a switch callback is registered) */
+    world_mode_frame(g_frame);
     if (glq_active()) {
         /* the end of this frame goes to the worker; the game waits only for
          * the frame before, so it runs at most one frame ahead */

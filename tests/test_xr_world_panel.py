@@ -37,7 +37,7 @@ int main(void) {
     assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (Classic) >") && !it[XW_ADVANCED].value[0]);
     /* Mode: saved, "(on restart)", Restart now shows */
     unsigned fx = xw_choose(&w, &c, XW_MODE);
-    assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && c.world_mode == 1);
+    assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && !(fx & XW_LIVE_CHANGED) && c.world_mode == 1);   /* live = 0 */
     xw_items(&w, &c, it);
     assert(!strcmp(it[XW_MODE].value, "Immersive (3D world) (on restart)"));
     assert(find(&w, &c, XW_ROW(XW_RESTART)) == 1);
@@ -89,6 +89,27 @@ int main(void) {
     w.page = XW_PAGE_MAIN; w.pins = 1u << WM_MODE; w.running = 1; c.world_mode = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_MODE].value, "Immersive (3D world) (env.txt)"));
     assert(find(&w, &c, XW_ROW(XW_RESTART)) < 0 && xw_choose(&w, &c, XW_MODE) == 0 && c.world_mode == 0);
+    /* live (Phase B): no Restart row, Mode without "(on restart)", the Mode click is live */
+    {
+        LgXrSettings lc = LG_XR_SETTINGS_DEFAULT;
+        XwState l; memset(&l, 0, sizeof l);
+        world_mode_resolve(&lc, 0, 1, 0, &l.eff, NULL);
+        l.live = 1;
+        fx = xw_choose(&l, &lc, XW_MODE);
+        assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && (fx & XW_LIVE_CHANGED) && lc.world_mode == 1);
+        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Immersive (3D world)"));
+        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_ADVANCED)) == 1);
+        assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (Immersive) >"));
+        fx = xw_choose(&l, &lc, XW_MODE);
+        assert((fx & XW_LIVE_CHANGED) && lc.world_mode == 0);
+        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Classic (2D screen)"));
+        /* shadow quality still on restart; a pinned mode still pinned */
+        l.page = XW_PAGE_CLASSIC; l.eff.shadow = 1024; lc.classic_shadow = 2048;
+        xw_items(&l, &lc, it); assert(!strcmp(it[XW_SHADOW].value, "High 2048 (on restart)"));
+        l.page = XW_PAGE_MAIN; l.pins = 1u << WM_MODE; l.running = 1; lc.world_mode = 0;
+        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Immersive (3D world) (env.txt)"));
+        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && xw_choose(&l, &lc, XW_MODE) == 0 && lc.world_mode == 0);
+    }
     /* every value fits beside its label: 42 characters across the panel */
     for (int p = 0; p < XW_PAGES; p++) {
         w.page = p; w.pins = 0x1ff; c.imm_shadow = 4096; c.classic_shadow = 4096; w.eff.shadow = 1024;
@@ -105,7 +126,7 @@ int main(void) {
 ''')
             b = Path(temp) / "wp"
             subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(rt), str(src), str(rt / "xr_world_panel.c"),
-                            str(rt / "world_mode.c"), str(rt / "xr_menu.c"), "-lm", "-o", str(b)], check=True)
+                            str(rt / "world_mode.c"), str(rt / "xr_menu.c"), "-pthread", "-lm", "-o", str(b)], check=True)
             self.assertEqual(subprocess.run([str(b)], check=True, capture_output=True, text=True).stdout.strip(), "ok")
 
 

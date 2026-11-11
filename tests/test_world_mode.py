@@ -8,7 +8,8 @@ import unittest
 
 ENV_KEYS = ["LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OVERLAYS", "LINDBERGH_VT3_CUTAWAYS",
             "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_STAND_Y", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK",
-            "LINDBERGH_VT3_SKY", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE"]
+            "LINDBERGH_VT3_SKY", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE", "LINDBERGH_VT3_LIVE_SWITCH",
+            "LINDBERGH_VT3_MODE_AT"]
 
 
 class WorldModeTests(unittest.TestCase):
@@ -22,11 +23,39 @@ class WorldModeTests(unittest.TestCase):
         src.write_text(r'''#include "world_mode.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+static int calls;
+static void on_switch(int im) { calls++; printf(" cb%d", im); }
 int main(int argc, char **argv) {
+    /* "cb": a switch callback registered - what makes switching live (none is, in the game yet) */
+    if (argc > 3 && !strcmp(argv[3], "cb")) world_mode_on_switch(on_switch);
     world_mode_init(argc > 1 ? atoi(argv[1]) : 1);
     const WmValues *v = world_mode_values();
     printf("%d %d %d %d %d %.2f %.0f %.0f %d %.1f", v->immersive, v->replays, v->overlays, v->cutaways,
            v->shadow, v->stand_y, v->dolly, v->back, v->sky, v->shadow_scale);
+    if (argc > 2 && !strcmp(argv[2], "latch")) {    /* the panel's Mode flipped, then two frames */
+        LgXrSettings s = LG_XR_SETTINGS_DEFAULT; xr_settings_load(&s);
+        s.world_mode = !world_mode_immersive();
+        world_mode_update(&s);
+        printf(" | %d %d %d", world_mode_immersive(), world_mode_target(), world_mode_live());
+        printf(" |"); world_mode_frame(10);
+        printf(" | %d %d %d %d", world_mode_immersive(), world_mode_drawing_immersive(), calls, world_mode_replays());
+        printf(" |"); world_mode_frame(11);
+        world_mode_update(&s);                      /* another click, the same mode: nothing more */
+        world_mode_frame(12);
+        world_mode_gl_latch(world_mode_immersive());
+        printf(" | %d %d\n", calls, world_mode_drawing_immersive());
+        return 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "frames")) {   /* frames 0-40: where the mode changes */
+        int m = world_mode_immersive();
+        for (unsigned f = 0; f <= 40; f++) {
+            world_mode_frame(f);
+            if (world_mode_immersive() != m) { m = world_mode_immersive(); printf(" %u:%d", f, m); }
+        }
+        printf(" | %d\n", calls);
+        return 0;
+    }
     if (argc > 2) {     /* a menu change: immersive replays on, classic replays off; then the live values */
         LgXrSettings s = LG_XR_SETTINGS_DEFAULT; xr_settings_load(&s);
         s.imm_replays = 1; s.replays = 0; s.imm_dolly = 50; s.imm_shadow = 4096;
@@ -39,7 +68,7 @@ int main(int argc, char **argv) {
         cls.bin = Path(cls.temp.name) / "wm"
         for name in ("wm", "wm_desk"):
             subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror", *(["-DLINDBERGH_OPENXR"] if name == "wm" else []),
-                            "-I", str(rt), str(src), str(rt / "world_mode.c"), str(rt / "xr_settings.c"),
+                            "-pthread", "-I", str(rt), str(src), str(rt / "world_mode.c"), str(rt / "xr_settings.c"),
                             "-o", str(Path(cls.temp.name) / name)], check=True)
         cls.desk = Path(cls.temp.name) / "wm_desk"
 
@@ -101,6 +130,49 @@ int main(int argc, char **argv) {
         self.assertEqual(out.split(" | ")[1], "1 0 50 2048")       # env still wins
         out, _ = self.run_wm("mode classic\n", args=("1", "update"))
         self.assertEqual(out.split(" | ")[1], "0 0 50 1024")       # classic: its own replays (now off)
+
+    # Live switching (Phase B groundwork): off unless a switch callback is registered ("cb").
+    def test_no_callback_keeps_the_start_mode(self):
+        out, log = self.run_wm("mode classic\n", args=("1", "latch"))
+        self.assertEqual(out, "0 1 1 1 1024 1.50 200 60 1 0.0 | 0 0 0 | | 0 0 0 1 | | 0 0")
+        self.assertNotIn("mode ->", log)
+
+    def test_mode_latches_at_the_next_frame_and_calls_back_once(self):
+        out, log = self.run_wm("mode classic\n", args=("1", "latch", "cb"))
+        # target at once, the game's mode at frame 10 (callback once, Immersive's values), GL when latched
+        self.assertEqual(out, "0 1 1 1 1024 1.50 200 60 1 0.0 | 0 1 1 | cb1 | 1 0 1 0 | | 1 1")
+        self.assertIn("[world] frame 10: mode -> immersive (panel)", log)
+        self.assertEqual(log.count("mode ->"), 1)
+        out, log = self.run_wm("mode immersive\n", args=("1", "latch", "cb"))
+        self.assertEqual(out.split(" | ", 1)[1], "1 0 1 | cb0 | 0 1 1 1 | | 1 0")
+        self.assertIn("frame 10: mode -> classic (panel)", log)
+
+    def test_kill_switch_env_pin_and_incapable_game_keep_the_start_mode(self):
+        for env, args, live in (({"LINDBERGH_VT3_LIVE_SWITCH": "0"}, ("1", "latch", "cb"), "0"),
+                                ({"LINDBERGH_VT3_IMMERSIVE": "0"}, ("1", "latch", "cb"), "1"),
+                                ({}, ("0", "latch", "cb"), "1")):
+            out, log = self.run_wm("mode classic\n", env, args=args)
+            # mode and target as started, no callback, Classic's values
+            self.assertEqual(out.split(" | ", 1)[1], f"0 0 {live} | | 0 0 0 1 | | 0 0", (env, args))
+            self.assertNotIn("mode ->", log)
+
+    def test_mode_at_test_switch(self):
+        at = {"LINDBERGH_VT3_MODE_AT": "5:1,20:0,bad,30:1"}
+        out, log = self.run_wm(None, at, args=("1", "frames", "cb"))
+        self.assertEqual(out.split(" ", 10)[10], "cb1 5:1 cb0 20:0 cb1 30:1 | 3")
+        self.assertIn("[world] frame 5: mode -> immersive (test)", log)
+        self.assertIn("cannot read", log)
+        # over an env pin too, and even with the kill switch (a test's own choice)
+        out, _ = self.run_wm(None, {**at, "LINDBERGH_VT3_IMMERSIVE": "0", "LINDBERGH_VT3_LIVE_SWITCH": "0"},
+                             args=("1", "frames", "cb"))
+        self.assertTrue(out.endswith(" | 3"))
+        # without a callback (the game today): nothing
+        out, log = self.run_wm(None, at, args=("1", "frames"))
+        self.assertEqual(out.split(" ", 10)[10], "| 0")
+        self.assertNotIn("mode ->", log)
+        # a frame jumped past still counts
+        out, _ = self.run_wm(None, {"LINDBERGH_VT3_MODE_AT": "3:1"}, args=("1", "frames", "cb"))
+        self.assertEqual(out.split(" ", 10)[10], "cb1 3:1 | 1")
 
 
 if __name__ == "__main__": unittest.main()

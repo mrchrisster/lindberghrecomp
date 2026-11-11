@@ -9,6 +9,8 @@
  * Replays, cutaways, overlays, stand, closer, step back and sky are live for
  * the running mode; shadow quality and the mode apply on restart. A row whose
  * env variable is set shows "(env.txt)" with the run's value and ignores clicks.
+ * With XwState.live (switching live, Phase B; host_xr.c keeps it 0 for now)
+ * the Mode row applies at once: no Restart now, no "(on restart)".
  */
 #include "xr_world_panel.h"
 #include <math.h>
@@ -64,7 +66,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         break; }
     default:
         rows[n++] = XW_ROW(XW_MODE);
-        if (cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
+        if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
         for (int i = 0; i < XP_COUNT; i++)
             if (i != XP_STATS && i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
@@ -89,7 +91,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     {
         const int m = pinned(w, XW_MODE) ? w->running : cfg->world_mode;
         snprintf(it[XW_MODE].value, 40, "%s%s", m ? "Immersive (3D world)" : "Classic (2D screen)",
-                 pinned(w, XW_MODE) ? " (env.txt)" : m != w->running ? " (on restart)" : "");
+                 pinned(w, XW_MODE) ? " (env.txt)" : !w->live && m != w->running ? " (on restart)" : "");
     }
     it[XW_RESTART].label = cfg->world_mode ? "Restart now in Immersive mode" : "Restart now in Classic mode";
     it[XW_ADVANCED].label = cfg->world_mode ? "Advanced settings (Immersive) >" : "Advanced settings (Classic) >";
@@ -158,7 +160,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     const unsigned live = page_mode(w) == w->running ? XW_LIVE_CHANGED : 0;   /* the other mode's: saved for later */
     unsigned fx = XP_SAVE;
     switch (item) {
-    case XW_MODE: c->world_mode = !c->world_mode; fx |= XW_PAGE_CHANGED; break;
+    case XW_MODE: c->world_mode = !c->world_mode; fx |= XW_PAGE_CHANGED | (w->live ? XW_LIVE_CHANGED : 0); break;
     case XW_RESTART: return XP_RESTART;
     case XW_ADVANCED: w->page = c->world_mode ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; return XW_PAGE_CHANGED;
     case XW_BACK: w->page = XW_PAGE_MAIN; return XW_PAGE_CHANGED;
