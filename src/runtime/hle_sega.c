@@ -1433,6 +1433,74 @@ static void vt3_hud_anchor_install(void)
     if (g_vt3_servelog && vt3_wrap("_ZN3hud14drawServePowerEv", &g_vt3_serve_power, h_vt3_serve_power))
         fprintf(stderr, "[sega] Virtua Tennis 3: serve meter logged (LINDBERGH_VT3_SERVELOG)\n");
 }
+/* World mode's scene culling. _sCamera::isVisible(const _sVector4d *sphere)
+ * tests a bounding sphere (world x, y, z, radius) against the camera's six
+ * planes (this+0xb8, 16 bytes each, inward: a x + b y + c z + d <= -r is out).
+ * The headset sees far more than the broadcast camera, so world mode first
+ * made every node visible - the whole stadium drawn every frame. Now, for the
+ * game's world camera, the sphere is tested against the eyes' own frusta
+ * widened by LINDBERGH_VT3_CULL_MARGIN degrees a side (default 20;
+ * stereo_vt3_cull_planes); any other camera (the shadow map's light) keeps
+ * the game's test. The world camera is the one with a plane facing the game
+ * camera's forward (its near plane). LINDBERGH_VT3_CULL=0 everything visible
+ * (as before), =1 the game's own culling, unset/2 this. LINDBERGH_VT3_CULLLOG=1
+ * logs the calls and counts. Measured (2026-11-11): the only caller,
+ * _sTree::addScene, tests only trees with their culling flag (+0x40 bit 0),
+ * from uva::SceneObject::addScene - in a whole arcade run (menus, match,
+ * result slate) it was never called, and frame maps show the same 283 draws
+ * with culling off, the game's or this. World mode's frame rate was the sky
+ * (stereo.c sky_draw), not the culling. */
+static void (*g_vt3_is_visible)(CPU *);
+static float g_vt3_cull_margin = 20;
+static int g_vt3_cull_log;
+static void h_vt3_is_visible(CPU *c)
+{
+    extern unsigned g_frame;
+    extern int stereo_vt3_cull_planes(float planes[2][4][4], float fwd[3], float margin);
+    static unsigned pf = ~0u; static int ok; static float pl[2][4][4], fwd[3];
+    static uint32_t last_cam; static unsigned last_cam_frame = ~0u; static int last_world;
+    static unsigned n_call, n_world, n_out, n_game_out, n_other;
+    uint32_t self = A32(0), sp = A32(1);
+    if (g_frame != pf) {
+        pf = g_frame; ok = stereo_vt3_cull_planes(pl, fwd, g_vt3_cull_margin);
+        if (g_vt3_cull_log && g_frame % 300 == 0 && n_call) {
+            fprintf(stderr, "[cull] frame %u: per frame %.0f tests, %.0f by the world camera (%.0f out, the game's own test %.0f out), %.0f by others\n",
+                    g_frame, n_call / 300.0, n_world / 300.0, n_out / 300.0, n_game_out / 300.0, n_other / 300.0);
+            n_call = n_world = n_out = n_game_out = n_other = 0;
+        }
+    }
+    n_call++;
+    if (g_vt3_cull_log) { static unsigned told = ~0u; if (told == ~0u || g_frame - told > 600) { told = g_frame;
+        fprintf(stderr, "[cull] frame %u: isVisible(camera %#x) called (world camera known %d)\n", g_frame, self, ok); } }
+    if (!ok) { RET(1); return; }                            /* no world camera yet: everything, as before */
+    if (self != last_cam || g_frame != last_cam_frame) {    /* is this the world camera? */
+        last_cam = self; last_cam_frame = g_frame; last_world = 0;
+        for (int i = 0; i < 6; i++) {
+            float n[3] = { vt3_f(self + 0xb8 + 16u * i), vt3_f(self + 0xbc + 16u * i), vt3_f(self + 0xc0 + 16u * i) };
+            float l = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (l > 1e-6f && (n[0] * fwd[0] + n[1] * fwd[1] + n[2] * fwd[2]) / l > 0.999f) { last_world = 1; break; }
+        }
+    }
+    if (!last_world) { n_other++; push32(c, 0xDEADBEEFu); g_vt3_is_visible(c); return; }
+    n_world++;
+    float s[4] = { vt3_f(sp), vt3_f(sp + 4), vt3_f(sp + 8), vt3_f(sp + 12) };
+    int vis = 0;
+    for (int e = 0; e < 2 && !vis; e++) {
+        int in = 1;
+        for (int k = 0; k < 4 && in; k++)
+            if (pl[e][k][0] * s[0] + pl[e][k][1] * s[1] + pl[e][k][2] * s[2] + pl[e][k][3] <= -s[3]) in = 0;
+        vis = in;
+    }
+    if (!vis) n_out++;
+    if (g_vt3_cull_log) {                                   /* the game's own answer, for the counts */
+        int gin = 1;
+        for (int i = 0; i < 6 && gin; i++)
+            if (vt3_f(self + 0xb8 + 16u * i) * s[0] + vt3_f(self + 0xbc + 16u * i) * s[1] + vt3_f(self + 0xc0 + 16u * i) * s[2] +
+                vt3_f(self + 0xc4 + 16u * i) <= -s[3]) gin = 0;
+        if (!gin) n_game_out++;
+    }
+    RET(vis);
+}
 /* the game can draw its match as a world (Virtua Tennis 3's camera symbols
  * resolve): the headset panel's Mode row and Advanced pages (host_xr.c) */
 int g_world_capable;
@@ -1491,9 +1559,15 @@ static void vt3_jumps(void)
               if (skip_uva && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))
                   fprintf(stderr, "[sega] Virtua Tennis 3: intro fly-by camera skipped\n"); }
             const int im = world_mode_immersive();
-            const char *cull = getenv("LINDBERGH_VT3_CULL");    /* =1: culling kept (testing) */
-            if (im && !(cull && *cull == '1') && guest_override("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", h_true))
+            const char *cull = getenv("LINDBERGH_VT3_CULL");    /* 0 off, 1 the game's, 2 (default) widened to the eyes */
+            const char *cm = getenv("LINDBERGH_VT3_CULL_MARGIN"), *cl = getenv("LINDBERGH_VT3_CULLLOG");
+            int cmode = cull && *cull ? atoi(cull) : 2;
+            if (cm && *cm) g_vt3_cull_margin = (float)atof(cm);
+            g_vt3_cull_log = cl && *cl == '1';
+            if (im && cmode == 0 && guest_override("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", h_true))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - scene culling off\n");
+            else if (im && cmode == 2 && vt3_wrap("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", &g_vt3_is_visible, h_vt3_is_visible))
+                fprintf(stderr, "[sega] Virtua Tennis 3: immersive - scene culled to the eyes' view, %.0f deg margin\n", g_vt3_cull_margin);
             if (im && vt3_wrap("_ZN8_sRender22setProjectCameraMatrixEv", &g_vt3_proj_cam, h_vt3_proj_cam))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - the camera's own projection read\n");
         }

@@ -1705,9 +1705,64 @@ static void game_shot(void)
     free(px);
 }
 
+/* LINDBERGH_GPU_TIME=1: the GPU's time per frame, from one frame's end to the
+ * next (GL_EXT_disjoint_timer_query, a ring of queries read a few frames
+ * late, so nothing waits), logged every 300 frames as the mean, the 90th
+ * percentile and the worst. Unlike LINDBERGH_XR_PROF it runs whether or not
+ * the headset shows the session (unattended runs). When it does, the window
+ * also holds the eye copies and the compositor's share of our frame. */
+static void gpu_time(void)
+{
+    static int on = -1; static GLuint q[8]; static int slot, active, issued[8]; static unsigned qframe[8], slow_told;
+    static void (APIENTRY *gen)(GLsizei, GLuint *), (APIENTRY *begin)(GLenum, GLuint), (APIENTRY *end)(GLenum);
+    static void (APIENTRY *getu)(GLuint, GLenum, GLuint *), (APIENTRY *get64)(GLuint, GLenum, uint64_t *);
+    static float ms[300]; static int nms;
+    if (on < 0) {
+        const char *v = getenv("LINDBERGH_GPU_TIME"); on = v && *v == '1';
+#ifdef __ANDROID__
+        if (on) {
+            void *lib = dlopen("libGLESv3.so", RTLD_NOW | RTLD_LOCAL);
+            *(void **)&gen = lib ? dlsym(lib, "glGenQueries") : NULL; *(void **)&begin = lib ? dlsym(lib, "glBeginQuery") : NULL;
+            *(void **)&end = lib ? dlsym(lib, "glEndQuery") : NULL; *(void **)&getu = lib ? dlsym(lib, "glGetQueryObjectuiv") : NULL;
+            *(void **)&get64 = lib ? dlsym(lib, "glGetQueryObjectui64vEXT") : NULL;
+            if (!get64) { void *e = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL); void *(*gpa)(const char *) = e ? (void *(*)(const char *))dlsym(e, "eglGetProcAddress") : NULL;
+                          if (gpa) *(void **)&get64 = gpa("glGetQueryObjectui64vEXT"); }
+            if (!gen || !begin || !end || !getu || !get64) { fprintf(stderr, "[gputime] no timer queries\n"); on = 0; }
+            else { gen(8, q); fprintf(stderr, "[gputime] timing the GPU per frame\n"); }
+        }
+#else
+        on = 0;
+#endif
+    }
+    if (!on) return;
+    if (active) end(0x88BF /* GL_TIME_ELAPSED_EXT */);
+    for (int k = 0; k < 8; k++) {                   /* finished ones, oldest first */
+        int s = (slot + 1 + k) % 8;
+        if (!issued[s]) continue;
+        GLuint avail = 0; getu(q[s], 0x8867 /* GL_QUERY_RESULT_AVAILABLE */, &avail);
+        if (!avail) break;
+        uint64_t ns = 0; get64(q[s], 0x8866 /* GL_QUERY_RESULT */, &ns); issued[s] = 0;
+        GLint disjoint = 0; gl.GetIntegerv(0x8FBB /* GL_GPU_DISJOINT_EXT */, &disjoint);
+        if (!disjoint && nms < 300) ms[nms++] = (float)(ns / 1e6);
+        if (!disjoint && ns > 20000000u && slow_told < 400) { slow_told++;   /* which frames are slow */
+            fprintf(stderr, "[gputime] frame %u: GPU %.1f ms\n", qframe[s], ns / 1e6); }
+    }
+    slot = (slot + 1) % 8;
+    if (issued[slot]) { active = 0; return; }       /* the ring is full: skip a frame */
+    begin(0x88BF, q[slot]); issued[slot] = 1; active = 1; qframe[slot] = g_frame;
+    if (nms >= 300 || (g_frame % 300 == 0 && nms > 30)) {
+        float sum = 0, mx = 0, s2[300];
+        for (int i = 0; i < nms; i++) { sum += ms[i]; if (ms[i] > mx) mx = ms[i]; s2[i] = ms[i]; }
+        for (int i = 1; i < nms; i++) { float v = s2[i]; int j = i - 1; while (j >= 0 && s2[j] > v) { s2[j + 1] = s2[j]; j--; } s2[j + 1] = v; }
+        fprintf(stderr, "[gputime] frame %u: GPU %.1f ms per frame (90%% %.1f, worst %.1f) over %d frames\n", g_frame, sum / nms, s2[nms * 9 / 10], mx, nms);
+        nms = 0;
+    }
+}
+
 void xr_frame_end(void)
 {
     game_shot();
+    gpu_time();
     if (!in_frame) return;
     if (xr_prof < 0) { const char *v = getenv("LINDBERGH_XR_PROF"); xr_prof = v && *v == '1'; }
     if (xr_prof > 0) { xp_t0 = xp_ms(); xp_mark(&xp_game); }

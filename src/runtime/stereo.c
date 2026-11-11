@@ -2101,26 +2101,42 @@ static const char k_sky_vs[] =
     "}\n";
 static const char k_sky_fs[] =
     "#version 120\n"
+    "#ifdef GL_ES\n"
+    "precision highp float;\n"
+    "#endif\n"
+    "uniform sampler2D u_skynoise;\n"
     "varying vec3 v_dir;\n"
-    "float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\n"
+    /* Value noise from a 256x256 table of random values (u_skynoise, wrapping,
+     * linear filter): the cell's corner values come out of one filtered fetch
+     * at the smoothstepped position. Before, each cell hashed its four corners
+     * with fract(sin(dot(p, (127.1, 311.7))) * 43758.5) - by the fifth octave
+     * p is in the hundreds and the sine's argument ~1e5, beyond what the GPU's
+     * float keeps (mediump by default in a GLES fragment shader): whole cells
+     * hashed alike, a blocky patch high in the sky. The lattice now wraps at
+     * 256 before the lookup, so the coordinates stay small; and one fetch per
+     * octave instead of four hashes, and no clouds worked out below the
+     * horizon: the sky had cost ~1.8 ms of the GPU's ~4.6 a frame in a match
+     * (unattended, LINDBERGH_GPU_TIME) and late frames; now ~0.4 ms. */
     "float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);\n"
-    "  return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), f.x), mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), f.x), f.y); }\n"
+    "  return texture2D(u_skynoise, (mod(i, 256.0) + f + 0.5) / 256.0).r; }\n"
     "float fbm(vec2 p) { float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { s += a * vn(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5; } return s; }\n"
     "void main() {\n"
     "  vec3 d = normalize(v_dir);\n"
     "  float up = max(d.y, 0.0);\n"
     "  vec3 zen = vec3(0.24, 0.47, 0.82), hor = vec3(0.72, 0.84, 0.95);\n"
     "  vec3 col = mix(hor, zen, pow(up, 0.55));\n"
-    "  vec2 uv = d.xz / max(d.y, 0.06) * 0.9;\n"         /* a cloud plane high above */
-    "  float c = fbm(uv + vec2(3.0, 1.0));\n"
-    "  c = smoothstep(0.52, 0.80, c) * smoothstep(0.02, 0.18, d.y);\n"
-    "  col = mix(col, vec3(0.97, 0.98, 1.0), c * 0.85);\n"
+    "  if (d.y > 0.02) {\n"                              /* no clouds at or below the horizon */
+    "    vec2 uv = d.xz / max(d.y, 0.06) * 0.9;\n"       /* a cloud plane high above */
+    "    float c = fbm(uv + vec2(3.0, 1.0));\n"
+    "    c = smoothstep(0.52, 0.80, c) * smoothstep(0.02, 0.18, d.y);\n"
+    "    col = mix(col, vec3(0.97, 0.98, 1.0), c * 0.85);\n"
+    "  }\n"
     "  gl_FragColor = vec4(col, 1.0);\n"
     "}\n";
 
 static void sky_draw(void)
 {
-    static GLuint prog; static GLint u_inv = -1; static int failed;
+    static GLuint prog, noise; static GLint u_inv = -1, u_noise = -1; static int failed;
     extern volatile float g_game_world_P[16], g_game_view[12]; extern volatile int g_game_world_ok;
     if (failed || !g_game_world_ok) return;
     if (!prog) {
@@ -2134,6 +2150,26 @@ static void sky_draw(void)
         if (!ok) { char log[1024] = ""; glGetProgramInfoLog(prog, sizeof log, NULL, log);
                    fprintf(stderr, "[sky] the sky program did not link: %s\n", log); failed = 1; return; }
         u_inv = glGetUniformLocation(prog, "u_skyinv");
+        u_noise = glGetUniformLocation(prog, "u_skynoise");
+        {   /* the noise table: 256x256 random values (a fixed generator, the same sky every run) */
+            static unsigned char t[256 * 256 * 4];
+            uint32_t x = 0x9E3779B9u;
+            for (int i = 0; i < 256 * 256; i++) {
+                x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+                t[i * 4] = t[i * 4 + 1] = t[i * 4 + 2] = (unsigned char)(x >> 24); t[i * 4 + 3] = 255;
+            }
+            GLint was = 0, unit = 0;
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &unit); glActiveTexture(GL_TEXTURE0);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &was);
+            glGenTextures(1, &noise);
+            glBindTexture(GL_TEXTURE_2D, noise);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, t);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)was); glActiveTexture((GLenum)unit);
+        }
         fprintf(stderr, "[sky] drawing a sky behind the stadium (LINDBERGH_VT3_SKY=0: none)\n");
     }
     /* world -> each eye's clip: the eye's projection (head, dolly) x the game camera's view */
@@ -2162,12 +2198,21 @@ static void sky_draw(void)
     glDisable(GL_VERTEX_PROGRAM_ARB); glDisable(GL_FRAGMENT_PROGRAM_ARB);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    GLint unit = 0, was = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &unit); glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &was);
+    GLboolean t2d = glIsEnabled(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, noise);
+    glEnable(GL_TEXTURE_2D);        /* gl4es hands a program only the textures of enabled targets */
     glUseProgram(prog);
     glUniformMatrix4fv(u_inv, 2, GL_FALSE, inv);
+    glUniform1i(u_noise, 0);
     glBegin(GL_TRIANGLE_STRIP);
     glVertex2f(-1, -1); glVertex2f(1, -1); glVertex2f(-1, 1); glVertex2f(1, 1);
     glEnd();
     glUseProgram((GLuint)pr);
+    if (!t2d) glDisable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)was); glActiveTexture((GLenum)unit);
     glBindBuffer(GL_ARRAY_BUFFER, (GLuint)ab);
     glDepthMask((GLboolean)dm); glColorMask(cm[0], cm[1], cm[2], cm[3]);
     if (dt) glEnable(GL_DEPTH_TEST); if (bl) glEnable(GL_BLEND); if (cf) glEnable(GL_CULL_FACE);
@@ -2510,6 +2555,57 @@ int stereo_vt3_hud_anchor(const float *wP, const float *wV, const float *G, cons
         sx += hx; sy += hy;
     }
     hud[0] = 0.5f * sx; hud[1] = 0.5f * sy;
+    return 1;
+}
+
+/* Virtua Tennis 3's scene culling in world mode (hle_sega.c h_vt3_is_visible):
+ * is a bounding sphere (world x, y, z, radius) inside what either eye can
+ * see? Each eye's frustum is its own (eye_projection of the game's world
+ * camera: head pose, lens, dolly, step back) times the game camera's view,
+ * with each side's edge pushed out by `margin` degrees so a turn of the head
+ * between the game's frame and the one shown cannot bring an object in from
+ * nothing. Only the four side planes are tested (they meet at the eye, so
+ * nothing behind it passes; the eyes' far plane is 4x the game's). The
+ * planes (left, right, down, up per eye; inward, normalised: a x + b y +
+ * c z + d <= -r is out) are built once per game frame by the caller. 0 when
+ * the world camera is not known yet (the caller keeps everything). `fwd`
+ * gets the game camera's forward in the world, for the caller to tell the
+ * world camera from the others. */
+int stereo_vt3_cull_planes(float planes[2][4][4], float fwd[3], float margin)
+{
+    extern volatile float g_game_world_P[16], g_game_view[12]; extern volatile int g_game_world_ok;
+    if (!g_game_world_ok) return 0;
+    float P[16], V[16];
+    for (int i = 0; i < 16; i++) P[i] = g_game_world_P[i];
+    if (!is_perspective(P)) return 0;
+    memset(V, 0, sizeof V);
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) V[c * 4 + r] = g_game_view[r * 4 + c];
+    V[15] = 1;
+    for (int k = 0; k < 3; k++) fwd[k] = -V[k * 4 + 2];       /* -(row 2): the camera looks down -z */
+    for (int e = 0; e < 2; e++) {
+        float E[16], M[16];
+        eye_projection(P, LG_STEREO_WORLD, e, E);
+        mat_mul(M, E, V);
+        /* each side's edge in clip space: x <= kr w, -x <= kl w (and y), where
+         * k moves the edge out by `margin` degrees from the eye's tangent */
+        float k[4];
+        for (int s = 0; s < 4; s++) {
+            float tl = g_tan[e][s & 2 ? 2 : 0], tr = g_tan[e][s & 2 ? 3 : 1], t = g_tan[e][s];
+            if (!(tl > 0.1f && tr > 0.1f && t > 0.1f)) { tl = tr = t = 1.2f; }
+            float a = atanf(t) + margin * 0.0174533f;
+            float t2 = a < 1.5f ? tanf(a) : tanf(1.5f);
+            k[s] = 1.0f + 2.0f * (t2 - t) / (tl + tr);
+        }
+        /* sides: left (+x), right (-x), down (+y), up (-y) */
+        for (int s = 0; s < 4; s++) {
+            int row = s < 2 ? 0 : 1; float sg = (s & 1) ? -1.0f : 1.0f;
+            float pl[4];
+            for (int c = 0; c < 4; c++) pl[c] = k[s] * M[c * 4 + 3] + sg * M[c * 4 + row];
+            float l = sqrtf(pl[0] * pl[0] + pl[1] * pl[1] + pl[2] * pl[2]);
+            if (!(l > 1e-9f)) return 0;
+            for (int c = 0; c < 4; c++) planes[e][s][c] = pl[c] / l;
+        }
+    }
     return 1;
 }
 
