@@ -33,6 +33,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <dlfcn.h>
+#if defined(__APPLE__)
+#include <execinfo.h>
+#endif
 
 #define RING_SIZE   (16u << 20)        /* bytes of guest memory: two busy frames */
 #define ARGS        16u                /* dwords of the guest stack copied per call */
@@ -75,8 +79,69 @@ static _Alignas(128) _Atomic int g_game_sleeps;
 static int (*g_take_context)(void);   /* the worker's first act */
 static int (*g_release_context)(void);
 static _Atomic int g_context_ready;
+/* The ring has one writer, the thread that started the queue (the game's
+ * main thread): a GL call or job from any other thread would race it for
+ * g_head_mine and leave records over each other. Such calls are counted and
+ * named (foreign_call); the worker checks every record it takes and stops on
+ * one that cannot be (bad record), and the watchdog asks where the worker
+ * is (glq_hang_report). */
+static pthread_t g_producer;
+static _Atomic unsigned g_foreign;
+/* the worker's last records taken: ring position, kind, id, size */
+#define HIST 16
+static struct { uint64_t at; uint32_t kind, id, size; } g_hist[HIST];
+static unsigned g_hist_n;
 
 int glq_active(void) { return g_on; }
+
+static void foreign_call(HleId id, void *job)
+{
+    unsigned n = atomic_fetch_add(&g_foreign, 1);
+    if (n < 20) {
+        Dl_info di = {0};
+        const char *jn = job && dladdr(job, &di) && di.dli_sname ? di.dli_sname : "?";
+        fprintf(stderr, "[glq] WARNING: %s%s from thread %#lx, not the queue's writer %#lx%s (%u so far)\n",
+                id ? hle_name(id) : "job ", id ? "" : jn, (unsigned long)pthread_self(), (unsigned long)g_producer,
+                pthread_equal(pthread_self(), g_thread) ? " (the GL worker itself)" : "", n + 1);
+#if defined(__APPLE__)
+        if (n < 3) { void *bt[16]; int k = backtrace(bt, 16); backtrace_symbols_fd(bt, k, 2); }
+#endif
+    }
+}
+
+/* the worker's thread, for the hang watchdog (crash_report.c) */
+int glq_worker(pthread_t *out)
+{
+    if (!g_on) return 0;
+    *out = g_thread;
+    return 1;
+}
+static void hist_print(void)
+{
+    for (unsigned i = g_hist_n > HIST ? g_hist_n - HIST : 0; i < g_hist_n; i++) {
+        unsigned k = i % HIST;
+        fprintf(stderr, "[glq]   record at %llu: kind %u size %u %s\n", (unsigned long long)g_hist[k].at, g_hist[k].kind, g_hist[k].size,
+                g_hist[k].kind == R_ASYNC || g_hist[k].kind == R_SYNC ? hle_name((HleId)g_hist[k].id) : "");
+    }
+}
+/* From the watchdog thread: the queue as it stands (racy reads, a report only) */
+void glq_hang_report(void)
+{
+    if (!g_on) return;
+    uint64_t head = atomic_load(&g_head), tail = atomic_load(&g_tail);
+    fprintf(stderr, "[glq] hang: head %llu (written %llu), tail %llu (%s), done seq %u of %u, worker %s, game %s, %u calls from other threads\n",
+            (unsigned long long)head, (unsigned long long)g_head_mine, (unsigned long long)tail,
+            tail == head ? "empty" : tail > head ? "PAST THE HEAD" : "records waiting",
+            atomic_load(&g_done_seq), g_seq, atomic_load(&g_worker_sleeps) ? "asleep" : "awake",
+            atomic_load(&g_game_sleeps) ? "asleep" : "awake", atomic_load(&g_foreign));
+    if (tail != head) {
+        const uint32_t *w = (const uint32_t *)(g_ring + (uint32_t)(tail % RING_SIZE));
+        fprintf(stderr, "[glq] record at the tail (the one the worker is in): size %u kind %u id %u (%s) seq %u\n",
+                w[0], w[1], w[2], w[1] == R_ASYNC || w[1] == R_SYNC ? hle_name((HleId)w[2]) : "-", w[3]);
+    }
+    fprintf(stderr, "[glq] the worker's last records:\n");
+    hist_print();
+}
 
 /* ---- what may go into the queue ---- */
 
@@ -564,12 +629,18 @@ static void *worker(void *arg)
     if (!ready) return NULL;
     CPU cpu;
     memset(&cpu, 0, sizeof cpu);
+    uint64_t head_seen = 0;
     for (;;) {
         uint64_t t = atomic_load_explicit(&g_tail, memory_order_relaxed);
         if (atomic_load_explicit(&g_head, memory_order_acquire) == t) {
             for (int i = 0; i < 2000 && atomic_load_explicit(&g_head, memory_order_acquire) == t; i++)
                 __asm__ volatile("" ::: "memory");
             if (atomic_load_explicit(&g_head, memory_order_acquire) == t) {
+                /* The game may be asleep waiting for room in the ring
+                 * (ring_take), and only a job or a waited-for call woke it:
+                 * a full ring of plain calls (big uploads) left both asleep.
+                 * Going idle, wake it - it looks again and sleeps if need be. */
+                wake_game();
                 pthread_mutex_lock(&g_mu);
                 atomic_store(&g_worker_sleeps, 1);
                 atomic_thread_fence(memory_order_seq_cst);
@@ -582,6 +653,20 @@ static void *worker(void *arg)
         }
         Rec *r = (Rec *)(g_ring + (uint32_t)(t % RING_SIZE));
         uint32_t size = r->size;
+        /* a record that cannot be one: the ring was written over (two writers,
+         * or a stray write into it). Going on would run old records again -
+         * their jobs' arguments long freed - so stop here, with the evidence. */
+        if (t + size > head_seen) head_seen = atomic_load_explicit(&g_head, memory_order_acquire);
+        if (__builtin_expect(size < 16 || (size & 15) || r->kind < R_ASYNC || r->kind > R_STOP ||
+                             (uint32_t)(t % RING_SIZE) + size > RING_SIZE || t + size > head_seen, 0)) {
+            fprintf(stderr, "\n[glq] FATAL: bad record at %llu (ring offset %u): size %u kind %u id %u seq %u; head %llu, "
+                    "%u calls from other threads\n", (unsigned long long)t, (uint32_t)(t % RING_SIZE), size, r->kind, r->id, r->seq,
+                    (unsigned long long)head_seen, atomic_load(&g_foreign));
+            fprintf(stderr, "[glq] the worker's last records:\n");
+            hist_print();
+            abort();
+        }
+        { unsigned k = g_hist_n++ % HIST; g_hist[k].at = t; g_hist[k].kind = r->kind; g_hist[k].id = r->id; g_hist[k].size = size; }
         switch (r->kind) {
         case R_STOP:
             if (g_release_context) g_release_context();
@@ -978,8 +1063,55 @@ static int mirror_call(CPU *c, HleId id)
     return 0;
 }
 
+static uint32_t put_job(void (*job)(void *), void *arg)
+{
+    Rec *r = ring_take(HDR);
+    r->kind = R_JOB; r->u.job = job; r->arg = arg; r->seq = ++g_seq;
+    ring_put_wake();
+    return r->seq;
+}
+/* Jobs from other threads. Virtua Tennis 3 runs camera::gameRoutine on one
+ * of its worker threads, and world mode's camera feed (hle_sega.c) queued its
+ * camera from there - a second writer racing the game thread for the ring's
+ * head: records written over each other, the worker taking a wrong size and
+ * running old records again (their freed arguments: heap corruption, a crash
+ * in calloc; or spinning through them: the match-start hang). Such a job is
+ * kept here and queued by the writer at its next GL call or job, in the
+ * order the jobs came; it cannot be waited for (0). */
+#define FOREIGN_MAX 256
+static pthread_mutex_t g_fmu = PTHREAD_MUTEX_INITIALIZER;
+static struct { void (*job)(void *); void *arg; } g_fjob[FOREIGN_MAX];
+static unsigned g_nfjob;
+static _Alignas(128) _Atomic int g_fpending;
+static void foreign_flush(void)
+{
+    pthread_mutex_lock(&g_fmu);
+    for (unsigned i = 0; i < g_nfjob; i++) put_job(g_fjob[i].job, g_fjob[i].arg);
+    g_nfjob = 0;
+    atomic_store_explicit(&g_fpending, 0, memory_order_relaxed);
+    pthread_mutex_unlock(&g_fmu);
+}
+#define FOREIGN_FLUSH() do { if (__builtin_expect(atomic_load_explicit(&g_fpending, memory_order_acquire), 0)) foreign_flush(); } while (0)
+static uint32_t foreign_job(void (*job)(void *), void *arg)
+{
+    static _Atomic int told;
+    pthread_mutex_lock(&g_fmu);
+    int ok = g_nfjob < FOREIGN_MAX;
+    if (ok) { g_fjob[g_nfjob].job = job; g_fjob[g_nfjob].arg = arg; g_nfjob++; atomic_store_explicit(&g_fpending, 1, memory_order_release); }
+    pthread_mutex_unlock(&g_fmu);
+    if (!atomic_exchange(&told, 1) || !ok) {
+        Dl_info di = {0};
+        fprintf(stderr, "[glq] job %s from thread %#lx (not the game thread): %s\n",
+                dladdr((void *)job, &di) && di.dli_sname ? di.dli_sname : "?", (unsigned long)pthread_self(),
+                ok ? "handed to the game thread's next call" : "DROPPED, too many waiting");
+    }
+    return 0;
+}
+
 static void glq_hook(CPU *c, HleId id, HleHandler fn)
 {
+    if (__builtin_expect(!pthread_equal(pthread_self(), g_producer), 0)) foreign_call(id, NULL);
+    else FOREIGN_FLUSH();
     const Cls *k = cls(id);
     uint32_t a0 = A32(0);
     if (__builtin_expect(k->sh, 0) && shadow_state(c, id)) return;
@@ -1159,10 +1291,13 @@ static void glq_hook(CPU *c, HleId id, HleHandler fn)
  * glq_wait. */
 uint32_t glq_job(void (*job)(void *), void *arg)
 {
-    Rec *r = ring_take(HDR);
-    r->kind = R_JOB; r->u.job = job; r->arg = arg; r->seq = ++g_seq;
-    ring_put_wake();
-    return r->seq;
+    if (__builtin_expect(!pthread_equal(pthread_self(), g_producer), 0)) {
+        /* a job queued from a job on the worker would wait on itself: run it */
+        if (pthread_equal(pthread_self(), g_thread)) { job(arg); return 0; }
+        return foreign_job(job, arg);
+    }
+    FOREIGN_FLUSH();
+    return put_job(job, arg);
 }
 
 void glq_wait(uint32_t seq)
@@ -1228,6 +1363,7 @@ int glq_start(int (*release)(void), int (*take)(void))
         if (n[0] == 'g' && n[1] == 'l' && strncmp(n, "glut", 4)) g_gl_ids[i] = 1;
     }
     g_prev = g_gl_hook;
+    g_producer = pthread_self();
     shadow_ids();
     g_take_context = take;
     g_release_context = release;
