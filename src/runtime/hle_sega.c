@@ -1283,6 +1283,33 @@ static void h_vt3_set_mode(CPU *c)
         if (ss) guest_call(c, ss, a, 1);
     }
 }
+/* Point cutaways: after each decided point usrAcWinloseLoop (mode 8) shows the
+ * winner close up for 120 frames (camera::winlose; 1 in 10 split screen).
+ * Its exec() ends early once playerManager::check_skip_button_winner() says
+ * a player pressed a shot button and more than playerManager::getCnt_skip_max()
+ * frames (+0x78, 15 since the constructor) have passed - then it takes the
+ * same exit as at frame 120 (next point, change of ends, game over...). With
+ * g_cutaways 0 the call from the win/lose loop (returns to 0x0808E6CB) is
+ * answered yes, so the close-up lasts ~16 frames; the other loops that ask
+ * (start, game set and match, replay) are untouched. g_cutaways comes from
+ * the mode settings (world_mode.c); LINDBERGH_VT3_CUTAWAYS=0|1 for a run. */
+int g_cutaways = 1, g_cutaway_hook;
+static void (*g_vt3_skip_winner)(CPU *);
+static void h_vt3_skip_winner(CPU *c)
+{
+    uint32_t from = rd32(c->esp - 4u);                      /* the caller's return address (popped, still there) */
+    if (!g_cutaways && from == 0x0808E6CBu) {
+        extern unsigned g_frame; static unsigned told = ~0u;
+        if (g_vt3_flowlog && g_frame - told > 30) {
+            uint32_t mgr = rd32(0x085061A4u), pm = mgr ? rd32(mgr + 0x68) : 0;
+            fprintf(stderr, "[flow] frame %u: point cutaway skipped (Point cutaways off, after %d frames)\n",
+                    g_frame, pm ? (int)rd32(pm + 0x78) + 1 : -1);
+        }
+        told = g_frame;
+        RET(1); return;
+    }
+    push32(c, 0xDEADBEEFu); g_vt3_skip_winner(c);
+}
 /* Virtua Tennis 3's HUD items placed at a 3D point in world mode
  * (LINDBERGH_VT3_IMMERSIVE=1). hud::getScreenPosFrom3DPos(const _sVector3d&)
  * projects a point through the game camera to the HUD's units (+-480 x
@@ -1448,6 +1475,12 @@ static void vt3_jumps(void)
             if (im && *im == '1' && vt3_wrap("_ZN8_sRender22setProjectCameraMatrixEv", &g_vt3_proj_cam, h_vt3_proj_cam))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - the camera's own projection read\n");
         }
+        {   const char *cu = getenv("LINDBERGH_VT3_CUTAWAYS");
+            if (cu && *cu) g_cutaways = *cu != '0';
+            if (vt3_wrap("_ZN13playerManager24check_skip_button_winnerEv", &g_vt3_skip_winner, h_vt3_skip_winner)) {
+                g_cutaway_hook = 1;
+                fprintf(stderr, "[sega] Virtua Tennis 3: point cutaways %s\n", g_cutaways ? "on" : "off (skipped)");
+            } }
         const char *w = getenv("LINDBERGH_VT3_WIN");
         if (w && *w == '1' && vt3_wrap("_ZN5match9calcPointEv", &g_vt3_calc_point, h_vt3_calc_point))
             fprintf(stderr, "[sega] Virtua Tennis 3: 1P wins every point\n");
