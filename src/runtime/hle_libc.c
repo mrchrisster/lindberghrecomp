@@ -645,7 +645,66 @@ static void h_fclose(CPU *c)
     guest_file_release(A32(0));
     RET(r);
 }
-static void h_fread (CPU *c) { RET(fread(APTR(0), A32(1), A32(2), AFILE(3))); }
+/* ---- read timing ----
+ * Every read() / fread() the game makes is timed: one that takes over
+ * LINDBERGH_IO_SLOW_MS (default 50) is logged, "[io] slow read: ...", the
+ * first 20 and then every 100th - a streamed sound (the music) starves
+ * when its file reads stall (the Quest's /sdcard is a FUSE file system).
+ * Test switches: LINDBERGH_IO_DELAY=<ms>[,<every>] sleeps that long before
+ * every <every>th read of 4 KB or more (default each), to play a slow disk;
+ * LINDBERGH_IO_LOG=1 logs the first 300 reads of 4 KB or more (size, ms). */
+#ifndef _WIN32
+static double io_now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
+}
+static int io_slow_ms = -1, io_delay_ms, io_delay_every = 1, io_log;
+static unsigned io_slow_n, io_big_n;
+static double io_begin(size_t bytes)
+{
+    if (io_slow_ms < 0) {
+        const char *v = getenv("LINDBERGH_IO_SLOW_MS");
+        io_slow_ms = v && *v ? atoi(v) : 50;
+        if ((v = getenv("LINDBERGH_IO_DELAY")) && *v) {
+            io_delay_ms = atoi(v);
+            const char *e = strchr(v, ',');
+            if (e && atoi(e + 1) > 0) io_delay_every = atoi(e + 1);
+            fprintf(stderr, "[io] test: %d ms before every %d. read of 4 KB or more\n", io_delay_ms, io_delay_every);
+        }
+        v = getenv("LINDBERGH_IO_LOG"); io_log = v && *v == '1';
+    }
+    if (bytes >= 4096) {
+        unsigned n = __atomic_add_fetch(&io_big_n, 1, __ATOMIC_RELAXED);
+        if (io_delay_ms > 0 && n % (unsigned)io_delay_every == 0) usleep((useconds_t)io_delay_ms * 1000);
+    }
+    return io_now_ms();
+}
+static void io_end(double t0, size_t bytes, const char *what)
+{
+    double ms = io_now_ms() - t0;
+    if (io_log && bytes >= 4096 && io_big_n <= 300)
+        fprintf(stderr, "[io] %s %zu bytes, %.2f ms\n", what, bytes, ms);
+    if (io_slow_ms > 0 && ms > io_slow_ms) {
+        unsigned n = __atomic_add_fetch(&io_slow_n, 1, __ATOMIC_RELAXED);
+        if (n <= 20 || n % 100 == 0)
+            fprintf(stderr, "[io] slow read: %.0f ms for %zu bytes (%s; %u so far)\n", ms, bytes, what, n);
+    }
+}
+#else
+static double io_begin(size_t bytes) { (void)bytes; return 0; }
+static void io_end(double t0, size_t bytes, const char *what) { (void)t0; (void)bytes; (void)what; }
+#endif
+
+static void h_fread (CPU *c)
+{
+    size_t want = (size_t)A32(1) * A32(2);
+    double t0 = io_begin(want);
+    size_t r = fread(APTR(0), A32(1), A32(2), AFILE(3));
+    io_end(t0, want, "fread");
+    RET(r);
+}
 static void h_fwrite(CPU *c) { RET(fwrite(APTR(0), A32(1), A32(2), AFILE(3))); }
 static void h_fseek (CPU *c) { RET(fseek(AFILE(0), AI32(1), AI32(2))); }
 static void h_ftell (CPU *c) { RET(ftell(AFILE(0))); }
@@ -1267,7 +1326,10 @@ static void h_close(CPU *c)
 static void h_read(CPU *c)
 {
     if (rideboard_is(AI32(0))) { RET(rideboard_read(APTR(1), A32(2))); return; }
-    RET(_read(AI32(0), APTR(1), A32(2)));
+    double t0 = io_begin(A32(2));
+    long r = (long)_read(AI32(0), APTR(1), A32(2));
+    io_end(t0, A32(2), "read");
+    RET(r);
 }
 static void h_write(CPU *c)
 {
