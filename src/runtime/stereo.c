@@ -330,28 +330,12 @@ float stereo_eye_x(int view)
     return -ss_lens(p) * ss_eye_e(view);
 }
 
-static void effective_projection(const float *p, int hud, float *out)
+/* effective_projection's world part for a given eye: the head's pose, the
+ * eyes' lens, and in immersive mode the dolly and step back. Writes no
+ * state, so it can be asked from the game's thread too (stereo_vt3_hud_anchor). */
+static void eye_projection(const float *p, int hud, int which, float *out)
 {
-    /* the stereoscopic screen: a flat frame's every perspective draw is its
-     * world (its HUD is 2D), whatever class the flat picture gave it */
-    if (ss_draw(p, hud)) { ss_converge(p, out); return; }
-    if (!g_on || hud == LG_STEREO_PASS || hud == LG_STEREO_FILL) {
-        lg_stereo_eye_projection(p,!g_on?LG_STEREO_PASS:hud,NULL,out);
-        return;
-    }
-    if (g_wide) {
-        memcpy(out, p, 64);
-        if (g_flat) return;                     /* the arcade's picture, shown 4:3 */
-        int persp = is_perspective(p);
-        if (persp && !hud) memcpy(g_last_persp, p, 64);
-        if (persp || (hud && !g_wide_span))     /* the world wider; the 2D in the middle */
-            for (int col = 0; col < 4; col++) out[col * 4] *= g_wide_k;
-        if (hud && !persp && g_wide_s != 0)     /* or out at its edge */
-            for (int col = 0; col < 4; col++) out[col * 4] += g_wide_s * out[col * 4 + 3];
-        return;
-    }
-    if (is_perspective(p) && !hud) memcpy(g_last_persp,p,64);
-    const LgStereoProjection eye={g_view[g_eye],hud?hud_view(g_eye):g_view[g_eye],g_tan[g_eye],g_screen_lens,g_screen_dist};
+    const LgStereoProjection eye = {g_view[which],hud?hud_view(which):g_view[which],g_tan[which],g_screen_lens,g_screen_dist};
     /* LINDBERGH_VT3_IMMERSIVE: the eyes' depth range far wider than the game
      * camera's. Virtua Tennis 3's broadcast camera keeps its near and far
      * planes tight round the court (about 800 to 1050); around the head that
@@ -366,11 +350,11 @@ static void effective_projection(const float *p, int hud, float *out)
         if (same == 1) { memcpy(out, p, 64); return; }
         if (same == 2) {        /* the eye's lens, no head pose */
             float I[16]; mat_identity(I);
-            const LgStereoProjection e2 = { I, I, g_tan[g_eye], g_screen_lens, g_screen_dist };
+            const LgStereoProjection e2 = { I, I, g_tan[which], g_screen_lens, g_screen_dist };
             lg_stereo_eye_projection(p, hud, &e2, out); return;
         }
         if (same == 3) {        /* the game's lens, moved with the head */
-            const float *V = g_view[g_eye];
+            const float *V = g_view[which];
             for (int c = 0; c < 4; c++) for (int r = 0; r < 4; r++)
                 out[c * 4 + r] = p[r] * V[c * 4] + p[4 + r] * V[c * 4 + 1] + p[8 + r] * V[c * 4 + 2] + p[12 + r] * V[c * 4 + 3];
             return;
@@ -421,6 +405,30 @@ static void effective_projection(const float *p, int hud, float *out)
         }
     }
     lg_stereo_eye_projection(p,hud,&eye,out);
+}
+
+static void effective_projection(const float *p, int hud, float *out)
+{
+    /* the stereoscopic screen: a flat frame's every perspective draw is its
+     * world (its HUD is 2D), whatever class the flat picture gave it */
+    if (ss_draw(p, hud)) { ss_converge(p, out); return; }
+    if (!g_on || hud == LG_STEREO_PASS || hud == LG_STEREO_FILL) {
+        lg_stereo_eye_projection(p,!g_on?LG_STEREO_PASS:hud,NULL,out);
+        return;
+    }
+    if (g_wide) {
+        memcpy(out, p, 64);
+        if (g_flat) return;                     /* the arcade's picture, shown 4:3 */
+        int persp = is_perspective(p);
+        if (persp && !hud) memcpy(g_last_persp, p, 64);
+        if (persp || (hud && !g_wide_span))     /* the world wider; the 2D in the middle */
+            for (int col = 0; col < 4; col++) out[col * 4] *= g_wide_k;
+        if (hud && !persp && g_wide_s != 0)     /* or out at its edge */
+            for (int col = 0; col < 4; col++) out[col * 4] += g_wide_s * out[col * 4 + 3];
+        return;
+    }
+    if (is_perspective(p) && !hud) memcpy(g_last_persp,p,64);
+    eye_projection(p, hud, g_eye, out);
 }
 
 static int mat_invert(const float *m, float *out);
@@ -2447,6 +2455,66 @@ static void vert_dump(uint32_t lo, uint32_t hi, GLsizei count)
     free(buf);
     if (n) fprintf(stderr, " world min %.2f %.2f %.2f max %.2f %.2f %.2f mean %.2f %.2f %.2f", mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], rw[0] / n, rw[1] / n, rw[2] / n);
     fprintf(stderr, "\n");
+}
+
+/* Virtua Tennis 3's HUD items placed at a 3D point (the serve meter, the
+ * 1P/2P markers): hud::getScreenPosFrom3DPos projects the point through the
+ * game camera to its screen, in the HUD's units, and the item is drawn there
+ * through the pixel camera, on its screen plane ~989 ahead. In world mode
+ * the eyes see that plane from the dollied, stepped-back, head-tracked
+ * viewpoint, where it no longer lines up with the court: the item landed
+ * well away from the player, further out the further the player was.
+ * Here, for each eye: where the eye sees the world point (eye_projection of
+ * the game camera, wP 4x4 and wV 3x4, the game's row-major layout), and the
+ * HUD position (hx, hy) whose point on the pixel camera's plane - G (3x4,
+ * the HUD's matrix into the pixel camera's world) then the pixel camera's
+ * view - the same eye sees in the same place: two linear equations. The
+ * eyes' answers averaged. 0 (left as the game had it) unless the world is
+ * drawn around the head this frame. */
+int stereo_vt3_hud_anchor(const float *wP, const float *wV, const float *G, const float pt[3], float hud[2], float *eyes)
+{
+    static int deep = -1;
+    if (deep < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"); deep = v && *v == '1'; }
+    extern volatile float g_game_pixel_P[16], g_game_pixel_view[12]; extern volatile int g_game_pixel_ok;
+    if (!deep || !g_on || g_flat || g_wide || !g_game_pixel_ok) return 0;
+    float PW[16], PX[16], VX[12];
+    for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) PW[c * 4 + r] = wP[r * 4 + c];
+    for (int i = 0; i < 16; i++) PX[i] = g_game_pixel_P[i];
+    for (int i = 0; i < 12; i++) VX[i] = g_game_pixel_view[i];
+    if (!is_perspective(PW) || !is_perspective(PX)) return 0;
+    float xc[4] = { 0, 0, 0, 1 };                       /* the point in the game camera's space */
+    for (int r = 0; r < 3; r++) xc[r] = wV[r * 4] * pt[0] + wV[r * 4 + 1] * pt[1] + wV[r * 4 + 2] * pt[2] + wV[r * 4 + 3];
+    /* the HUD plane in the pixel camera's space: q0 + hx qa + hy qb */
+    float q[3][4];
+    for (int k = 0; k < 3; k++) {
+        float g[4] = { 0, 0, 0, k == 0 ? 1.0f : 0.0f };  /* G times (0,0,0,1), (1,0,0,0), (0,1,0,0) */
+        for (int r = 0; r < 3; r++) g[r] = k == 0 ? G[r * 4 + 3] : G[r * 4 + (k - 1)];
+        for (int r = 0; r < 3; r++) q[k][r] = VX[r * 4] * g[0] + VX[r * 4 + 1] * g[1] + VX[r * 4 + 2] * g[2] + VX[r * 4 + 3] * g[3];
+        q[k][3] = g[3];
+    }
+    float sx = 0, sy = 0;
+    for (int e = 0; e < 2; e++) {
+        float E[16], cl[4];
+        eye_projection(PW, LG_STEREO_WORLD, e, E);
+        for (int r = 0; r < 4; r++) cl[r] = E[r] * xc[0] + E[4 + r] * xc[1] + E[8 + r] * xc[2] + E[12 + r] * xc[3];
+        if (!(cl[3] > 1e-6f)) return 0;                  /* behind the eye */
+        float u = cl[0] / cl[3], v = cl[1] / cl[3];
+        eye_projection(PX, LG_STEREO_WORLD, e, E);
+        float C[3][4];
+        for (int k = 0; k < 3; k++) for (int r = 0; r < 4; r++)
+            C[k][r] = E[r] * q[k][0] + E[4 + r] * q[k][1] + E[8 + r] * q[k][2] + E[12 + r] * q[k][3];
+        /* (C0 + hx Ca + hy Cb).x = u (...).w, and the same for y with v */
+        float a11 = C[1][0] - u * C[1][3], a12 = C[2][0] - u * C[2][3], b1 = -(C[0][0] - u * C[0][3]);
+        float a21 = C[1][1] - v * C[1][3], a22 = C[2][1] - v * C[2][3], b2 = -(C[0][1] - v * C[0][3]);
+        float det = a11 * a22 - a12 * a21;
+        if (!(fabsf(det) > 1e-12f)) return 0;
+        float hx = (b1 * a22 - a12 * b2) / det, hy = (a11 * b2 - b1 * a21) / det;
+        if (!isfinite(hx) || !isfinite(hy)) return 0;
+        if (eyes) { eyes[2 * e] = hx; eyes[2 * e + 1] = hy; }
+        sx += hx; sy += hy;
+    }
+    hud[0] = 0.5f * sx; hud[1] = 0.5f * sy;
+    return 1;
 }
 
 /* the draw being made goes into the world (not a 2D screen, the HUD or a pass) */

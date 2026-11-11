@@ -1038,7 +1038,7 @@ static int vt3_wrap(const char *sym, void (**orig)(CPU *), HleHandler h)
     X(initNormal, "_ZN6camera10initNormalEv") X(initAb, "_ZN6camera6initAbEv") X(initContinue_cam, "_ZN6camera16initContinue_camEi") \
     X(initReplay, "_ZN6camera10initReplayEv") X(initHowtoplay, "_ZN6camera13initHowtoplayEv")
 #define CAM_DEF(n, sym) static void (*g_cam_##n)(CPU *); \
-    static void h_cam_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[camstate] frame %u: %s(%#x)\n", g_frame, #n, rd32(c->esp + 8)); \
+    static void h_cam_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[camstate] frame %u: %s(this %#x, %#x)\n", g_frame, #n, rd32(c->esp), rd32(c->esp + 4)); \
                                     push32(c, 0xDEADBEEFu); g_cam_##n(c); }
 CAM_STATES(CAM_DEF)
 static void vt3_camlog_install(void)
@@ -1100,7 +1100,15 @@ static void h_vt3_game_routine(CPU *c)
 {
     extern unsigned g_frame;
     static long a = -2, b; static uint32_t prev[0x400 / 4]; static uint32_t pself; static int n;
-    uint32_t self = rd32(c->esp + 4);
+    uint32_t self = A32(0);   /* argument 0 (was read at esp+4: the caller's saved ebx, the same camera by luck - checked) */
+    {   /* LINDBERGH_VT3_LOG: which stack slot holds the camera (checking an off-by-one: argument 0 is at esp) */
+        static int shown;
+        if (g_vt3_log && shown < 3 && g_frame % 600 == 0) {
+            shown++;
+            fprintf(stderr, "[vt3] frame %u: gameRoutine esp+0 %#x (+8 -> %#x), esp+4 %#x (+8 -> %#x)\n", g_frame,
+                    A32(0), A32(0) >= 0x08000000u ? rd32(A32(0) + 8) : 0, A32(1), A32(1) >= 0x08000000u ? rd32(A32(1) + 8) : 0);
+        }
+    }
     if (a == -2) { const char *v = getenv("LINDBERGH_VT3_CAMFIELDS"); a = v && *v ? atol(v) : -1; b = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : a; }
     if (g_rout_on) vt3_rout_mark(16);
     push32(c, 0xDEADBEEFu); g_vt3_game_routine(c);
@@ -1216,7 +1224,7 @@ static void (*g_vt3_attach_cam)(CPU *);
 static void h_vt3_attach_cam(CPU *c)
 {
     extern unsigned g_frame;
-    fprintf(stderr, "[attach] frame %u: scene manager %#x camera %#x (from %#x)\n", g_frame, rd32(c->esp + 4), rd32(c->esp + 8), rd32(c->esp));
+    fprintf(stderr, "[attach] frame %u: scene manager %#x camera %#x (from %#x)\n", g_frame, rd32(c->esp), rd32(c->esp + 4), rd32(c->esp - 4));   /* the return address is popped, still below esp */
     push32(c, 0xDEADBEEFu); g_vt3_attach_cam(c);
 }
 int g_replays = 1, g_replay_hook;
@@ -1275,6 +1283,115 @@ static void h_vt3_set_mode(CPU *c)
         if (ss) guest_call(c, ss, a, 1);
     }
 }
+/* Virtua Tennis 3's HUD items placed at a 3D point in world mode
+ * (LINDBERGH_VT3_IMMERSIVE=1). hud::getScreenPosFrom3DPos(const _sVector3d&)
+ * projects a point through the game camera to the HUD's units (+-480 x
+ * +-360, x 4/3 when tennis::bWide_); the serve meter (hud::drawServePower,
+ * once per serve) and the 1P/2P markers (hud::setPlayerIcon, every frame)
+ * are drawn there through the pixel camera. Around the head that plane is
+ * seen from elsewhere, so the position is worked out again for the eyes
+ * (stereo_vt3_hud_anchor) - LINDBERGH_VT3_HUD_ANCHOR=0 turns it off.
+ * The function returns its _sVector4d through a hidden pointer (argument 0,
+ * popped by it: retl $4); this = argument 1, the point = argument 2.
+ * LINDBERGH_VT3_SERVELOG=1 logs each answer and, every frame a serve meter
+ * shows, the server's state and power. */
+#define VT3_HUD_G 0x0850e280u               /* the HUD's matrix into the pixel camera's world (3x4) */
+static void (*g_vt3_screen_pos)(CPU *), (*g_vt3_serve_power)(CPU *);
+static int g_vt3_hud_anchor, g_vt3_servelog;
+static struct { uint32_t pt; float o[2], n[2]; int ok; unsigned frame; } g_vt3_anchor_last[4];
+static float vt3_f(uint32_t a) { uint32_t u = rd32(a); float f; memcpy(&f, &u, 4); return f; }
+static void vt3_wf(uint32_t a, float f) { uint32_t u; memcpy(&u, &f, 4); wr32(a, u); }
+static void h_vt3_screen_pos(CPU *c)
+{
+    extern unsigned g_frame;
+    extern int stereo_vt3_hud_anchor(const float *wP, const float *wV, const float *G, const float pt[3], float hud[2], float *eyes);
+    uint32_t ret = A32(0), ptp = A32(2), from = rd32(c->esp - 4u);
+    push32(c, 0xDEADBEEFu); g_vt3_screen_pos(c);   /* pops its hidden pointer as the game's own call would */
+    float o[2] = { vt3_f(ret), vt3_f(ret + 4) }, n[2] = { o[0], o[1] }, eyes[4] = { 0 };
+    float pt[3] = { vt3_f(ptp), vt3_f(ptp + 4), vt3_f(ptp + 8) };
+    int ok = 0;
+    /* the game camera it projected through: [g_pTennis + 0x38], virtual +8:
+     * projection 4x4 at +0x34, view 3x4 at +4 (as the function reads them) */
+    uint32_t t = rd32(VT3_G_PTENNIS), e = t ? rd32(t + 0x38) : 0, cam = 0;
+    if (e) { uint32_t a[1] = { e }; cam = guest_call(c, rd32(rd32(e) + 8), a, 1); }
+    float wP[16], wV[12], G[12];
+    if (cam) {
+        for (int i = 0; i < 16; i++) wP[i] = vt3_f(cam + 0x34 + 4u * i);
+        for (int i = 0; i < 12; i++) wV[i] = vt3_f(cam + 4 + 4u * i);
+        for (int i = 0; i < 12; i++) G[i] = vt3_f(VT3_HUD_G + 4u * i);
+        if (g_vt3_hud_anchor && stereo_vt3_hud_anchor(wP, wV, G, pt, n, eyes)) {
+            ok = 1;
+            vt3_wf(ret, n[0]); vt3_wf(ret + 4, n[1]);
+        }
+    }
+    c->eax = ret;
+    if (g_vt3_servelog) {
+        static unsigned told;
+        int slot = -1;                              /* the players' own points, for the per-frame log */
+        uint32_t np = t ? rd32(t) : 0, pl = t ? rd32(t + 4) : 0;
+        for (uint32_t i = 0; i < np && i < 4; i++) if (rd32(pl + 4 * i) + 0x18 == ptp) slot = (int)i;
+        if (slot >= 0) { g_vt3_anchor_last[slot].pt = ptp; g_vt3_anchor_last[slot].ok = ok; g_vt3_anchor_last[slot].frame = g_frame;
+                         memcpy(g_vt3_anchor_last[slot].o, o, sizeof o); memcpy(g_vt3_anchor_last[slot].n, n, sizeof n); }
+        if (from == 0x0810f4f6u || g_frame - told >= 30) {   /* the serve meter's every call, the rest twice a second */
+            told = g_frame;
+            fprintf(stderr, "[servelog] frame %u: screen pos from %#x, player %d point %.1f %.1f %.1f: game %.1f %.1f -> %s %.1f %.1f (eyes %.1f %.1f | %.1f %.1f) G %.4f %.4f %.4f %.1f %.1f %.1f\n",
+                    g_frame, from, slot, pt[0], pt[1], pt[2], o[0], o[1], ok ? "anchored" : "kept", n[0], n[1],
+                    eyes[0], eyes[1], eyes[2], eyes[3], cam ? G[0] : 0, cam ? G[5] : 0, cam ? G[10] : 0, cam ? G[3] : 0, cam ? G[7] : 0, cam ? G[11] : 0);
+        }
+    }
+}
+/* LINDBERGH_VT3_SERVELOG=1: every frame a serve meter shows (a player's
+ * +0x265 serve state not 0 or 4, +0x258 not 0xf, as hud::drawServePower
+ * tests): the state, the power (+0x244, 1 = full), whether the meter's place
+ * is latched (hud +0x60) and the last screen position worked out for it */
+/* LINDBERGH_VT3_SERVESHOT=<n>[,<from frame>]: for the first n serves (from that frame), a full-size game shot
+ * (host_xr.c) as the power passes 0.3, 0.5, 0.7, 0.85, 0.9, 0.95, then every
+ * 3rd frame for 45 frames from full (state 2) and the swing (state 3) */
+volatile int g_game_shot_req;
+static void vt3_serve_shot(uint8_t st, float pw)
+{
+    extern unsigned g_frame;
+    static int n = -2, serves, prev_st, step, after; static long from;
+    if (n == -2) { const char *v = getenv("LINDBERGH_VT3_SERVESHOT"); n = v && *v ? atoi(v) : 0;
+                   from = v && strchr(v, ',') ? atol(strchr(v, ',') + 1) : 0; }
+    if (n <= 0 || (long)g_frame < from) return;
+    static const float at[] = { 0.3f, 0.5f, 0.7f, 0.85f, 0.9f, 0.95f, 2.0f };
+    if (st == 1 && prev_st != 1) { serves++; step = 0; after = 0; }
+    prev_st = st;
+    if (serves < 1 || serves > n) return;
+    if (st == 1) { if (pw >= at[step]) { while (pw >= at[step]) step++; g_game_shot_req = 2; } return; }
+    if (after < 45) { if (after % 3 == 0) g_game_shot_req = 2; after++; }
+}
+static void h_vt3_serve_power(CPU *c)
+{
+    extern unsigned g_frame;
+    uint32_t self = A32(0), latched = rd8(self + 0x60);
+    push32(c, 0xDEADBEEFu); g_vt3_serve_power(c);
+    {   uint32_t t = rd32(VT3_G_PTENNIS), p0 = t && rd32(t) ? rd32(rd32(t + 4)) : 0;   /* 1P's serves */
+        if (p0) vt3_serve_shot(rd8(p0 + 0x265), vt3_f(p0 + 0x244)); }
+    uint32_t t = rd32(VT3_G_PTENNIS), np = t ? rd32(t) : 0, pl = t ? rd32(t + 4) : 0;
+    for (uint32_t i = 0; i < np && i < 4; i++) {
+        uint32_t p = rd32(pl + 4 * i);
+        uint8_t st = rd8(p + 0x265);
+        if (!p || st == 0 || st == 4 || rd32(p + 0x258) == 0xf) continue;
+        fprintf(stderr, "[servelog] frame %u: meter player %u state %u power %.3f latched %u max-flag %u, pos game %.1f %.1f -> %s %.1f %.1f (worked out at frame %u), player at %.1f %.1f %.1f\n",
+                g_frame, i, st, vt3_f(p + 0x244), latched, rd8(0x08500840u),
+                g_vt3_anchor_last[i].o[0], g_vt3_anchor_last[i].o[1], g_vt3_anchor_last[i].ok ? "anchored" : "kept",
+                g_vt3_anchor_last[i].n[0], g_vt3_anchor_last[i].n[1], g_vt3_anchor_last[i].frame,
+                vt3_f(p + 0x18), vt3_f(p + 0x1c), vt3_f(p + 0x20));
+    }
+}
+static void vt3_hud_anchor_install(void)
+{
+    const char *im = getenv("LINDBERGH_VT3_IMMERSIVE"), *v = getenv("LINDBERGH_VT3_HUD_ANCHOR"), *l = getenv("LINDBERGH_VT3_SERVELOG");
+    g_vt3_servelog = l && *l == '1';
+    g_vt3_hud_anchor = im && *im == '1' && !(v && *v == '0');
+    if ((g_vt3_hud_anchor || g_vt3_servelog) &&
+        vt3_wrap("_ZN3hud21getScreenPosFrom3DPosERKN8_sSerial10_sVector3dE", &g_vt3_screen_pos, h_vt3_screen_pos))
+        fprintf(stderr, "[sega] Virtua Tennis 3: HUD items at 3D points %s\n", g_vt3_hud_anchor ? "placed for the eyes (world mode)" : "as the game has them (logged)");
+    if (g_vt3_servelog && vt3_wrap("_ZN3hud14drawServePowerEv", &g_vt3_serve_power, h_vt3_serve_power))
+        fprintf(stderr, "[sega] Virtua Tennis 3: serve meter logged (LINDBERGH_VT3_SERVELOG)\n");
+}
 static void vt3_jumps(void)
 {
     const char *r = getenv("LINDBERGH_VT3_ROUND"), *p = getenv("LINDBERGH_VT3_POINTS"), *l = getenv("LINDBERGH_VT3_LOG");
@@ -1312,6 +1429,7 @@ static void vt3_jumps(void)
              * node is visible, as House of the Dead 4's culling is widened. */
             vt3_camlog_install();
             vt3_flowlog_install();
+            vt3_hud_anchor_install();
             vt3_routines_install();
             { const char *u = getenv("LINDBERGH_VT3_ATTACHLOG");
               if (u && *u == '1' && vt3_wrap("_ZN14_sSceneManager12attachCameraEP8_sCamera", &g_vt3_attach_cam, h_vt3_attach_cam))

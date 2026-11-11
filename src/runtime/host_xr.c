@@ -1537,8 +1537,14 @@ static void game_shot(void)
         every = c1 ? atol(c1 + 1) : 0;
         full = c1 && strchr(c1 + 1, ',') && atoi(strchr(c1 + 1, ',') + 1) == 1;
     }
-    if (first < 0 || (long)g_frame < first) return;
-    if (every > 0 ? ((long)g_frame - first) % every : (long)g_frame != first) return;
+    extern volatile int g_game_shot_req;        /* a shot asked for by a game hook (LINDBERGH_VT3_SERVESHOT) */
+    int asked = g_game_shot_req;
+    if (asked) g_game_shot_req = 0;
+    else {
+        if (first < 0 || (long)g_frame < first) return;
+        if (every > 0 ? ((long)g_frame - first) % every : (long)g_frame != first) return;
+    }
+    int whole = full || asked > 1;
     unsigned arr = stereo_eye_array();
     int w = 0, h = 0;
     stereo_eye_dims(&w, &h);
@@ -1560,7 +1566,7 @@ static void game_shot(void)
         snprintf(name, sizeof name, eye ? "game_%05u_r.ppm" : "game_%05u.ppm", g_frame);
         FILE *f = err ? NULL : fopen(name, "wb");
         if (f) {
-            int sp = full ? 1 : 4, qw = w / sp, qh = h / sp;
+            int sp = whole ? 1 : 4, qw = w / sp, qh = h / sp;
             fprintf(f, "P6\n%d %d\n255\n", qw, qh);
             for (int y = qh - 1; y >= 0; y--)
                 for (int x = 0; x < qw; x++) fwrite(px + ((size_t)(y * sp) * w + x * sp) * 4, 1, 3, f);

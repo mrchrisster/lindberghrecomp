@@ -3046,6 +3046,49 @@ void arb_camera_count(void)
     g_cam_last_ok = 0;
 }
 
+/* The draw's matrix (its columns c) is a camera's projection - depth terms
+ * A, B - times any affine model: its third row plus A times its fourth is
+ * (0 0 0 kB). Tried both ways round: a program that builds its position by
+ * rows through a temporary ("DP4 R1.x, ...; MOV result.position, R1") is
+ * not seen as one (position_by_rows). */
+static int cam_exact(const float (*c)[4], float A, float B)
+{
+    int same = 0;
+    for (int way = 0; way < 2 && !same; way++) {
+#define CE(i, j) (way ? c[j][i] : c[i][j])
+        float k = (CE(3, 2) + A * CE(3, 3)) / B;
+        same = fabsf(k) > 1e-6f;
+        for (int j = 0; j < 3 && same; j++)
+            same = fabsf(CE(j, 2) + A * CE(j, 3)) < 1e-3f * (fabsf(CE(j, 2)) + fabsf(A * CE(j, 3)) + 1e-3f * fabsf(k * B));
+#undef CE
+    }
+    return same;
+}
+
+/* LINDBERGH_VT3_SERVELOG=1: a pixel-camera draw whose matrix, taken apart
+ * as a rigid camera, gives a lens off the pixel camera's (an unevenly scaled
+ * sprite - the serve meter's fill): what the lens read made of it, and
+ * whether its shape test would have taken it (the old path) */
+static void serve_lens_log(const float *P, float lx, float ly, const float *good)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_SERVELOG"); on = v && *v == '1'; }
+    if (!on || P[0] <= 0) return;
+    float rx = lx / P[0], ry = ly / P[5];
+    if (fabsf(rx - 1) < 0.002f && fabsf(ry - 1) < 0.002f) return;
+    if (rx < 0.01f || ry < 0.01f) return;           /* scaled to nothing: not drawn */
+    extern unsigned g_frame;
+    static unsigned last = ~0u; static int n; static float seen[16][2];
+    if (g_frame != last) { last = g_frame; n = 0; }
+    for (int i = 0; i < n; i++) if (seen[i][0] == rx && seen[i][1] == ry) return;   /* once a frame each */
+    if (n >= 16) return;
+    seen[n][0] = rx; seen[n][1] = ry; n++;
+    float want = good && good[0] > 0 ? good[5] / good[0] : P[5] / P[0], got = ly / lx;
+    fprintf(stderr, "[servelog] frame %u: pixel-camera draw prog %u lens read %.4f %.4f (x%.3f y%.3f of the camera's): "
+            "the shape test would have %s\n", g_frame, g_bound[0], lx, ly, rx, ry,
+            fabsf(got - want) > 0.15f * want ? "rejected it (last good lens)" : "TAKEN it (drawn rescaled)");
+}
+
 int arb_env_projection(float P[16])
 {
     g_cam_last_ok = 0;
@@ -3109,22 +3152,29 @@ int arb_env_projection(float P[16])
          * apart wrong - its depth off, the eyes and the dolly put it
          * metres from the player's feet. Not of a render target's light
          * camera (handing those the match lens blacked the picture). */
+        /* The pixel camera's own projection, tested the same way. Its HUD
+         * sprites are often scaled unevenly (the serve meter fills by a
+         * scale along y), and the lens read below takes such a matrix
+         * apart into a lens scaled with it: far off it fell back to the
+         * last good lens and looked right, but within 15% of the screen's
+         * shape it was taken - the bar drawn at full height, shifted - and
+         * kept as the good lens for the draws after (the serve meter's
+         * last second before full). Its depth terms (n 800, f 1050: A -7.4,
+         * B -6720) are far from the match camera's. The last good lens is
+         * left alone. LINDBERGH_VT3_PIXCAM=0 turns it off. */
+        static int pixcam = -1;
+        if (pixcam < 0) { const char *v = getenv("LINDBERGH_VT3_PIXCAM"); pixcam = !(v && *v == '0'); }
+        extern volatile float g_game_pixel_P[16]; extern volatile int g_game_pixel_ok;
+        if (g_game_pixel_ok && use_cam != 3 && cam_exact(c, g_game_pixel_P[10], g_game_pixel_P[14])) {
+            float Q[16];
+            for (int i = 0; i < 16; i++) Q[i] = g_game_pixel_P[i];
+            serve_lens_log(Q, lx / s, ly / s, have_good ? good : NULL);
+            if (pixcam) { memcpy(P, Q, sizeof Q); goto axes; }
+        }
         if (g_game_world_ok && use_cam != 3) {
-            /* tried both ways round: a program that builds its position by
-             * rows through a temporary ("DP4 R1.x, ...; MOV result.position,
-             * R1") is not seen as one (position_by_rows) - the players'
-             * shadows, taken apart transposed, sat metres from their feet
-             * and slid with the head */
-            float A = g_game_world_P[10], B = g_game_world_P[14];
-            int same = 0;
-            for (int way = 0; way < 2 && !same; way++) {
-#define CE(i, j) (way ? c[j][i] : c[i][j])
-                float k = (CE(3, 2) + A * CE(3, 3)) / B;
-                same = fabsf(k) > 1e-6f;
-                for (int j = 0; j < 3 && same; j++)
-                    same = fabsf(CE(j, 2) + A * CE(j, 3)) < 1e-3f * (fabsf(CE(j, 2)) + fabsf(A * CE(j, 3)) + 1e-3f * fabsf(k * B));
-#undef CE
-            }
+            /* (both ways round: the players' shadows, taken apart
+             * transposed, sat metres from their feet and slid with the head) */
+            int same = cam_exact(c, g_game_world_P[10], g_game_world_P[14]);
             {   /* LINDBERGH_MVP_DUMP=<frame>: each draw's matrix as read, and whether it is the match camera's */
                 static long dump = -2; extern unsigned g_frame;
                 if (dump == -2) { const char *v = getenv("LINDBERGH_MVP_DUMP"); dump = v && *v ? atol(v) : -1; }
@@ -3231,6 +3281,9 @@ static int g_noted_n, g_noted_next;
  * across, for arb_env_projection to tell a draw's from. */
 volatile float g_game_world_P[16], g_game_layer_x, g_game_up_eye[3], g_game_view[12];
 volatile int g_game_world_ok;
+/* the pixel camera whole: its projection (GL's layout) and view (the game's 3x4) */
+volatile float g_game_pixel_P[16], g_game_pixel_view[12];
+volatile int g_game_pixel_ok;
 volatile unsigned g_game_world_real_frame = ~0u;   /* the last frame the game itself set the world camera */
 int g_vt3_feeding;                                 /* arb_note_projection called with a camera built here */
 /* the bound vertex program's local i (0 if none) */
@@ -3277,8 +3330,14 @@ void arb_note_projection(const float *proj, const float *view)
         int level = fabsf(view[0] - 1) < 1e-4f && fabsf(view[5] - 1) < 1e-4f && fabsf(view[10] - 1) < 1e-4f &&
                     fabsf(view[3]) < 1e-3f && fabsf(view[7]) < 1e-3f;
         float w = level && proj[5] > 0 ? -2.0f * view[11] / proj[5] : 0;     /* the screen plane's height, if pixels */
-        if (level && w >= 239.0f && fabsf(w - roundf(w)) < 0.02f) g_game_layer_x = proj[0];
-        else {
+        if (level && w >= 239.0f && fabsf(w - roundf(w)) < 0.02f) {
+            g_game_layer_x = proj[0];
+            /* the whole pixel camera too: its draws are told by it exactly
+             * (arb_env_projection), and the HUD anchor needs it (stereo.c) */
+            for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) g_game_pixel_P[c * 4 + r] = proj[r * 4 + c];
+            for (int i = 0; i < 12; i++) g_game_pixel_view[i] = view[i];
+            g_game_pixel_ok = 1;
+        } else {
             float P[16] = { 0 };
             for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) P[c * 4 + r] = proj[r * 4 + c];
             for (int i = 0; i < 16; i++) g_game_world_P[i] = P[i];
