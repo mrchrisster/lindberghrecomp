@@ -2198,6 +2198,26 @@ static void sky_draw(void)
         if (!mat_invert(M, inv + 16 * v)) { g_eye = e; return; }
     }
     g_eye = e;
+    {   /* LINDBERGH_VT3_SKY_PITCH=<degrees> (test only): the sky turned down by
+         * that much about the game camera's right - each pixel shows the sky
+         * that far above where it is, so the zenith's clouds can be looked at
+         * in a game shot without anyone tilting the headset */
+        static float pitch = -1000;
+        if (pitch == -1000) { const char *v = getenv("LINDBERGH_VT3_SKY_PITCH"); pitch = v && *v ? (float)atof(v) * 0.0174533f : 0; }
+        if (pitch != 0) {
+            float r[3] = { g_game_view[0], g_game_view[1], g_game_view[2] }, c = cosf(pitch), sn = sinf(pitch), R[16];
+            float l = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+            if (l > 1e-6f) {
+                for (int k = 0; k < 3; k++) r[k] /= l;
+                mat_identity(R);        /* Rodrigues: rotation by pitch about r, column-major */
+                for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+                    float k_ij = (i == j ? 0 : (((i + 1) % 3 == j) ? -r[3 - i - j] : r[3 - i - j]));
+                    R[j * 4 + i] = (i == j ? c : 0) + sn * k_ij + (1 - c) * r[i] * r[j];
+                }
+                for (int v = 0; v < 2; v++) { float t[16]; mat_mul(t, R, inv + 16 * v); memcpy(inv + 16 * v, t, 64); }
+            }
+        }
+    }
     /* the game's state, put back after */
     GLint pr = 0, ab = 0, dm = 0; GLboolean cm[4];
     glGetIntegerv(GL_CURRENT_PROGRAM, &pr); glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &ab);
