@@ -1,9 +1,14 @@
 import os
+import sys
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+
+# The build's own panel size (xr_settings.h LG_XR_NATIVE_*, ec78b3b): the
+# default and the fallback for invalid sizes. This harness is built for the host.
+NATIVE="2160 2160" if sys.platform.startswith("linux") else "2064 2280"
 
 class XrSettingsTests(unittest.TestCase):
     @classmethod
@@ -34,7 +39,7 @@ int main(void) {
 
     def test_defaults_match_gl_quality(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(self.run_settings(d),"2064 2280 120 1.000 3.000 0 0 0")
+            self.assertEqual(self.run_settings(d),NATIVE+" 120 1.000 3.000 0 0 0")
 
     def test_parent_file_then_run_overrides(self):
         with tempfile.TemporaryDirectory() as d:
@@ -49,7 +54,7 @@ int main(void) {
 
     def test_invalid_sizes_restore_existing_defaults(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(self.run_settings(d,{"LINDBERGH_XR_SET":"width=-1,resolution=1,screen=0,scale=-2"}),"0 2280 120 1.000 3.000 0 0 0")
+            self.assertEqual(self.run_settings(d,{"LINDBERGH_XR_SET":"width=-1,resolution=1,screen=0,scale=-2"}),NATIVE+" 120 1.000 3.000 0 0 0")
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.stand_y":"1.5","immersive.dolly":"200",

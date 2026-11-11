@@ -46,8 +46,11 @@ int main(void) {
     assert((flags&XP_RATE_CHANGED)&&cfg.refresh==72);
     xp_choose(&p,&cfg,&hand,XP_RES,rates,3);
     assert(cfg.width==0&&cfg.resolution==1216);
-    for(int i=0;i<5;++i)xp_choose(&p,&cfg,&hand,XP_RES,rates,3);
-    assert(cfg.width==2064&&cfg.resolution==2280);
+    /* 1216, 1440, 1680, 1920 at the headset's proportions, then its panel (ec78b3b), then round again */
+    for(int i=0;i<4;++i)xp_choose(&p,&cfg,&hand,XP_RES,rates,3);
+    assert(cfg.width==LG_XR_NATIVE_WIDTH&&cfg.resolution==LG_XR_NATIVE_HEIGHT);
+    xp_choose(&p,&cfg,&hand,XP_RES,rates,3);
+    assert(cfg.width==0&&cfg.resolution==1216);
     xp_choose(&p,&cfg,&hand,XP_COIN,rates,3);assert(p.coin==1);
     xp_choose(&p,&cfg,&hand,XP_TEST,rates,3);assert(p.test_frames==12);
     xp_choose(&p,&cfg,&hand,XP_SERVICE,rates,3);assert(p.service_frames==12);
