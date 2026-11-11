@@ -819,6 +819,13 @@ int host_window_open(const char *title)
      * can stop the game/render owner from polling OpenXR during an Activity
      * pause. OpenXR session state remains responsible for XR frame delivery. */
     SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
+    /* Test only: an unworn headset pauses the Activity, and SDL then pauses
+     * the audio device (~2 s after start, so an unattended run's mixer, its
+     * health counters and LINDBERGH_AUDIO_DUMP stop). Worn, nothing pauses. */
+    if (getenv("LINDBERGH_AUDIO_KEEP_ON_PAUSE") && *getenv("LINDBERGH_AUDIO_KEEP_ON_PAUSE") == '1') {
+        SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO, "0");
+        fprintf(stderr, "[window] audio keeps playing while the Activity is paused (test)\n");
+    }
 #endif
 #if defined(LINDBERGH_OPENXR)
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
