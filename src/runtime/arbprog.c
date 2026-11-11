@@ -25,6 +25,7 @@
  * reason, once, and that program falls back to the driver's own path.
  */
 
+#include "world_mode.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
@@ -1112,14 +1113,14 @@ static int depth_passthrough(const char *body)
 static int vt3_ground_fix(void)
 {
     static int on = -1;
-    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *g = getenv("LINDBERGH_VT3_GROUND");
+    if (on < 0) { const char *v = world_mode_immersive() ? "1" : NULL, *g = getenv("LINDBERGH_VT3_GROUND");
                   on = v && *v == '1' && g && *g == '1'; }   /* opt-in (LINDBERGH_VT3_GROUND=1): the shadows' geometry proved right already */
     return on;
 }
 static int vt3_screen_fix(void)
 {
     static int on = -1;
-    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *g = getenv("LINDBERGH_VT3_SCREENFIX");
+    if (on < 0) { const char *v = world_mode_immersive() ? "1" : NULL, *g = getenv("LINDBERGH_VT3_SCREENFIX");
                   on = v && *v == '1' && !(g && *g == '0'); }
     return on;
 }
@@ -1160,7 +1161,7 @@ static int vt3_crowd_prog(GLuint fid)
     static int n = -1; static unsigned fps[16];
     if (n < 0) {
         n = 0;
-        const char *im = getenv("LINDBERGH_VT3_IMMERSIVE"), *v = getenv("LINDBERGH_VT3_CROWD_FP"), *c = getenv("LINDBERGH_VT3_CROWD_CUT");
+        const char *im = world_mode_immersive() ? "1" : NULL, *v = getenv("LINDBERGH_VT3_CROWD_FP"), *c = getenv("LINDBERGH_VT3_CROWD_CUT");
         if (!(im && *im == '1') || (c && *c == '0')) return 0;
         if (!v || !*v) v = "230";
         while (*v && n < 16) { fps[n++] = (unsigned)atol(v); v = strchr(v, ','); if (!v) break; v++; }
@@ -2010,14 +2011,14 @@ static void upload(Linked *l)
         /* the stands' programs (LINDBERGH_VT3_STAND_FP, default the seating 158, the
          * crowd 230 and the lower tier 229), stretched up by LINDBERGH_VT3_STAND_Y
          * (default 1.5) above LINDBERGH_VT3_STAND_FROM game units (default 10, ~1 m) */
-        static int n = -1; static unsigned fps[16]; static float k = 1.5f, y0 = 10.0f;
+        static int n = -1; static unsigned fps[16]; static float y0 = 10.0f;
         if (n < 0) {
-            const char *v = getenv("LINDBERGH_VT3_STAND_FP"), *kv = getenv("LINDBERGH_VT3_STAND_Y"), *yv = getenv("LINDBERGH_VT3_STAND_FROM");
+            const char *v = getenv("LINDBERGH_VT3_STAND_FP"), *yv = getenv("LINDBERGH_VT3_STAND_FROM");
             if (!v || !*v) v = "158,229,230";
             n = 0; while (*v && n < 16) { fps[n++] = (unsigned)atol(v); v = strchr(v, ','); if (!v) break; v++; }
-            if (kv && *kv) k = (float)atof(kv);
             if (yv && *yv) y0 = (float)atof(yv);
         }
+        const float k = world_mode_stand_y();   /* live: the headset panel's Stand height (LINDBERGH_VT3_STAND_Y wins) */
         extern volatile float g_game_world_P[16], g_game_view[12]; extern volatile int g_game_world_ok;
         float st[4] = { k, y0, 0, 0 };
         int on = 0, cut = l->u_crowd >= 0;
@@ -2429,7 +2430,7 @@ void arb_before_draw(void)
          * LINDBERGH_VT3_DECAL_OFFSET=<units> (default 32, ~2 cm at the far boards; 0 = off). The game sets
          * its polygon offset before every draw, so this never outlives the draw. */
         static float du = -1;
-        if (du < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *o = getenv("LINDBERGH_VT3_DECAL_OFFSET");
+        if (du < 0) { const char *v = world_mode_immersive() ? "1" : NULL, *o = getenv("LINDBERGH_VT3_DECAL_OFFSET");
                       du = !(v && *v == '1') ? 0 : o && *o ? (float)atof(o) : 32.0f; }
         extern int stereo_draw_not_screen(void);
         if (du > 0 && stereo_draw_not_screen() && (glIsEnabled(GL_BLEND) || glIsEnabled(GL_ALPHA_TEST)) && glIsEnabled(GL_DEPTH_TEST) && !glIsEnabled(GL_POLYGON_OFFSET_FILL)) {
@@ -3204,7 +3205,7 @@ int arb_env_projection(float P[16])
      * zoom, and the match was shown on the flat screen. The frame's camera,
      * as for a skewed matrix. */
     static int keep_shape = -1;             /* LINDBERGH_VT3_IMMERSIVE=1 for now: the match as a world around the head */
-    if (keep_shape < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"); keep_shape = v && *v == '1'; }
+    if (keep_shape < 0) keep_shape = world_mode_immersive();
     if (keep_shape && game_profile()->vr.camera_in_locals && have_good && good[0] > 0) {
         float want = good[5] / good[0], got = (ly / s) / (lx / s);
         if (fabsf(got - want) > 0.15f * want) { memcpy(P, good, sizeof good); return 1; }

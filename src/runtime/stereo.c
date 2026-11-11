@@ -44,6 +44,7 @@
 #include <time.h>
 
 #include "gl_posix.h"
+#include "world_mode.h"
 #include "stereo.h"
 #include "stereo_projection.h"
 #ifdef LINDBERGH_GL4ES
@@ -343,7 +344,7 @@ static void eye_projection(const float *p, int hud, int which, float *out)
      * court clipped away. The game's own depth is still undone with its own
      * matrix (stereo_reproject's inverse); only the eyes' range changes. */
     static int deep = -1;
-    if (deep < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"); deep = v && *v == '1'; }
+    if (deep < 0) deep = world_mode_immersive();
     if (deep && !hud && is_perspective(p)) {
         static int same = -1;   /* LINDBERGH_VT3_SAMECAM=1 (testing): the eyes see through the game's camera exactly */
         if (same < 0) { const char *v = getenv("LINDBERGH_VT3_SAMECAM"); same = v && *v ? atoi(v) : 0; }
@@ -384,13 +385,12 @@ static void eye_projection(const float *p, int hud, int which, float *out)
              * LINDBERGH_VT3_DOLLY game units (a tenth of a metre; default
              * 200 of its ~345 from the court): out * T(0, 0, +d), the
              * draw's eye space shifted before the headset's matrices. */
-            static float dolly = -1, back = -1;
-            if (dolly < 0) { const char *v = getenv("LINDBERGH_VT3_DOLLY"); dolly = v && *v ? (float)atof(v) : 200.0f; }
+            const float dolly = world_mode_dolly();   /* live: the headset panel's Camera closer (env wins) */
             /* ...then stepped back level with the ground, out of the court,
              * as if walking backwards (LINDBERGH_VT3_BACK game units,
              * default 60): along the camera's forward with the world's up
              * (from the game's view, arb_note_projection) taken out. */
-            if (back < 0) { const char *v = getenv("LINDBERGH_VT3_BACK"); back = v && *v ? (float)atof(v) : 60.0f; }
+            const float back = world_mode_back();     /* live: the panel's Step back */
             extern volatile float g_game_up_eye[3]; extern volatile int g_game_world_ok;
             float t[3] = { 0, 0, dolly };
             float u[3] = { g_game_up_eye[0], g_game_up_eye[1], g_game_up_eye[2] };
@@ -682,8 +682,7 @@ static void scale_target(GLenum textarget, GLuint tex, GLenum attachment)
          * The shadow pass's viewports scale with the target (note_fb_scale), and
          * the lookups are normalised, the soft compare reading the size it has. */
         static float sk = -1;
-        if (sk < 0) { const char *v = getenv("LINDBERGH_SHADOW_SCALE"), *im = getenv("LINDBERGH_VT3_IMMERSIVE");
-                      sk = v && *v ? (float)atof(v) : im && *im == '1' ? 2.0f : 0; }
+        if (sk < 0) sk = world_mode_shadow_scale();   /* env, else the mode's Shadow quality (1024: 0, as made) */
         if (sk > 0) { kx = ky = sk; if (w * kx > 4096) kx = ky = 4096.0f / w; }
     }
     int nw = (int)lroundf(w * kx), nh = (int)lroundf(h * ky);
@@ -2085,10 +2084,7 @@ extern int gl4es_mv_shaders;
 #endif
 static int sky_on(void)
 {
-    static int on = -1;
-    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"), *k = getenv("LINDBERGH_VT3_SKY");
-                  on = v && *v == '1' && !(k && *k == '0'); }
-    return on;
+    return world_mode_immersive() && world_mode_sky();     /* live: the panel's Sky (env wins) */
 }
 static const char k_sky_vs[] =
     "#version 120\n"
@@ -2474,7 +2470,7 @@ static void vert_dump(uint32_t lo, uint32_t hi, GLsizei count)
 int stereo_vt3_hud_anchor(const float *wP, const float *wV, const float *G, const float pt[3], float hud[2], float *eyes)
 {
     static int deep = -1;
-    if (deep < 0) { const char *v = getenv("LINDBERGH_VT3_IMMERSIVE"); deep = v && *v == '1'; }
+    if (deep < 0) deep = world_mode_immersive();
     extern volatile float g_game_pixel_P[16], g_game_pixel_view[12]; extern volatile int g_game_pixel_ok;
     if (!deep || !g_on || g_flat || g_wide || !g_game_pixel_ok) return 0;
     float PW[16], PX[16], VX[12];

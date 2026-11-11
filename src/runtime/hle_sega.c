@@ -27,6 +27,7 @@
 #include "host_settings.h"
 #ifndef _WIN32
 #include "stereo.h"
+#include "world_mode.h"
 #endif
 #endif
 
@@ -1121,8 +1122,8 @@ static void h_vt3_game_routine(CPU *c)
          * camera for a few frames, it is built from those and the broadcast lens.
          * LINDBERGH_VT3_FEEDCAM=0 turns it off. */
         static int feed = -1;
-        if (feed < 0) { const char *v = getenv("LINDBERGH_VT3_FEEDCAM"), *im = getenv("LINDBERGH_VT3_IMMERSIVE");
-                        feed = im && *im == '1' && !(v && *v == '0'); }
+        if (feed < 0) { const char *v = getenv("LINDBERGH_VT3_FEEDCAM");
+                        feed = world_mode_immersive() && !(v && *v == '0'); }
         extern volatile unsigned g_game_world_real_frame; extern int g_vt3_feeding; extern unsigned g_frame;
         if (feed && self >= 0x08000000u && self < 0xC0000000u &&
             (g_game_world_real_frame == ~0u || g_frame - g_game_world_real_frame > 3)) {
@@ -1410,17 +1411,27 @@ static void h_vt3_serve_power(CPU *c)
 }
 static void vt3_hud_anchor_install(void)
 {
-    const char *im = getenv("LINDBERGH_VT3_IMMERSIVE"), *v = getenv("LINDBERGH_VT3_HUD_ANCHOR"), *l = getenv("LINDBERGH_VT3_SERVELOG");
+    const char *v = getenv("LINDBERGH_VT3_HUD_ANCHOR"), *l = getenv("LINDBERGH_VT3_SERVELOG");
     g_vt3_servelog = l && *l == '1';
-    g_vt3_hud_anchor = im && *im == '1' && !(v && *v == '0');
+    g_vt3_hud_anchor = world_mode_immersive() && !(v && *v == '0');
     if ((g_vt3_hud_anchor || g_vt3_servelog) &&
         vt3_wrap("_ZN3hud21getScreenPosFrom3DPosERKN8_sSerial10_sVector3dE", &g_vt3_screen_pos, h_vt3_screen_pos))
         fprintf(stderr, "[sega] Virtua Tennis 3: HUD items at 3D points %s\n", g_vt3_hud_anchor ? "placed for the eyes (world mode)" : "as the game has them (logged)");
     if (g_vt3_servelog && vt3_wrap("_ZN3hud14drawServePowerEv", &g_vt3_serve_power, h_vt3_serve_power))
         fprintf(stderr, "[sega] Virtua Tennis 3: serve meter logged (LINDBERGH_VT3_SERVELOG)\n");
 }
+/* the game can draw its match as a world (Virtua Tennis 3's camera symbols
+ * resolve): the headset panel's Mode row and Advanced pages (host_xr.c) */
+int g_world_capable;
 static void vt3_jumps(void)
 {
+    /* Classic or Immersive, and the values that go with the mode (env >
+     * vr.cfg > the mode's default), before any hook below is chosen by it */
+    g_world_capable = guest_symbol("_ZN8_sRender22setProjectCameraMatrixEv") && guest_symbol("_ZN6camera11gameRoutineEv");
+    world_mode_init(g_world_capable);
+    g_replays = world_mode_replays();
+    g_arcade_overlays = world_mode_overlays();
+    g_cutaways = world_mode_cutaways();
     const char *r = getenv("LINDBERGH_VT3_ROUND"), *p = getenv("LINDBERGH_VT3_POINTS"), *l = getenv("LINDBERGH_VT3_LOG");
     g_vt3_log = l && *l == '1';
     if (r && *r) g_vt3_round = atoi(r);
@@ -1429,8 +1440,6 @@ static void vt3_jumps(void)
         fprintf(stderr, "[sega] Virtua Tennis 3: %s%d\n", g_vt3_round >= 0 ? "the run starts at round " : "rounds logged ", g_vt3_round);
     if (g_vt3_log) vt3_wrap("_ZN5match13setNext_roundEv", &g_vt3_next_round, h_vt3_next_round);
     {
-        const char *ov = getenv("LINDBERGH_ARCADE_OVERLAYS");
-        if (ov && *ov == '0') g_arcade_overlays = 0;
         const char *only = getenv("LINDBERGH_VT3_OVERLAY_HOOK");   /* test: "credit" or "card" alone */
         int nh = 0;
         if (!only || !strcmp(only, "credit")) nh += vt3_wrap("_ZN6credit4drawEv", &g_vt3_credit_draw, h_vt3_credit_draw);
@@ -1462,22 +1471,20 @@ static void vt3_jumps(void)
               if (u && *u == '1' && vt3_wrap("_ZN14_sSceneManager12attachCameraEP8_sCamera", &g_vt3_attach_cam, h_vt3_attach_cam))
                   fprintf(stderr, "[sega] Virtua Tennis 3: camera attaches logged\n"); }
             { const char *u = getenv("LINDBERGH_VT3_CAMFIELDS");
-              if (((u && *u) || g_rout_on || (getenv("LINDBERGH_VT3_IMMERSIVE") && *getenv("LINDBERGH_VT3_IMMERSIVE") == '1')) && vt3_wrap("_ZN6camera11gameRoutineEv", &g_vt3_game_routine, h_vt3_game_routine))
+              if (((u && *u) || g_rout_on || world_mode_immersive()) && vt3_wrap("_ZN6camera11gameRoutineEv", &g_vt3_game_routine, h_vt3_game_routine))
                   fprintf(stderr, "[sega] Virtua Tennis 3: camera routine hooked (fields %s)\n", u ? u : "-"); }
-            { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA"), *imm = getenv("LINDBERGH_VT3_IMMERSIVE");
-              int skip_uva = u && *u ? *u == '1' : imm && *imm == '1';    /* default: on in world mode */
+            { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA");
+              int skip_uva = u && *u ? *u == '1' : world_mode_immersive();    /* default: on in world mode */
               if (skip_uva && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))
                   fprintf(stderr, "[sega] Virtua Tennis 3: intro fly-by camera skipped\n"); }
-            const char *im = getenv("LINDBERGH_VT3_IMMERSIVE");
+            const int im = world_mode_immersive();
             const char *cull = getenv("LINDBERGH_VT3_CULL");    /* =1: culling kept (testing) */
-            if (im && *im == '1' && !(cull && *cull == '1') && guest_override("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", h_true))
+            if (im && !(cull && *cull == '1') && guest_override("_ZN8_sCamera9isVisibleEPKN8_sSerial10_sVector4dE", h_true))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - scene culling off\n");
-            if (im && *im == '1' && vt3_wrap("_ZN8_sRender22setProjectCameraMatrixEv", &g_vt3_proj_cam, h_vt3_proj_cam))
+            if (im && vt3_wrap("_ZN8_sRender22setProjectCameraMatrixEv", &g_vt3_proj_cam, h_vt3_proj_cam))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - the camera's own projection read\n");
         }
-        {   const char *cu = getenv("LINDBERGH_VT3_CUTAWAYS");
-            if (cu && *cu) g_cutaways = *cu != '0';
-            if (vt3_wrap("_ZN13playerManager24check_skip_button_winnerEv", &g_vt3_skip_winner, h_vt3_skip_winner)) {
+        {   if (vt3_wrap("_ZN13playerManager24check_skip_button_winnerEv", &g_vt3_skip_winner, h_vt3_skip_winner)) {
                 g_cutaway_hook = 1;
                 fprintf(stderr, "[sega] Virtua Tennis 3: point cutaways %s\n", g_cutaways ? "on" : "off (skipped)");
             } }
@@ -1515,8 +1522,7 @@ void hle_register_sega(void)
         if (r && *r == '1' && guest_override("_ZN6replay14isReplay_pointEv", h_true))
             fprintf(stderr, "[sega] every point is replayed (LINDBERGH_FORCE_REPLAY)\n");
         /* the headset menu's Replays switch: off, no point earns one */
-        else if ((getenv("LINDBERGH_REPLAYS") && (g_replays = *getenv("LINDBERGH_REPLAYS") != '0'), 1) &&
-                 vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) {
+        else if (vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) {
             g_replay_hook = 1; fprintf(stderr, "[sega] Virtua Tennis 3: replays %s (headset menu)\n", g_replays ? "on" : "off");
             if (!vt3_wrap("_ZN14mtrLoopManager7setModeEl", &g_vt3_set_mode, h_vt3_set_mode))   /* the match's end with replays off */
                 fprintf(stderr, "[sega] Virtua Tennis 3: mtrLoopManager::setMode not wrapped - a match will not end with Replays off\n");

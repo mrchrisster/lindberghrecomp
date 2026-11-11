@@ -223,6 +223,9 @@ extern int g_replays, g_replay_hook;
 /* Point cutaways (Virtua Tennis 3's close-up of the winner after each point):
  * shown while 1; hle_sega.c sets g_cutaway_hook when it can skip them. */
 extern int g_cutaways, g_cutaway_hook;
+/* The game can draw its match as a world (Virtua Tennis 3; hle_sega.c): the
+ * headset panel shows the Mode row and the Advanced pages (world_mode.h). */
+extern int g_world_capable;
 #define DISPATCH_TO(c, va, fn) do { uint32_t _dv = (va); \
     if (!g_dispatch_always && (_dv < g_ov_lo || _dv > g_ov_hi) && \
         (_dv < stereo_state_lo || _dv > stereo_state_hi)) fn(c); else dispatch((c), _dv); } while (0)

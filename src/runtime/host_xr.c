@@ -80,6 +80,8 @@
 #include "stereo.h"
 #include "xr_overlay.h"
 #include "xr_menu.h"
+#include "xr_world_panel.h"
+#include "world_mode.h"
 
 /* a debug switch, looked up once */
 #define ENV_ON(name) ({ static int _on = -1; if (_on < 0) _on = getenv(name) != NULL; _on; })
@@ -144,17 +146,24 @@ static const char *const LASER_NAME[] = { "laser", "dot", "off" };
 
 static const char *const SIGHT_NAME[] = { "none", "reddot", "holo" };
 
+/* cfg holds the stored settings only (vr.cfg, and LINDBERGH_XR_SET for the
+ * run, which xr_settings_save leaves out): a run's env overrides
+ * (LINDBERGH_REPLAYS, LINDBERGH_ARCADE_OVERLAYS, the mode's values) live in
+ * world_mode.c, so a menu click never saves a test's choice into vr.cfg. */
 static LgXrSettings cfg = LG_XR_SETTINGS_DEFAULT;
 static void cfg_save(void) { xr_settings_save(&cfg); }
+/* the running mode's live values from the stored settings (env still wins) */
+static void cfg_apply_live(void)
+{
+    world_mode_update(&cfg);
+    g_arcade_overlays = world_mode_overlays();
+    g_replays = world_mode_replays();
+    g_cutaways = world_mode_cutaways();
+}
 static void cfg_load(void)
 {
     xr_settings_load(&cfg);
-    const char *ov = getenv("LINDBERGH_ARCADE_OVERLAYS");     /* a run's own choice wins (tests) */
-    if (ov && *ov) cfg.arcade_overlays = *ov != '0';
-    g_arcade_overlays = cfg.arcade_overlays;
-    const char *rp = getenv("LINDBERGH_REPLAYS");
-    if (rp && *rp) cfg.replays = *rp != '0';
-    g_replays = cfg.replays;
+    cfg_apply_live();
 }
 
 /* ---- the session ---- */
@@ -318,25 +327,50 @@ static int nrates;
 
 /* The rows this game's panel shows, as item numbers: a lever cabinet
  * (Virtua Tennis 3) has no gun, so no sight, laser, crosshair, gun model,
- * hand or dual wield; the arcade overlays only for a game that can hide them. */
-static int menu_ids[XP_COUNT], menu_n;
+ * hand or dual wield; the arcade overlays only for a game that can hide them.
+ * A game with a world mode (g_world_capable, Virtua Tennis 3) has pages
+ * (xr_world_panel.c): the main page with Mode / Restart now / Advanced
+ * settings, and an Advanced page per mode; their own rows are XP_COUNT + XW_x. */
+static XwState wpanel;
+static int menu_ids[XW_ROWS_MAX], menu_n;
+static void menu_world_state(void)
+{
+    wpanel.running = world_mode_immersive();
+    wpanel.pins = 0;
+    for (int k = 0; k < WM_COUNT; k++) if (world_mode_pinned(k)) wpanel.pins |= 1u << k;
+    wpanel.eff = *world_mode_values();
+}
 static void menu_rows(void)
 {
     const int lever = game_profile()->joystick;
+    int rows[XW_ROWS_MAX], n = 0;
+    if (g_world_capable) { menu_world_state(); n = xw_page_rows(&wpanel, &cfg, rows); }
+    else for (int i = 0; i < XP_COUNT; i++) rows[n++] = i;
     menu_n = 0;
-    for (int i = 0; i < XP_COUNT; i++) {
+    for (int r = 0; r < n; r++) {
+        const int i = rows[r];
         if (lever && (i == XP_SIGHT || i == XP_LASER || i == XP_CROSSHAIR || i == XP_GUN || i == XP_HAND || i == XP_DUAL)) continue;
-        if (i == XP_OVERLAYS && !g_arcade_overlay_hooks) continue;
-        if (i == XP_REPLAYS && !g_replay_hook) continue;
-        menu_ids[menu_n++] = i;
+        if ((i == XP_OVERLAYS || i == XW_ROW(XW_OVERLAYS)) && !g_arcade_overlay_hooks) continue;
+        if ((i == XP_REPLAYS || i == XW_ROW(XW_REPLAYS)) && !g_replay_hook) continue;
+        if (i == XW_ROW(XW_CUTAWAYS) && !g_cutaway_hook) continue;
+        if (menu_n < XM_ROWS) menu_ids[menu_n++] = i;
     }
+}
+/* a run's env variable pins Arcade overlays / Replays (games without pages):
+ * the row shows the run's value and ignores clicks */
+static int menu_pinned_xp(int i)
+{
+    return (i == XP_OVERLAYS && world_mode_pinned(WM_OVERLAYS)) || (i == XP_REPLAYS && world_mode_pinned(WM_REPLAYS));
 }
 static void menu_items(XmItem *it)
 {
-    XmItem all[XP_COUNT];
+    XmItem all[XP_COUNT], wall[XW_COUNT];
     xp_items(&menu,&cfg,gun_hand,stereo_hud_is_head_locked(),running_resolution,running_width,all);
     menu_rows();
-    for (int r = 0; r < menu_n; r++) it[r] = all[menu_ids[r]];
+    if (g_world_capable) xw_items(&wpanel, &cfg, wall);
+    if (menu_pinned_xp(XP_OVERLAYS)) snprintf(all[XP_OVERLAYS].value, 40, "%s (env.txt)", world_mode_overlays() ? "Shown" : "Hidden");
+    if (menu_pinned_xp(XP_REPLAYS)) snprintf(all[XP_REPLAYS].value, 40, "%s (env.txt)", world_mode_replays() ? "On" : "Off");
+    for (int r = 0; r < menu_n; r++) it[r] = menu_ids[r] < XP_COUNT ? all[menu_ids[r]] : wall[menu_ids[r] - XP_COUNT];
 }
 
 /* The arcade's reset: the game starts again from its boot, as a new process
@@ -383,14 +417,32 @@ static const char *app_title(void)
 static void menu_paint(void)
 {
     static unsigned char img[XM_W * XM_H * 4];
-    XmItem it[XP_COUNT];
+    XmItem it[XW_ROWS_MAX];
     char title[80];
     menu_items(it);
-    snprintf(title, sizeof title, "%s - settings", app_title());
+    const char *wt = g_world_capable ? xw_title(&wpanel) : NULL;
+    snprintf(title, sizeof title, "%s", wt ? wt : app_title());
+    if (!wt) snprintf(title, sizeof title, "%s - settings", app_title());
+    /* (the hint: 42 characters fit the panel's width) */
     xm_paint(img, title, it, menu_n, menu.hover,
-             "Point and pull the trigger. Menu button: close.");
+             g_world_capable ? xw_hint(&wpanel) : "Point and pull the trigger. Menu: close.");
     xo_panel_upload(img, XM_W, XM_H);
     menu.dirty = 0;
+    {   /* LINDBERGH_XR_MENU_DUMP=1 (tests): each painted panel as menu_p<page>_<frame>.ppm beside the game */
+        static int dump = -1, seq;
+        if (dump < 0) { const char *v = getenv("LINDBERGH_XR_MENU_DUMP"); dump = v && *v == '1'; }
+        if (dump && seq < 64) {
+            char name[64];
+            snprintf(name, sizeof name, "menu_p%d_%05u_%02d.ppm", wpanel.page, g_frame, seq++);
+            FILE *f = fopen(name, "wb");
+            if (f) {
+                fprintf(f, "P6\n%d %d\n255\n", XM_W, XM_H);
+                for (int i = 0; i < XM_W * XM_H; i++) fwrite(img + 4 * i, 1, 3, f);
+                fclose(f);
+                fprintf(stderr, "[xr] panel painted to %s (page %d, %d rows, hover %d)\n", name, wpanel.page, menu_n, menu.hover);
+            }
+        }
+    }
 }
 
 static void menu_place(void)
@@ -442,9 +494,29 @@ static void menu_choose(int row)
     menu_rows();
     if (row < 0 || row >= menu_n) return;
     const int item = menu_ids[row];
-    const unsigned effects=xp_choose(&menu,&cfg,&gun_hand,item,rates,nrates);
-    if(effects&XP_OVERLAYS_CHANGED){g_arcade_overlays=cfg.arcade_overlays;fprintf(stderr,"[xr] arcade overlays %s\n",cfg.arcade_overlays?"shown":"hidden");}
-    if(effects&XP_REPLAYS_CHANGED){g_replays=cfg.replays;fprintf(stderr,"[xr] replays %s\n",cfg.replays?"on":"off");}
+    unsigned effects;
+    menu.dirty = 1;
+    if (item >= XP_COUNT) {                     /* a world-mode page's own row */
+        menu.reset_armed = 0;
+        const int mode_before = cfg.world_mode;
+        effects = xw_choose(&wpanel, &cfg, item - XP_COUNT);
+        if (!effects) { fprintf(stderr, "[xr] panel row %d: no change (pinned by env.txt)\n", row); return; }
+        if (cfg.world_mode != mode_before)
+            fprintf(stderr, "[xr] mode %s saved (running %s)%s\n", cfg.world_mode ? "immersive" : "classic",
+                    wpanel.running ? "immersive" : "classic", cfg.world_mode != wpanel.running ? " - applies on restart" : "");
+        if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); }
+    } else {
+        if (menu_pinned_xp(item)) { fprintf(stderr, "[xr] panel row %d: no change (pinned by env.txt)\n", row); return; }
+        wpanel.restore_armed = 0;
+        effects=xp_choose(&menu,&cfg,&gun_hand,item,rates,nrates);
+    }
+    if (effects & (XP_OVERLAYS_CHANGED | XP_REPLAYS_CHANGED | XW_LIVE_CHANGED)) {
+        cfg_apply_live();
+        const WmValues *w = world_mode_values();
+        fprintf(stderr, "[xr] live (%s mode): replays %s, arcade overlays %s, point cutaways %s, stand %.2f, dolly %.0f, back %.0f, sky %s\n",
+                w->immersive ? "immersive" : "classic", w->replays ? "on" : "off", w->overlays ? "shown" : "hidden",
+                w->cutaways ? "on" : "off", w->stand_y, w->dolly, w->back, w->sky ? "on" : "off");
+    }
     if(effects&XP_CROSSHAIR_CHANGED)stereo_show_game_sight(cfg.crosshair && !game_profile()->joystick);
     if(effects&XP_SCREEN_CHANGED)stereo_set_screen_distance(cfg.screen*cfg.scale);
     if(effects&XP_HUD_CHANGED)stereo_set_hud_pitch((float)cfg.hud_pitch);
@@ -484,6 +556,56 @@ static void fake_pose(int pl, XrTime t, XrSpaceLocation *loc, int *trig)
 }
 
 static int fake_menu = -1;          /* LINDBERGH_XR_FAKE_MENU=1 with the stand-in gun: the panel open, no clicks */
+static int fake_placed;
+/* LINDBERGH_XR_MENU_PAGE=0|1|2 (tests, with LINDBERGH_XR_FAKE_MENU=1): the page it opens on */
+static void menu_page_start(void)
+{
+    const char *v = getenv("LINDBERGH_XR_MENU_PAGE");
+    wpanel.page = g_world_capable && v && *v >= '0' && *v <= '2' ? *v - '0' : XW_PAGE_MAIN;
+    v = getenv("LINDBERGH_XR_MENU_HOVER");      /* tests: a row shown highlighted */
+    if (v && *v) menu.hover = atoi(v);
+}
+/* Unattended panel tests, every frame from xr_frame_begin (also while the
+ * session is not shown): LINDBERGH_XR_FAKE_MENU=1 opens the panel (placed
+ * once the views are known) and paints it whenever it changes;
+ * LINDBERGH_XR_MENU_CLICKS=<frame>:<row>,... chooses those rows at those
+ * frames, as a trigger pull would. A scripted restart leaves
+ * xr_menu_clicks.done beside the game so the next start does not click again
+ * (delete it to rerun). */
+static void menu_choose(int row);
+static void menu_paint(void);
+static void menu_test_frame(void)
+{
+    if (fake_menu < 0) { const char *v = getenv("LINDBERGH_XR_FAKE_MENU"); fake_menu = v && *v == '1'; }
+    if (fake_menu && !menu.open) { menu.open = 1; menu.hover = -1; menu.dirty = 1; menu_page_start(); }
+    static int n = -1, done; static unsigned at[32]; static int rows[32];
+    if (n < 0) {
+        n = 0;
+        const char *v = getenv("LINDBERGH_XR_MENU_CLICKS");
+        FILE *f = v && *v ? fopen("xr_menu_clicks.done", "r") : NULL;
+        if (f) { fclose(f); fprintf(stderr, "[xr] scripted panel clicks skipped: xr_menu_clicks.done (a scripted restart ran)\n"); v = NULL; }
+        while (v && *v && n < 32) {
+            unsigned fr; int r;
+            if (sscanf(v, "%u:%d", &fr, &r) == 2) { at[n] = fr; rows[n] = r; n++; }
+            v = strchr(v, ','); if (v) v++;
+        }
+    }
+    while (done < n && g_frame >= at[done]) {
+        XmItem it[XW_ROWS_MAX];
+        menu_items(it);
+        const int r = rows[done++];
+        fprintf(stderr, "[xr] scripted panel click %d/%d at frame %u: row %d (%s) on page %d\n", done, n, g_frame, r,
+                r >= 0 && r < menu_n ? it[r].label : "none", wpanel.page);
+        const int id = r >= 0 && r < menu_n ? menu_ids[r] : -1;
+        const int restart = id == XW_ROW(XW_RESTART) || (id == XP_RESET && menu.reset_armed);
+        if (restart) { FILE *f = fopen("xr_menu_clicks.done", "w"); if (f) fclose(f); }
+        menu_choose(r);
+    }
+    static int was_running;              /* the overlay's texture exists once the session runs: paint again */
+    if (fake_menu && running && !was_running) menu.dirty = 1;
+    was_running = running;
+    if (menu.open && menu.dirty && fake_menu) menu_paint();
+}
 
 /* One gun: hand h's controller (or the stand-in) as player pl. Where the
  * game is to be told it points (gx, gy: off the screen when not), what the
@@ -627,10 +749,11 @@ static void input_frame(XrTime t)
     if (lever_cab) gun_hand = HAND_R; else lg_xr_controls_select(&controls,trig,dual);   /* gun_hand is controls.gun_hand */
     int menu_btn = get_bool(a_menu, HAND_L);
     if (fake_menu < 0) { const char *v = getenv("LINDBERGH_XR_FAKE_MENU"); fake_menu = v && *v == '1'; }
-    if (fake_menu && !menu.open && views_ok) { menu.open = 1; menu_place(); menu.hover = -1; menu.dirty = 1; }
+    if (fake_menu && !menu.open && views_ok) { menu.open = 1; menu_place(); menu.hover = -1; menu.dirty = 1; menu_page_start(); }
+    if (fake_menu && views_ok && !fake_placed) { fake_placed = 1; menu_place(); menu.dirty = 1; }
     if (xp_menu_button(&menu,menu_btn,prev[HAND_L][6])) {
         fprintf(stderr, "[xr] settings panel %s\n", menu.open ? "open" : "closed");
-        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; }
+        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; }
     }
     int g = gun_hand, off = 1 - g;
 
@@ -657,7 +780,7 @@ static void input_frame(XrTime t)
      * is player 2's gun, whose buttons they are */
     static XrTime panel_held;
     if(xp_hold_button(&menu,btn_b[off],prev[off][3],dual,t,&panel_held)) {
-        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; }
+        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; }
         rumble(off, 0.3f, 20);
         fprintf(stderr, "[xr] settings panel %s (held button)\n", menu.open ? "open" : "closed");
     }
@@ -1326,6 +1449,7 @@ void xr_frame_begin(void)
         } else splash_thread_stop();
     }
 #endif
+    menu_test_frame();
     poll_events();
     if (!running) { views_ok = 0; return; }
     XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
