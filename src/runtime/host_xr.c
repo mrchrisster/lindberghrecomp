@@ -116,6 +116,7 @@ static struct {
     void (APIENTRY *BindTexture)(GLenum, GLuint);
     void (APIENTRY *GetTexLevelParameteriv)(GLenum, GLint, GLenum, GLint *);
     void (APIENTRY *Finish)(void);
+    void (APIENTRY *TexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
 } gl;
 
 static int gl_load(void)
@@ -131,7 +132,7 @@ static int gl_load(void)
     L(BindFramebuffer) L(GenFramebuffers) L(FramebufferTexture2D) L(CheckFramebufferStatus)
     L(BlitFramebuffer) L(GetIntegerv) L(IsEnabled) L(Enable) L(Disable) L(GetString)
     L(GenRenderbuffers) L(BindRenderbuffer) L(RenderbufferStorage) L(FramebufferRenderbuffer)
-    L(FramebufferTextureLayer) L(ReadPixels) L(GetError) L(BindTexture) L(GetTexLevelParameteriv) L(Finish)
+    L(FramebufferTextureLayer) L(ReadPixels) L(GetError) L(BindTexture) L(GetTexLevelParameteriv) L(Finish) L(TexSubImage2D)
 #undef L
     return 1;
 }
@@ -1109,8 +1110,222 @@ static void anchor_head(XrViewLocateInfo *vl)
             rc.poseInReferenceSpace.position.z, yaw * 57.2958f);
 }
 
+/* ---- the start-up screen ----
+ * From the headset session's start until the game shows something: the
+ * game's title, the controller map and a countdown, as quad layers fixed in
+ * the room 2 m ahead. Before the game's first frame (~10 s of loading, no
+ * frames at all) a thread of its own submits them; after it, xr_frame_end
+ * adds them over the game's frames while those stay dark (~20 s of the
+ * board's own boot on black). The picture is the game's (games/<game>/src/
+ * splash_art.c, from quest/tools/<game>_splash.py); a game without one, or
+ * LINDBERGH_SPLASH=0, has none. The countdown is the last start's measured
+ * time, kept in startup_seconds beside the game. */
+#ifdef __ANDROID__
+#include <pthread.h>
+#include <zlib.h>
+extern const int lg_splash_w __attribute__((weak)), lg_splash_h __attribute__((weak)),
+                 lg_splash_panel_h __attribute__((weak));
+extern const int lg_splash_cell[2] __attribute__((weak)), lg_splash_digits[3] __attribute__((weak)),
+                 lg_splash_bar[4] __attribute__((weak));
+extern const size_t lg_splash_zlen __attribute__((weak));
+extern const unsigned char lg_splash_z[] __attribute__((weak));
+
+static XrSwapchain sp_chain;
+static int sp_on;                      /* shown: from the session's start until the game is seen */
+static int sp_thread_on;               /* the loading thread runs */
+static volatile int sp_stop;
+static pthread_t sp_thread;
+static double sp_t0, sp_expect = 35;   /* when it started, how long the last start took (s) */
+static int sp_bright;                  /* samples in a row with the game's picture lit */
+static GLuint sp_fb, sp_rb;
+#define SP_DIST 2.0f
+#define SP_WIDTH 1.8f                  /* the panel's width in the room, m */
+
+static double sp_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+
+static int splash_init(void)
+{
+    const char *v = getenv("LINDBERGH_SPLASH");
+    if ((v && *v == '0') || !&lg_splash_w || !&lg_splash_z) return 0;
+    int w = lg_splash_w, h = lg_splash_h;
+    unsigned char *px = malloc((size_t)w * h * 4);
+    uLongf n = (uLongf)w * h * 4;
+    if (!px || uncompress(px, &n, lg_splash_z, (uLong)lg_splash_zlen) != Z_OK || n != (uLongf)w * h * 4) {
+        fprintf(stderr, "[xr] splash: the picture does not unpack\n"); free(px); return 0;
+    }
+    XrSwapchainCreateInfo ci = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
+    ci.createFlags = XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT;
+    ci.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    ci.format = color_format; ci.sampleCount = 1; ci.width = (uint32_t)w; ci.height = (uint32_t)h;
+    ci.faceCount = 1; ci.arraySize = 1; ci.mipCount = 1;
+    XR_GL_IMAGE img[4]; uint32_t ni = 0;
+    for (int k = 0; k < 4; k++) img[k].type = XR_GL_IMAGE_TYPE;
+    if (XR_FAILED(xrCreateSwapchain(session, &ci, &sp_chain)) ||
+        XR_FAILED(xrEnumerateSwapchainImages(sp_chain, 4, &ni, (XrSwapchainImageBaseHeader *)img)) || !ni) {
+        fprintf(stderr, "[xr] splash: no swapchain\n"); free(px); return 0;
+    }
+    uint32_t at = 0;
+    XrSwapchainImageAcquireInfo ai = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+    XrSwapchainImageWaitInfo wi = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO }; wi.timeout = XR_INFINITE_DURATION;
+    xrAcquireSwapchainImage(sp_chain, &ai, &at);
+    xrWaitSwapchainImage(sp_chain, &wi);
+    GLint was = 0; gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &was);
+    gl.BindTexture(GL_TEXTURE_2D, img[at].image);
+    for (int y = 0; y < h; y++)        /* GL rows run bottom up */
+        gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, h - 1 - y, w, 1, GL_RGBA, GL_UNSIGNED_BYTE, px + (size_t)y * w * 4);
+    gl.BindTexture(GL_TEXTURE_2D, (GLuint)was);
+    XrSwapchainImageReleaseInfo ri = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+    xrReleaseSwapchainImage(sp_chain, &ri);
+    free(px);
+    FILE *f = fopen("startup_seconds", "r");
+    if (f) { double s; if (fscanf(f, "%lf", &s) == 1 && s > 3 && s < 300) sp_expect = s; fclose(f); }
+    sp_t0 = sp_now();
+    fprintf(stderr, "[xr] splash: %dx%d, counting down from %.0f s\n", w, h, sp_expect);
+    return 1;
+}
+
+/* one quad from a part of the picture: rect x, y, w, h in the picture's pixels
+ * (top down), placed where panel pixels px, py, pw, ph lie */
+static XrCompositionLayerQuad sp_quad(int x, int y, int w, int h, float px, float py, float pw, float ph, int alpha)
+{
+    XrCompositionLayerQuad q = { XR_TYPE_COMPOSITION_LAYER_QUAD };
+    q.layerFlags = alpha ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT : 0;
+    q.space = local_base;
+    q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    q.subImage.swapchain = sp_chain;
+    q.subImage.imageRect.offset.x = x;
+    q.subImage.imageRect.offset.y = lg_splash_h - (y + h);   /* GL: from the bottom */
+    q.subImage.imageRect.extent.width = w;
+    q.subImage.imageRect.extent.height = h;
+    float k = SP_WIDTH / (float)lg_splash_w, pan_h = (float)lg_splash_panel_h;
+    q.pose.orientation.w = 1;
+    q.pose.position.x = (px + pw / 2 - lg_splash_w / 2.0f) * k;
+    q.pose.position.y = (pan_h / 2 - (py + ph / 2)) * k;
+    q.pose.position.z = -SP_DIST;
+    q.size.width = pw * k; q.size.height = ph * k;
+    return q;
+}
+
+/* the layers for now: the panel, the countdown's digits, the bar */
+static int sp_layers(XrCompositionLayerQuad q[4])
+{
+    double t = sp_now() - sp_t0, left = sp_expect - t;
+    int secs = left < 1 ? 1 : left > 99 ? 99 : (int)ceil(left), n = 0;
+    q[n++] = sp_quad(0, 0, lg_splash_w, lg_splash_panel_h, 0, 0, (float)lg_splash_w, (float)lg_splash_panel_h, 0);
+    const int cw = lg_splash_cell[0], ch = lg_splash_cell[1];
+    float dh = (float)lg_splash_digits[2], dw = dh * cw / ch;
+    int dig[2] = { secs / 10, secs % 10 };
+    for (int i = secs < 10 ? 1 : 0; i < 2; i++)
+        q[n++] = sp_quad(dig[i] * cw, lg_splash_panel_h, cw, ch, lg_splash_digits[0] + i * dw, (float)lg_splash_digits[1], dw, dh, 1);
+    double p = t / sp_expect; if (p > 0.97) p = 0.97;
+    float bx = (float)lg_splash_bar[0], by = (float)lg_splash_bar[1], bw = (float)(lg_splash_bar[2] - lg_splash_bar[0]) * (float)p,
+          bh = (float)(lg_splash_bar[3] - lg_splash_bar[1]);
+    if (bw >= 1) q[n++] = sp_quad(10 * cw + 16, lg_splash_panel_h + 16, cw - 32, ch - 32, bx, by, bw, bh, 0);
+    for (int i = 1; i < n; i++) q[i].pose.position.z += 0.002f;   /* just in front of the panel */
+    return n;
+}
+
+static void *sp_loop(void *arg)
+{
+    (void)arg;
+    while (!sp_stop) {
+        poll_events();
+        if (!running) { usleep(10000); continue; }
+        XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
+        XrFrameState fs = { XR_TYPE_FRAME_STATE };
+        if (XR_FAILED(xrWaitFrame(session, &wi, &fs))) { usleep(10000); continue; }
+        XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO };
+        if (XR_FAILED(xrBeginFrame(session, &bi))) continue;
+        XrCompositionLayerQuad q[4];
+        const XrCompositionLayerBaseHeader *l[4];
+        int n = fs.shouldRender ? sp_layers(q) : 0;
+        for (int i = 0; i < n; i++) l[i] = (const XrCompositionLayerBaseHeader *)&q[i];
+        XrFrameEndInfo ei = { XR_TYPE_FRAME_END_INFO };
+        ei.displayTime = fs.predictedDisplayTime;
+        ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        ei.layerCount = (uint32_t)n; ei.layers = l;
+        XrResult r = xrEndFrame(session, &ei);
+        static unsigned frames, bad;
+        if (XR_FAILED(r) && bad++ < 10) fprintf(stderr, "[xr] splash: xrEndFrame failed %d (%d layers)\n", (int)r, n);
+        if (++frames == 1 || frames % 300 == 0)
+            fprintf(stderr, "[xr] splash: frame %u, %d layers, should render %d, state %d\n", frames, n, (int)fs.shouldRender, (int)state);
+    }
+    return NULL;
+}
+
+/* The game's first frame: the loading thread hands the headset back. */
+static void splash_thread_stop(void)
+{
+    if (!sp_thread_on) return;
+    sp_stop = 1;
+    pthread_join(sp_thread, NULL);
+    sp_thread_on = 0;
+    fprintf(stderr, "[xr] splash: the game's first frame after %.1f s\n", sp_now() - sp_t0);
+}
+
+static void splash_done(const char *why)
+{
+    sp_on = 0;
+    double t = sp_now() - sp_t0;
+    fprintf(stderr, "[xr] splash: off after %.1f s (%s)\n", t, why);
+    if (!strcmp(why, "the game is showing")) {
+        FILE *f = fopen("startup_seconds", "w");
+        if (f) { fprintf(f, "%.0f\n", t); fclose(f); }
+    }
+}
+
+/* Every 8th frame while it shows: is the game's picture (the left eye as it
+ * goes to the headset, read framebuffer bound) lit yet? Its boot is black
+ * with a little text; its first screen is bright. */
+static void splash_sample(GLint w, GLint h)
+{
+    if (g_frame % 8) return;
+    if (!sp_fb) {
+        gl.GenRenderbuffers(1, &sp_rb);
+        gl.BindRenderbuffer(GL_RENDERBUFFER, sp_rb);
+        gl.RenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 16);
+        gl.GenFramebuffers(1, &sp_fb);
+        gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, sp_fb);
+        gl.FramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, sp_rb);
+    }
+    GLint draw = 0, read = 0;
+    gl.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    gl.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, sp_fb);
+    gl.BlitFramebuffer(w / 8, h / 8, w - w / 8, h - h / 8, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    unsigned char px[16 * 16 * 4];
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, sp_fb);
+    gl.ReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
+    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
+    unsigned sum = 0;
+    for (int k = 0; k < 16 * 16; k++) sum += px[k * 4] + px[k * 4 + 1] + px[k * 4 + 2];
+    unsigned mean = sum / (16 * 16 * 3);
+    sp_bright = mean >= 40 ? sp_bright + 1 : 0;
+    if (sp_bright >= 2) splash_done("the game is showing");
+}
+#else
+static int sp_on, sp_thread_on;
+static void splash_thread_stop(void) {}
+#endif
+
 void xr_frame_begin(void)
 {
+#ifdef __ANDROID__
+    {   /* the first call (the GL context just made, the game still to load):
+         * the start-up screen's thread keeps the headset busy until the
+         * game's first frame comes to end */
+        static int first = 1;
+        if (first) {
+            first = 0;
+            if (running && (sp_on = splash_init())) {
+                sp_stop = 0;
+                sp_thread_on = pthread_create(&sp_thread, NULL, sp_loop, NULL) == 0;
+                if (sp_thread_on) { views_ok = 0; return; }
+            }
+        } else splash_thread_stop();
+    }
+#endif
     poll_events();
     if (!running) { views_ok = 0; return; }
     XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
@@ -1432,6 +1647,14 @@ void xr_frame_end(void)
                 fprintf(stderr, "[xr] colour check frame %u: game %u %u %u, stored %u %u %u\n",
                         g_frame, a[0], a[1], a[2], b[0], b[1], b[2]);
             }
+#ifdef __ANDROID__
+            if (sp_on && i == 0) {
+                gl.BindFramebuffer(GL_READ_FRAMEBUFFER, e->fb[e->acquired]);
+                splash_sample((GLint)e->w, (GLint)e->h);
+                gl.BindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);
+                gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, e->fb[e->acquired]);
+            }
+#endif
             if (fl_on < 0) { const char *v = getenv("LINDBERGH_FLASH_LOG"); fl_on = v && *v && *v != '0'; }
             if (fl_on) { fl_sample(i, (GLint)e->w, (GLint)e->h); gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, e->fb[e->acquired]); }
             if (overlay_ok) {
@@ -1547,11 +1770,20 @@ void xr_frame_end(void)
     depth_got = 0;
     XrCompositionLayerProjection layer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     layer.space = local; layer.viewCount = 2; layer.views = pv;
-    const XrCompositionLayerBaseHeader *layers[1] = { (XrCompositionLayerBaseHeader *)&layer };
+    const XrCompositionLayerBaseHeader *layers[5] = { (XrCompositionLayerBaseHeader *)&layer };
     XrFrameEndInfo ei = { XR_TYPE_FRAME_END_INFO };
     ei.displayTime = frame.predictedDisplayTime;
     ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = ok ? 1 : 0; ei.layers = layers;
+#ifdef __ANDROID__
+    XrCompositionLayerQuad spq[4];
+    if (sp_on && g_frame > 6000) splash_done("still dark after 6000 frames");
+    if (sp_on && ok) {      /* over the game's dark boot */
+        int n = sp_layers(spq);
+        for (int k = 0; k < n; k++) layers[1 + k] = (XrCompositionLayerBaseHeader *)&spq[k];
+        ei.layerCount = 1 + (uint32_t)n;
+    }
+#endif
     static int last_ok = -1;
     if (ok != last_ok)
         fprintf(stderr, "[xr] frame %u: %s (views %d, should render %d, state %d)\n", g_frame,
