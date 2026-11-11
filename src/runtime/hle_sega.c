@@ -1049,6 +1049,34 @@ static void vt3_camlog_install(void)
     CAM_STATES(CAM_INST)
     fprintf(stderr, "[camstate] logging the camera's states\n");
 }
+/* LINDBERGH_VT3_FLOWLOG=1: each arcade screen loop the game starts (usrAc...Loop::init), and when */
+#define FLOW_STATES(X) X(GameLoop, "_ZN13usrAcGameLoop4initEv") \
+    X(LoadLoop, "_ZN13usrAcLoadLoop4initEv") \
+    X(PassLoop, "_ZN13usrAcPassLoop4initEv") \
+    X(JudgeLoop, "_ZN14usrAcJudgeLoop4initEv") \
+    X(StartLoop, "_ZN14usrAcStartLoop4initEv") \
+    X(StatsLoop, "_ZN14usrAcStatsLoop4initEv") \
+    X(EndingLoop, "_ZN15usrAcEndingLoop4initEv") \
+    X(ReplayLoop, "_ZN15usrAcReplayLoop4initEv") \
+    X(WinloseLoop, "_ZN16usrAcWinloseLoop4initEv") \
+    X(ContinueLoop, "_ZN17usrAcContinueLoop4initEv") \
+    X(EntranceLoop, "_ZN17usrAcEntranceLoop4initEv") \
+    X(GameinitLoop, "_ZN17usrAcGameinitLoop4initEv") \
+    X(GameoverLoop, "_ZN17usrAcGameoverLoop4initEv") \
+    X(ChangeendLoop, "_ZN18usrAcChangeendLoop4initEv") \
+    X(GamesetmatchLoop, "_ZN21usrAcGamesetmatchLoop4initEv") \
+    X(TobecontinuedLoop, "_ZN22usrAcTobecontinuedLoop4initEv")
+#define FLOW_DEF(n, sym) static void (*g_flow_##n)(CPU *); \
+    static void h_flow_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[flow] frame %u: %s\n", g_frame, #n); \
+                                     push32(c, 0xDEADBEEFu); g_flow_##n(c); }
+FLOW_STATES(FLOW_DEF)
+static void vt3_flowlog_install(void)
+{
+    const char *v = getenv("LINDBERGH_VT3_FLOWLOG");
+    if (!v || *v != '1') return;
+#define FLOW_INST(n, sym) if (!vt3_wrap(sym, &g_flow_##n, h_flow_##n)) fprintf(stderr, "[flow] %s not wrapped\n", sym);
+    FLOW_STATES(FLOW_INST)
+}
 /* LINDBERGH_VT3_SKIP_UVA=1 (default in world mode; =0 keeps it): the fly-by intro camera (camera::initUva, at a
  * match's start and between games) not started - the camera stays on its
  * game routine. (Running the fly-by fast instead overran its animation.) */
@@ -1234,6 +1262,7 @@ static void vt3_jumps(void)
              * wider - outside the broadcast camera's view was black. Every
              * node is visible, as House of the Dead 4's culling is widened. */
             vt3_camlog_install();
+            vt3_flowlog_install();
             vt3_routines_install();
             { const char *u = getenv("LINDBERGH_VT3_ATTACHLOG");
               if (u && *u == '1' && vt3_wrap("_ZN14_sSceneManager12attachCameraEP8_sCamera", &g_vt3_attach_cam, h_vt3_attach_cam))
@@ -1286,7 +1315,8 @@ void hle_register_sega(void)
         if (r && *r == '1' && guest_override("_ZN6replay14isReplay_pointEv", h_true))
             fprintf(stderr, "[sega] every point is replayed (LINDBERGH_FORCE_REPLAY)\n");
         /* the headset menu's Replays switch: off, no point earns one */
-        else if (vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) { g_replay_hook = 1; fprintf(stderr, "[sega] Virtua Tennis 3: replays %s (headset menu)\n", g_replays ? "on" : "off"); }
+        else if ((getenv("LINDBERGH_REPLAYS") && (g_replays = *getenv("LINDBERGH_REPLAYS") != '0'), 1) &&
+                 vt3_wrap("_ZN6replay14isReplay_pointEv", &g_vt3_is_replay, h_vt3_is_replay)) { g_replay_hook = 1; fprintf(stderr, "[sega] Virtua Tennis 3: replays %s (headset menu)\n", g_replays ? "on" : "off"); }
     }
 #if defined(__ANDROID__)
     if (pace_by_display()) fprintf(stderr, "[sega] idle_wait_func: paced by the headset, not the wall clock\n");
