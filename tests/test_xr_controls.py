@@ -10,7 +10,8 @@ class State(C.Structure):
               ("grip_at",C.c_int64*2),("joined_at",C.c_int64),("credit_frames",C.c_uint)]
 class Frame(C.Structure):
     _fields_=[("time",C.c_int64),("dual",C.c_int),("auto_coins",C.c_int),("blocked",C.c_int),
-              *[(name,C.c_int*2) for name in ("trigger","grip","lower","upper","stick","aimed","start_override","firing")],("fire_supplied",C.c_int)]
+              *[(name,C.c_int*2) for name in ("trigger","grip","lower","upper","stick","aimed","start_override","firing")],("fire_supplied",C.c_int),
+              ("joystick",C.c_int),("thumb_x",C.c_float*2),("thumb_y",C.c_float*2)]
 class Cabinet(C.Structure):
     _fields_=[("held",C.c_uint),("coins",C.c_int)]
 
@@ -37,6 +38,15 @@ class ControlsTests(unittest.TestCase):
             else:setattr(f,name,value)
         self.lib.lg_xr_controls_select(C.byref(self.state),f.trigger,f.dual)
         return self.lib.lg_xr_controls_update(C.byref(self.state),C.byref(f))
+    def test_lever_cabinet_shots_both_hands(self):
+        T,B2=1<<4,1<<16                 # cabinet button 1 (top spin), button 2 (slice)
+        for h in (0,1):
+            pick=lambda v:[v,0] if h==0 else [0,v]
+            self.assertEqual(self.step(0,joystick=1,trigger=pick(1)).held,T)
+            self.assertEqual(self.step(10,joystick=1,lower=pick(1)).held,B2)
+            self.assertEqual(self.step(20,joystick=1,upper=pick(1)).held,T|B2)   # lob: both together
+        self.assertEqual(self.step(30,joystick=1,upper=[1,1],blocked=1).held,0)
+        self.assertEqual(self.step(40,joystick=1,thumb_x=[0,0.9]).held,1<<15)   # right
     def test_single_gun_switches_only_on_other_hand_pull(self):
         self.assertEqual(self.step(0,trigger=[1,0]).held,1<<4)
         self.assertEqual(self.state.gun_hand,0)

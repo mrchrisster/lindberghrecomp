@@ -118,6 +118,8 @@ static int      g_proj_top;
 static float    g_last_persp[16] = { 1.732f, 0, 0, 0, 0, 2.309f, 0, 0, 0, 0, -1, -1, 0, 0, -0.02f, 0 };
                                         /* the game's last perspective (its usual one to start) */
 static float    g_screen_lens[2] = { 1.732f, 2.309f };   /* the screen's lens: the game camera's, as last seen */
+static int      g_vt3_flat_next = -1;   /* Virtua Tennis 3: the next frame flat (1) or world (0) at a camera cut, see stereo_vt3_camera */
+static unsigned g_vt3_cut_from, g_vt3_cut_until;   /* ... and in these frames, the first eye draw's lens decides (a cut just happened) */
                                         /* the HUD's screen is sized by the game's usual lens, not
                                          * its current one: menus zoom the camera to 3.7 and back,
                                          * and the 2D shrank and grew with it */
@@ -1311,6 +1313,12 @@ static int      g_skip_begin;           /* inside a glBegin/glEnd that is left o
 static HleId    g_cur_id;               /* the call transform_call is looking at */
 
 static float    g_screen_map[MAX_SCREEN_COPIES][4];   /* the eyes' screen (0..1) -> the copy's texture coordinates */
+static unsigned g_screen_copy_frame[MAX_SCREEN_COPIES];   /* the frame each was last copied */
+static int screen_copy_stale(GLuint tex)     /* a whole-screen copy taken in an earlier frame (a cut's captured picture) */
+{
+    for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == tex) return g_screen_copy_frame[i] != g_frame;
+    return 0;
+}
 static int screen_copy(GLuint tex)
 {
     for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == tex) return 1;
@@ -1420,6 +1428,8 @@ static int copy_from_eyes(CPU *c, int k)
         g_screen_copy[g_nscreen_copy++] = (GLuint)tex;
         fprintf(stderr, "[stereo] frame %u: texture %d is a copy of the whole screen\n", g_frame, tex);
     }
+    if (!g_side && w >= GAME_W * 9 / 10 && h >= GAME_H * 9 / 10)
+        for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == (GLuint)tex) g_screen_copy_frame[i] = g_frame;
     if (!g_side && w >= GAME_W * 9 / 10 && h >= GAME_H * 9 / 10)
         for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == (GLuint)tex) {
             GLint tw = 0, th = 0;
@@ -1894,6 +1904,41 @@ static int transform_call(CPU *c, HleId id, const char *n)
             }
         }
         int persp = is_perspective(g_proj[g_proj_top]) && !is_2d_lens(g_proj[g_proj_top]);
+        /* Virtua Tennis 3 world mode, just after a camera mode change: the new
+         * camera is drawn from the next frame, but its lens reaches
+         * stereo_vt3_camera only after that frame's draws (the game sets the
+         * projection late). So the frame's first draw into the eyes through
+         * a camera decides it: a long lens, flat from this draw on; a short
+         * one, world - before anything else went into the eyes. */
+        if (g_vt3_cut_until && (int)(g_vt3_cut_until - g_frame) >= 0 && (int)(g_frame - g_vt3_cut_from) >= 0 && persp && g_mv && g_game_fb == 0 && !g_side &&
+            !g_replaying && g_eye_draws <= 1 && !menu_state() && (is_draw(k) || k == K_BEGIN)) {
+            int lng = g_proj[g_proj_top][0] > zoom_limit();
+            if (lng != g_flat) {
+                g_flat = lng; g_zoom_frames = lng ? 6 : 0;
+                if (g_flat) { g_screen_lens[0] = 1.732f; g_screen_lens[1] = 1.732f * GAME_W / GAME_H; }
+                g_proj_dirty = 1;
+                static int lg = -1; if (lg < 0) { const char *l = getenv("LINDBERGH_VT3_CUTLOG"); lg = l && *l == '1'; }
+                if (lg) fprintf(stderr, "[cut] frame %u: first eye draw's lens %.2f: %s from this frame\n", g_frame, g_proj[g_proj_top][0], lng ? "flat" : "world");
+            }
+            g_vt3_cut_until = 0;
+        }
+        /* Virtua Tennis 3 world mode: at a camera cut the game blends the
+         * picture it captured before the cut (fade::execCapture, TScene's
+         * captureFrame: a whole-screen copy, drawn back over the next ~30
+         * frames as a fading full-screen 2D quad). On a flat frame that is
+         * the screen; around the head it was a small flat picture of the old
+         * view hanging in the middle of the new world. Left out on world
+         * frames - the cut is a clean cut there. LINDBERGH_VT3_CAPTURE=1 keeps it. */
+        {   static int keep = -1;
+            if (keep < 0) { const char *v = getenv("LINDBERGH_VT3_CAPTURE"); keep = !world_mode_immersive() || (v && *v == '1'); }
+            if (!keep && g_mv && !g_flat && !persp && g_game_fb == 0 && !g_replaying && g_tex2d_bound && screen_copy_stale(g_tex2d_bound)) {
+                static unsigned told = ~0u;
+                if (g_frame - told > 60) fprintf(stderr, "[stereo] frame %u: a cut's captured picture (texture %u) left out of the world\n", g_frame, g_tex2d_bound);
+                told = g_frame;
+                if (k == K_BEGIN) g_skip_begin = 1;
+                return 1;
+            }
+        }
         if (persp && !g_flat && (g_game_fb == g_world_fb || g_game_fb == g_world_fb_next)) {
             if (!g_replaying) tally_lens(g_proj[g_proj_top]);
             if (is_draw(k) && weapon_draw()) return 1;
@@ -3664,6 +3709,11 @@ void stereo_frame_begin(void)
          * full-screen haze passes ran over the empty room and turned it a
          * flat lavender. */
         g_flat = flat_all || menu_state() || g_zoom_frames >= 6;
+        if (g_vt3_flat_next >= 0) {        /* Virtua Tennis 3: the game's camera crossed the long lens (stereo_vt3_camera) */
+            g_zoom_frames = g_vt3_flat_next ? 6 : 0;
+            g_flat = flat_all || menu_state() || g_vt3_flat_next;
+            g_vt3_flat_next = -1;
+        }
         /* Widescreen: a sniping event is the arcade's 4:3 from its start - the
          * scope's mask is drawn for the 4:3 screen, and waiting for its lens
          * to hold left the first frames wide, the mask's corners at the edges
@@ -3690,6 +3740,53 @@ void stereo_frame_begin(void)
     load_projection();
     g_mode = mode;
     glMatrixMode(mode);
+}
+
+/* Virtua Tennis 3 world mode: flat or world decided at the camera cut.
+ * A close-up (the long lens, > zoom_limit) went flat only once its lens had
+ * held 6 frames (g_zoom_frames, for a scope coming up in steps): after each
+ * cut to a close-up ~6 frames drew it as world - a distorted wide view, the
+ * game's cross-fade picture a small flat panel in the middle. The game
+ * thread tells each world camera it sets (hle_sega.c h_vt3_proj_cam: the
+ * camera's mode at +0x38 and its lens), in the GL queue so in order with the
+ * draws. It sets the camera after the frame's draws, for the next frame
+ * (measured: the job arrives after ~170 of a frame's eye draws, and the long
+ * lens is drawn from the next frame), so when the lens crosses the limit the
+ * next frame starts flat (or world) at once, and the zoom count agrees.
+ * LINDBERGH_VT3_CUTFLAT=0 turns it off (the 6-frame rule alone);
+ * LINDBERGH_VT3_CUTLOG=1 logs camera modes and each decision. */
+static unsigned g_vt3_cam_mode = ~0u;
+static int g_vt3_cam_long = -1;
+void stereo_vt3_camera(unsigned mode, float lens)
+{
+    static int on = -1, lg;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_CUTFLAT"), *l = getenv("LINDBERGH_VT3_CUTLOG");
+                  on = world_mode_immersive() && !(v && *v == '0'); lg = l && *l == '1'; }
+    if (!on || !g_on) return;
+    if (mode != g_vt3_cam_mode) {
+        if (lg) fprintf(stderr, "[cut] frame %u: camera mode %#x -> %#x\n", g_frame, g_vt3_cam_mode, mode);
+        if (g_vt3_cam_mode != ~0u) { g_vt3_cut_from = g_frame + 1; g_vt3_cut_until = g_frame + 2; }
+        g_vt3_cam_mode = mode;
+    }
+    int lng = lens > zoom_limit();
+    if (lng == g_vt3_cam_long) return;
+    g_vt3_cam_long = lng;
+    g_vt3_flat_next = lng;
+    if (lg) fprintf(stderr, "[cut] frame %u: mode %#x lens %.2f: %s from the next frame\n", g_frame, mode, lens, lng ? "flat" : "world");
+}
+static void vt3_camera_job(void *arg)
+{
+    uintptr_t v = (uintptr_t)arg; uint32_t b = (uint32_t)v; float lens; memcpy(&lens, &b, 4);
+    stereo_vt3_camera((unsigned)(v >> 32), lens);
+}
+/* from the game thread: in the GL queue when there is one */
+void stereo_vt3_camera_post(unsigned mode, float lens)
+{
+    extern int glq_active(void); extern uint32_t glq_job(void (*job)(void *), void *arg);
+    uint32_t b; memcpy(&b, &lens, 4);
+    void *arg = (void *)((uintptr_t)mode << 32 | b);
+    if (sizeof(uintptr_t) < 8) { stereo_vt3_camera(mode, lens); return; }
+    if (glq_active()) glq_job(vt3_camera_job, arg); else vt3_camera_job(arg);
 }
 
 /* ---- the host's side ---- */

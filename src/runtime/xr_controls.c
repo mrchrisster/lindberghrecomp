@@ -15,16 +15,22 @@ static unsigned lever(float x,float y)
     if(ay>ax*.414f)b|=y>0?CAB_P1_UP:CAB_P1_DOWN;
     return b;
 }
-/* Virtua Tennis 3 in the headset: either thumbstick is the lever; the right
- * trigger is button 1 (topspin), A button 2 (lob), B button 3 (slice); the
- * left trigger and X double as buttons 2 and 3 for the other hand. */
+/* Virtua Tennis 3 in the headset: either thumbstick is the lever. The
+ * cabinet has two shot buttons - its How to Play: left button top spin,
+ * right button backspin (slice), both together a lob - so a lob is both
+ * switches at once (button 1 = switch 0x02, button 2 = 0x01; the game's pad
+ * reads no other shot switch: "button 3" was never a shot, and B did
+ * nothing). Right hand: trigger top spin, A slice, B lob; left hand the
+ * same on its trigger, X and Y. */
 static unsigned lever_buttons(const LgXrControlFrame *f)
 {
     if(f->blocked)return 0;
     unsigned b=lever(f->thumb_x[0],f->thumb_y[0])|lever(f->thumb_x[1],f->thumb_y[1]);
-    if(f->trigger[1])b|=CAB_P1_TRIGGER;
-    if(f->lower[1]||f->trigger[0])b|=CAB_P1_BUTTON2;
-    if(f->upper[1]||f->lower[0])b|=CAB_P1_BUTTON3;
+    for(int h=0;h<2;++h){
+        if(f->trigger[h])b|=CAB_P1_TRIGGER;
+        if(f->lower[h])b|=CAB_P1_BUTTON2;
+        if(f->upper[h])b|=CAB_P1_TRIGGER|CAB_P1_BUTTON2;
+    }
     return b;
 }
 LgXrCabinet lg_xr_controls_update(LgXrControls *s,const LgXrControlFrame *f)

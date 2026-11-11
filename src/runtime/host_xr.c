@@ -779,7 +779,9 @@ static void input_frame(XrTime t)
      * second, opens and closes the settings panel too - not when that hand
      * is player 2's gun, whose buttons they are */
     static XrTime panel_held;
-    if(xp_hold_button(&menu,btn_b[off],prev[off][3],dual,t,&panel_held)) {
+    /* (not on a lever cabinet: there Y is a shot - the lob, held while it charges -
+     * and the left controller's menu button opens the panel) */
+    if(!lever_cab && xp_hold_button(&menu,btn_b[off],prev[off][3],dual,t,&panel_held)) {
         if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; }
         rumble(off, 0.3f, 20);
         fprintf(stderr, "[xr] settings panel %s (held button)\n", menu.open ? "open" : "closed");

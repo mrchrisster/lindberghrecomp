@@ -1012,19 +1012,62 @@ static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 
  * get - which the stereo path could only take apart again, and not its depth
  * (the model's terms mix in). After it runs, the projection is handed to
  * arbprog.c (arb_note_projection) for the world mode. */
+/* The world camera handed to arbprog.c and stereo.c (arb_note_projection)
+ * in the GL queue, in order with the draws: the game sets its camera after a
+ * frame's draws, for the next frame, while the GL thread may still be drawing
+ * the frame before - read straight from the game thread, the draws of the
+ * last frame before a cut were taken apart with the new camera (a turned,
+ * distorted in-between frame at every cut in Immersive). */
+typedef struct { float p[16], v[12]; int feeding; } Vt3Cam;
+static void vt3_cam_job(void *arg)
+{
+    Vt3Cam *k = (Vt3Cam *)arg;
+    extern void arb_note_projection(const float *proj, const float *view); extern int g_vt3_feeding;
+    int was = g_vt3_feeding; g_vt3_feeding = k->feeding;
+    arb_note_projection(k->p, k->v);
+    g_vt3_feeding = was;
+    free(k);
+}
+static void vt3_note_projection(const float *p, const float *v, int feeding)
+{
+    extern int glq_active(void); extern uint32_t glq_job(void (*job)(void *), void *arg);
+    static int queued = -1;
+    if (queued < 0) { const char *e = getenv("LINDBERGH_VT3_CAM_QUEUE"); queued = !(e && *e == '0'); }
+    Vt3Cam *k = (Vt3Cam *)malloc(sizeof *k);
+    if (!k) return;
+    memcpy(k->p, p, sizeof k->p); memcpy(k->v, v, sizeof k->v); k->feeding = feeding;
+    if (queued && glq_active()) glq_job(vt3_cam_job, k); else vt3_cam_job(k);
+}
 static void (*g_vt3_proj_cam)(CPU *);
+static uint32_t g_vt3_camera;   /* the camera object (camera::gameRoutine's / initUva's this): its mode at +0x38 */
 static void h_vt3_proj_cam(CPU *c)
 {
     push32(c, 0xDEADBEEFu);
     g_vt3_proj_cam(c);
+    {   /* LINDBERGH_VT3_CAMMODE_LOG=1: the camera's mode whenever it changes, with the lens */
+        static int lg = -1; static uint32_t last = ~0u; extern unsigned g_frame;
+        if (lg < 0) { const char *v = getenv("LINDBERGH_VT3_CAMMODE_LOG"); lg = v && *v == '1'; }
+        uint32_t m = g_vt3_camera ? rd32(g_vt3_camera + 0x38) : ~1u;
+        if (lg && m != last) {
+            uint32_t fn = guest_symbol("_ZN14_sSceneManager10getCurrentEv"), sm = fn ? guest_call(c, fn, NULL, 0) : 0;
+            uint32_t b = sm ? rd32(sm + 0x5c) : 0; float lens; memcpy(&lens, &b, 4);
+            fprintf(stderr, "[cammode] frame %u: camera mode %#x -> %#x (lens %.2f)\n", g_frame, last, m, lens);
+            last = m;
+        }
+    }
     uint32_t fn = guest_symbol("_ZN14_sSceneManager10getCurrentEv");
     uint32_t sm = fn ? guest_call(c, fn, NULL, 0) : 0;
     if (!sm) return;
     float p[16], v[12];
     for (int i = 0; i < 16; i++) { uint32_t b = rd32(sm + 0x5c + 4u * (uint32_t)i); memcpy(&p[i], &b, 4); }
     for (int i = 0; i < 12; i++) { uint32_t b = rd32(sm + 0x2c + 4u * (uint32_t)i); memcpy(&v[i], &b, 4); }
-    extern void arb_note_projection(const float *proj, const float *view);
-    arb_note_projection(p, v);
+    vt3_note_projection(p, v, 0);
+    /* a world camera (not the pixel camera, near 800): its mode and lens to the
+     * stereo path, in order with the draws, for flat or world at a cut */
+    if (p[0] > 0 && p[10] != 1.0f && p[11] / (p[10] - 1.0f) < 10.0f && g_vt3_camera) {
+        extern void stereo_vt3_camera_post(unsigned mode, float lens);
+        stereo_vt3_camera_post(rd32(g_vt3_camera + 0x38), p[0]);
+    }
 }
 static int vt3_wrap(const char *sym, void (**orig)(CPU *), HleHandler h)
 {
@@ -1088,6 +1131,7 @@ static void h_vt3_init_uva(CPU *c)
 {
     extern unsigned g_frame;
     uint32_t self = A32(0), mode = self >= 0x08000000u ? rd32(self + 0x38) : 0;
+    if (self >= 0x08000000u) g_vt3_camera = self;
     /* camera::reset starts a fly-by (initUva(-1): the animation chosen at
      * +0x228) for camera modes 4 (usrAcEntranceLoop: the match intro), 8
      * (usrAcChangeendLoop: between games), 0xa (usrAcStatsLoop, usrChResultLoop,
@@ -1125,6 +1169,7 @@ static void h_vt3_game_routine(CPU *c)
     }
     if (a == -2) { const char *v = getenv("LINDBERGH_VT3_CAMFIELDS"); a = v && *v ? atol(v) : -1; b = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : a; }
     if (g_rout_on) vt3_rout_mark(16);
+    if (self >= 0x08000000u && self < 0xC0000000u) g_vt3_camera = self;
     push32(c, 0xDEADBEEFu); g_vt3_game_routine(c);
     {   /* World mode: at a match's start the game draws through the broadcast camera
          * for ~3 s before it sets it through setProjectCameraMatrix (the hook
@@ -1159,7 +1204,7 @@ static void h_vt3_game_routine(CPU *c)
                     extern void arb_note_projection(const float *proj, const float *view);
                     static unsigned told;
                     if (g_vt3_log && g_frame - told > 60) { told = g_frame; fprintf(stderr, "[vt3] frame %u: world camera built from the camera routine (eye %.0f %.0f %.0f)\n", g_frame, e[0], e[1], e[2]); }
-                    g_vt3_feeding = 1; arb_note_projection(proj, view); g_vt3_feeding = 0;
+                    vt3_note_projection(proj, view, 1);
                 }
             }
         }
@@ -1289,6 +1334,42 @@ static void h_vt3_set_mode(CPU *c)
         fprintf(stderr, "[vt3] frame %u: match over with Replays off - closing replay skipped, %s\n", g_frame,
                 loser ? "lost (mode 0xb)" : "game set and match (mode 0xa)");
     }
+    /* Point cutaways off: no win/lose close-up at all. After a point the pass
+     * loop (return 0x08086C6D) - or a point's replay ending (0x0808A6A7) -
+     * picks mode 8, usrAcWinloseLoop: camera 7 (the winner's close-up),
+     * which even skipped at once ran ~17 frames with two camera cuts. Instead
+     * the choice its exec() makes at its end, in the arcade path: change of
+     * ends (9) on a tie-break change or the match's change-ends event (bit
+     * 0x400 of match+0x1c, cleared as it does), else the next point (3).
+     * What its init and exit do besides is for the close-up (camera mode,
+     * players' celebration poses for the camera, the centre "POINT" plate,
+     * the crowd's cheer card animation, glare) and is not needed; the score
+     * box has the new score. Left to the game: a card being written, a
+     * versus game asked for (vs::isReq_vs_game), the attract demo
+     * (checkMode 1), challenge mode (checkMode 4: never mode 8 from these),
+     * a match already decided (0xa/0xb above). */
+    extern int g_cutaways;
+    if (!g_cutaways && mode == 8 && (from == 0x08086C6Du || from == 0x0808A6A7u) && mgr && m &&
+        self == rd32(rd32(mgr + 0x104) + 0x14) && !(rd32(m + 0x1c) & 0x1000u)) {
+        uint32_t cw = guest_symbol("_ZN13playerManager14isCard_writingEv"), ck = guest_symbol("_ZN14mtrLoopManager9checkModeEl");
+        uint32_t tb = guest_symbol("_ZN5match20isTiebreak_changeendEv");
+        uint32_t a[2] = { rd32(mgr + 0x68), 0 };
+        int writing = cw ? (guest_call(c, cw, a, 1) & 0xff) != 0 : 1;
+        a[0] = rd32(mgr + 0xf4); a[1] = 1;
+        int demo = ck ? (guest_call(c, ck, a, 2) & 0xff) != 0 : 1;
+        uint32_t rv = guest_symbol("_ZN2vs13isReq_vs_gameEv");     /* exec() also waits while a versus game is asked for */
+        a[0] = rd32(mgr + 0x94);
+        int versus = rv ? (guest_call(c, rv, a, 1) & 0xff) != 0 : 1;
+        if (!writing && !demo && !versus && tb) {
+            a[0] = m;
+            int change = (guest_call(c, tb, a, 1) & 0xff) != 0;
+            if (!change && (rd32(m + 0x1c) & 0x400u)) { wr32(m + 0x1c, rd32(m + 0x1c) & ~0x400u); change = 1; }
+            mode = change ? 9 : 3;
+            wr32(c->esp + 4u, mode);
+            if (g_vt3_flowlog) fprintf(stderr, "[flow] frame %u: point cutaway left out (Point cutaways off) - straight to %s\n", g_frame,
+                                       change ? "change of ends (mode 9)" : "the next point (mode 3)");
+        }
+    }
     if (g_vt3_flowlog && from >= 0x0807E000u && from < 0x0808F000u)    /* the arcade screen loops' choices */
         fprintf(stderr, "[flow] frame %u: setMode(%#x, %u) from %#x\n", g_frame, self, mode, from);
     push32(c, 0xDEADBEEFu); g_vt3_set_mode(c);
@@ -1323,6 +1404,26 @@ static void h_vt3_skip_winner(CPU *c)
         RET(1); return;
     }
     push32(c, 0xDEADBEEFu); g_vt3_skip_winner(c);
+}
+/* Point cutaways off: no big-point close-up of the server either. On a
+ * "heat-up" point (game, break, set or match point) usrAcStartLoop::init
+ * puts the camera on the server (camera mode 5, ~150 frames, heat-up poses
+ * and, in tournaments, the heat-up music) instead of the court camera (mode
+ * 1); in Immersive that was a cut to a flat close-up and back before the
+ * serve. With the switch off its questions (returns 0x080856D3 and
+ * 0x08085775, and exec's 0x08085AB2) are answered "no": the point starts as
+ * any other, from the court camera (restartPlusAb: the score boards shown). */
+static void (*g_vt3_is_heatup)(CPU *);
+static void h_vt3_is_heatup(CPU *c)
+{
+    uint32_t from = rd32(c->esp - 4u);
+    push32(c, 0xDEADBEEFu); g_vt3_is_heatup(c);
+    if (!g_cutaways && (c->eax & 0xff) && (from == 0x080856D3u || from == 0x08085775u || from == 0x08085AB2u)) {
+        extern unsigned g_frame; static unsigned told = ~0u;
+        if (g_vt3_flowlog && g_frame - told > 30) fprintf(stderr, "[flow] frame %u: big-point serve close-up left out (Point cutaways off)\n", g_frame);
+        told = g_frame;
+        c->eax &= ~0xffu;
+    }
 }
 /* Virtua Tennis 3's HUD items placed at a 3D point in world mode
  * (LINDBERGH_VT3_IMMERSIVE=1). hud::getScreenPosFrom3DPos(const _sVector3d&)
@@ -1573,6 +1674,8 @@ static void vt3_jumps(void)
         }
         {   if (vt3_wrap("_ZN13playerManager24check_skip_button_winnerEv", &g_vt3_skip_winner, h_vt3_skip_winner)) {
                 g_cutaway_hook = 1;
+                if (!vt3_wrap("_ZN5match8isHeatupEl", &g_vt3_is_heatup, h_vt3_is_heatup))
+                    fprintf(stderr, "[sega] Virtua Tennis 3: match::isHeatup not wrapped - big-point serve close-ups stay\n");
                 fprintf(stderr, "[sega] Virtua Tennis 3: point cutaways %s\n", g_cutaways ? "on" : "off (skipped)");
             } }
         const char *w = getenv("LINDBERGH_VT3_WIN");
