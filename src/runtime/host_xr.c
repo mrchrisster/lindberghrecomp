@@ -1638,7 +1638,7 @@ static double xp_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t
 static double xp_t0, xp_game, xp_copy, xp_end; static unsigned xp_n;
 static void xp_mark(double *acc) { if (xr_prof > 0) { gl.Finish(); double t = xp_ms(); *acc += t - xp_t0; xp_t0 = t; } }
 
-/* LINDBERGH_GAME_SHOT=<first>,<every>[,full]: the left eye as the game drew
+/* LINDBERGH_GAME_SHOT=<first>,<every>[,full[,last]]: the left eye as the game drew
  * it, read from the eyes' array at the frame's end - before the headset's
  * frame is even begun, so a sleeping display or a Guardian prompt does not
  * stop it (XR_SHOT needs the session shown). game_<frame>.ppm, a quarter the
@@ -1653,15 +1653,18 @@ static int shot_both(void)
 }
 static void game_shot(void)
 {
-    static long first = -2, every = 0; static int full;
+    static long first = -2, every = 0, last = -1; static int full;
     if (first == -2) {
         const char *v = getenv("LINDBERGH_GAME_SHOT");
         first = v && *v ? atol(v) : -1;
         const char *c1 = v ? strchr(v, ',') : NULL;
         every = c1 ? atol(c1 + 1) : 0;
-        full = c1 && strchr(c1 + 1, ',') && atoi(strchr(c1 + 1, ',') + 1) == 1;
+        const char *c2 = c1 ? strchr(c1 + 1, ',') : NULL, *c3 = c2 ? strchr(c2 + 1, ',') : NULL;
+        full = c2 && atoi(c2 + 1) == 1;
+        last = c3 ? atol(c3 + 1) : -1;          /* ...[,<last frame>]: no shots after it */
     }
     extern volatile int g_game_shot_req;        /* a shot asked for by a game hook (LINDBERGH_VT3_SERVESHOT) */
+    if (last >= 0 && (long)g_frame > last && !g_game_shot_req) return;
     int asked = g_game_shot_req;
     if (asked) g_game_shot_req = 0;
     else {
@@ -1703,6 +1706,54 @@ static void game_shot(void)
     if (!told++ || (err && told < 6)) fprintf(stderr, "[xr] game shot frame %u: %s (error %#x, framebuffer %#x, array %u, %dx%d)\n",
                                              g_frame, err ? "read failed" : name, err, st, arr, w, h);
     free(px);
+}
+
+/* LINDBERGH_BLACK_LOG=1: each frame the left eye (read from the eyes' array,
+ * like GAME_SHOT, so it works unattended) is averaged over 8x8 points; a
+ * frame much darker than the one before (mean below 8 after one above 24)
+ * is logged as "[black] frame N", and the frame after it. Finds the black
+ * frames at camera cuts without saving every frame. Diagnostic: the read
+ * waits on the GPU. */
+static void black_log(void)
+{
+    static int on = -1; static GLuint fb, rb, rfb; static unsigned prev = 255, armed;
+    if (on < 0) { const char *v = getenv("LINDBERGH_BLACK_LOG"); on = v && *v == '1'; }
+    if (!on) return;
+    unsigned arr = stereo_eye_array();
+    int w = 0, h = 0;
+    stereo_eye_dims(&w, &h);
+    if (!arr || w <= 0 || h <= 0) return;
+    if (!fb) {
+        gl.GenRenderbuffers(1, &rb); gl.BindRenderbuffer(GL_RENDERBUFFER, rb);
+        gl.RenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 8, 8);
+        gl.GenFramebuffers(1, &fb); gl.GenFramebuffers(1, &rfb);
+        gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, fb);
+        gl.FramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb);
+    }
+    GLint draw = 0, read = 0;
+    gl.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    gl.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, fb);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
+    gl.FramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, arr, 0, 0);
+    gl.BlitFramebuffer(0, 0, w, h, 0, 0, 8, 8, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    unsigned char px[8 * 8 * 4];
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, fb);
+    gl.ReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
+    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
+    unsigned sum = 0, mx = 0;
+    for (int k = 0; k < 64; k++) { unsigned v = px[k * 4] + px[k * 4 + 1] + px[k * 4 + 2]; sum += v; if (v > mx) mx = v; }
+    unsigned mean = sum / (64 * 3);
+    if ((mean < 8 && prev > 24) || armed) {
+        fprintf(stderr, "[black] frame %u: left eye mean %u (brightest point %u), before %u%s\n", g_frame, mean, mx / 3, prev,
+                armed ? " (the frame after)" : "");
+        armed = !armed;
+        /* the next frame (black too, so far always) gets the draw log and a game shot */
+        extern volatile long g_draw_log_frame; extern volatile int g_game_shot_req;
+        if (armed) { g_draw_log_frame = (long)g_frame + 1; g_game_shot_req = 1; }
+    }
+    prev = mean;
 }
 
 /* LINDBERGH_GPU_TIME=1: the GPU's time per frame, from one frame's end to the
@@ -1762,6 +1813,7 @@ static void gpu_time(void)
 void xr_frame_end(void)
 {
     game_shot();
+    black_log();
     gpu_time();
     if (!in_frame) return;
     if (xr_prof < 0) { const char *v = getenv("LINDBERGH_XR_PROF"); xr_prof = v && *v == '1'; }

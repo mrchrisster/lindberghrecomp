@@ -257,6 +257,7 @@ static int is_perspective(const float *m) { return lg_stereo_is_perspective(m); 
 /* The view the HUD's screen is seen through: the game camera's, so it stays
  * put in the world, or the head's, so it stays in front of the face */
 static long g_cap_frame = -100;
+volatile long g_draw_log_frame = -1;      /* one more frame for the draw log (LINDBERGH_BLACK_LOG: the frame after a black one) */
 static void tex_hist(GLuint tex, const char *how, int w, int h);
 static void cap_note_tex(GLuint tex);                 /* stereo_capture: the frame whose draws are logged */
 static float g_hud_pitch;                       /* a head-locked HUD tilted up (+) or down, radians */
@@ -1666,11 +1667,11 @@ static int transform_call(CPU *c, HleId id, const char *n)
          * clear. */
         {   /* LINDBERGH_CLEAR_LOG=1: each colour clear of the eyes, the first 60 */
             static int on = -1, n;
-            if (on < 0) { const char *v = getenv("LINDBERGH_CLEAR_LOG"); on = v && *v == '1'; }
-            if (on && (mask & GL_COLOR_BUFFER_BIT) && n < 60 && g_scene_draws) {
+            if (on < 0) { const char *v = getenv("LINDBERGH_CLEAR_LOG"); on = v && *v ? atoi(v) : 0; }   /* =2: no limit */
+            if (on && (mask & GL_COLOR_BUFFER_BIT) && (n < 60 || on == 2) && g_scene_draws) {
                 n++;
-                fprintf(stderr, "[clear] frame %u mask %#x fb %u side %d mv %d scene draws %u, copied frame %u, world fb %u\n",
-                        g_frame, mask, (unsigned)g_game_fb, g_side, g_mv, g_scene_draws, g_eyes_copied_frame, (unsigned)g_world_fb);
+                fprintf(stderr, "[clear] frame %u mask %#x fb %u side %d mv %d scene draws %u, copied frame %u, world fb %u, flat %d\n",
+                        g_frame, mask, (unsigned)g_game_fb, g_side, g_mv, g_scene_draws, g_eyes_copied_frame, (unsigned)g_world_fb, g_flat);
             }
         }
         /* A flat menu (Virtua Tennis 3's Road to the Championship, its versus
@@ -1687,7 +1688,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
         {   /* on a capture frame, or in LINDBERGH_DRAW_LOG's range: each clear, its viewport, and the side pass after it */
             static long dl = -2, dl1;
             if (dl == -2) { const char *v = getenv("LINDBERGH_DRAW_LOG"); dl = v ? atol(v) : -1; dl1 = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : dl; }
-            if ((long)g_frame == g_cap_frame || (long)g_frame + 1 == g_cap_frame || (dl >= 0 && (long)g_frame >= dl && (long)g_frame <= dl1))
+            if ((long)g_frame == g_cap_frame || (long)g_frame + 1 == g_cap_frame || (long)g_frame == g_draw_log_frame || (dl >= 0 && (long)g_frame >= dl && (long)g_frame <= dl1))
                 fprintf(stderr, "[units] frame %u clear %#x fb %u vp %d,%d %dx%d side %d\n", g_frame, mask, (unsigned)g_game_fb, g_vp[0], g_vp[1], g_vp[2], g_vp[3], g_side);
         }
         if (g_mv && g_pbuffers && (g_game_fb == 0 || g_side)) {
@@ -1924,7 +1925,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
         { static long dl = -2, dl1; if (dl == -2) { const char *v = getenv("LINDBERGH_DRAW_LOG"); dl = v ? atol(v) : -1;
                                                      dl1 = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : dl; }   /* =<frame>[-<last>] */
           if ((long)g_frame == g_cap_frame && !g_replaying) cap_note_tex(g_tex2d_bound);
-          if (((dl >= 0 && (long)g_frame >= dl && (long)g_frame <= dl1) || (long)g_frame == g_cap_frame) && !g_replaying) {   /* LINDBERGH_DRAW_LOG=<frame>: each draw's class */
+          if (((dl >= 0 && (long)g_frame >= dl && (long)g_frame <= dl1) || (long)g_frame == g_cap_frame || (long)g_frame == g_draw_log_frame) && !g_replaying) {   /* LINDBERGH_DRAW_LOG=<frame>: each draw's class */
               float mv[16]; glGetFloatv(GL_MODELVIEW_MATRIX, mv);
               if ((long)g_frame == g_cap_frame) {     /* a capture: every unit, and what combines them */
                   GLint was = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &was);
@@ -1970,13 +1971,24 @@ static int transform_call(CPU *c, HleId id, const char *n)
               glGetIntegerv(GL_STENCIL_FUNC, &sf_); glGetIntegerv(GL_STENCIL_REF, &sr_); glGetIntegerv(GL_STENCIL_VALUE_MASK, &sm_);
               glGetIntegerv(GL_STENCIL_WRITEMASK, &sw_); glGetIntegerv(GL_STENCIL_FAIL, &so_[0]);
               glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL, &so_[1]); glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &so_[2]);
+              fprintf(stderr, "[draw] facts target %d menu %d (state %d) zoom %d flat %d offscreen %d hud fb %u world fb %u\n", facts.hud_target, facts.menu, menu_state(), facts.zoom, facts.flat, facts.offscreen, (unsigned)g_hud_fb, (unsigned)g_world_fb);
               fprintf(stderr, "[draw] f%u %s fb %u tex %u persp %d ident %d hud %d lens %.3f,%.3f vp %d,%d %dx%d mv-t %.3f,%.3f,%.3f gun %.3f,%.3f cm %d%d%d%d st %d %#x ref %d mask %#x op %#x/%#x/%#x wmask %#x\n", g_frame, hle_name(g_cur_id), (unsigned)g_game_fb,
                       g_tex2d_bound, persp, g_mv_ident, hud, g_proj[g_proj_top][0], g_proj[g_proj_top][5], g_vp[0], g_vp[1], g_vp[2], g_vp[3],
                       mv[12], mv[13], mv[14], g_gun_ndc[0], g_gun_ndc[1], cm_[0], cm_[1], cm_[2], cm_[3], st_, sf_, sr_, sm_, so_[0], so_[1], so_[2], sw_);
           } }
         g_fill_track = hud == 1 && !persp && g_mv && k == K_BEGIN;    /* glBegin: measured until glEnd */
         if (g_fill_track) { g_fill_box[0] = g_fill_box[1] = 1e9f; g_fill_box[2] = g_fill_box[3] = -1e9f; }
-        if (hud == 1 && !is_perspective(g_proj[g_proj_top]) && !g_replaying) g_hud_fb_next = g_game_fb;
+        /* Virtua Tennis 3's world mode: its HUD and its world share the eyes'
+         * framebuffer (0). At a camera cut the game blends the screen it
+         * captured (fade::execCapture: a whole-screen 2D draw of that copy,
+         * taken for the HUD) - which made fb 0 "the HUD's target" for the next
+         * frame: none of that frame's world counted as world (g_scene_draws
+         * 0), so no sky and the composite's colour clear was not dropped -
+         * the eyes ended black, two frames at every cut (win/lose close-up,
+         * change of ends, the serve camera, game set and match). In world mode
+         * the eyes are never the HUD's target. */
+        if (hud == 1 && !is_perspective(g_proj[g_proj_top]) && !g_replaying &&
+            !(g_game_fb == 0 && world_mode_immersive())) g_hud_fb_next = g_game_fb;
         if (!persp && !g_replaying) { if (hud) { if (!g_hud2d) g_hud_lens = g_last_persp[0]; g_hud2d++; } else g_pass2d++; }
         if (hud == 1 && !persp && !g_replaying && sight_draw(c, n)) return 1;
         if (hud == 1 && !persp && letterbox_bar(c, n)) return 1;
