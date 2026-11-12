@@ -1493,6 +1493,26 @@ void xr_frame_begin(void)
             }
         }
     }
+    {   /* LINDBERGH_XR_FIXED_HEAD=1 (tests): the head held level, looking straight
+         * ahead, at the anchor (where the game camera is put) - every unattended run
+         * then shows the same picture whatever way the headset lies on the desk
+         * (with LINDBERGH_VT3_VIEW_TURN for other directions) */
+        static int on = -1; static XrVector3f c0; static float half; static int have;
+        if (on < 0) { const char *v = getenv("LINDBERGH_XR_FIXED_HEAD"); on = v && *v == '1'; }
+        if (on && views_ok) {
+            if (!have) {
+                XrVector3f a = views[0].pose.position, b = views[1].pose.position;
+                c0 = (XrVector3f){ 0, 0, 0 };       /* the anchored head (anchor_head: the game camera's place) */
+                half = sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)) / 2;
+                have = 1;
+                fprintf(stderr, "[xr] head held fixed at the anchor, level, facing ahead, eyes %.1f mm apart (LINDBERGH_XR_FIXED_HEAD)\n", half * 2000);
+            }
+            for (int i = 0; i < 2; i++) {
+                views[i].pose.orientation = (XrQuaternionf){ 0, 0, 0, 1 };
+                views[i].pose.position = (XrVector3f){ c0.x + (i ? half : -half), c0.y, c0.z };
+            }
+        }
+    }
     {   /* The game swung its camera round (a spider on the tailgate): its new
          * view goes where the player is looking, not where the game was
          * anchored - looking off to one side, they would face the jeep's
