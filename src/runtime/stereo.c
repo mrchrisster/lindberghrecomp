@@ -346,16 +346,28 @@ float stereo_eye_x(int view)
  *     where they were in the rally, the players and the ball replay in front
  *     of you. The dolly / step back / height as in the rally, along the
  *     anchor's up.
- *   Camera ("camera view", option B): you stand where the game's camera is,
- *     seeing 1:1 (the eyes' own lens): C = L inv(V_r), L a level view at the
- *     camera's eye looking along the shot's heading - taken at the shot's
- *     first frame, horizon level, no turn forced on you (your head turns the
- *     view). LINDBERGH_VT3_REPLAY_PAN=1: the heading follows the camera's
- *     every frame (still level); =2: the camera's own view, pitch and all.
- *     No dolly / step back / height. A dip to black and back at the start,
- *     at each cut (a new shot: the camera jumps, or the replay's 30-frame
- *     rewind) and at the end (LINDBERGH_VT3_REPLAY_FADE=<frames to clear>,
- *     0 none; default 12, after 3 black).
+ *   Camera ("camera view", option B; T13): framed like the broadcast shot.
+ *     The view looks where the game camera looks (its view's forward, pitch
+ *     included) from a point moved forward along that line toward the
+ *     camera's target (camera+0x44): a headset cannot zoom, so the distance
+ *     is cut toward the one at which the subject has the size the long lens
+ *     gave it - d' = d tan(game half fov) / tan(eye half fov), the eye
+ *     placed at d - k (d - d') (LINDBERGH_VT3_REPLAY_CLOSE=k, default 0.6) -
+ *     never nearer the target than 2 m, under the ground, through the net
+ *     or within 0.8 m of a player. The close-up (mode 7): 2.8 m from its
+ *     target, facing it. Default: fixed per shot (eye and aim taken at the
+ *     shot's first frame; your head turns the view); LINDBERGH_VT3_REPLAY_FOLLOW=1
+ *     re-placed every frame, following the camera's aim;
+ *     LINDBERGH_VT3_REPLAY_LEVEL=1 the same place at standing height (1.7 m)
+ *     with a level gaze. No dolly / step back / height. A dip to black at the
+ *     start (held 16 frames at a replay's start, over the game's intro wipe),
+ *     at each cut (the camera jumps, or the replay's 30-frame rewind) and at
+ *     the end (LINDBERGH_VT3_REPLAY_FADE=<frames to clear>, 0 none; default 12).
+ *     Before T13: a level view at the camera's own place (players missing
+ *     below the view from the high corner cameras).
+ * The panel offers Off / Flat screen / Camera view; World is kept for tests
+ * (env world) only - the owner found it confusing when the angle does not
+ * change.
  * Fed on the GL thread, in order with the draws (hle_sega.c vt3_cam_job ->
  * stereo_vt3_view), like the game's camera itself. */
 static struct {
@@ -366,10 +378,15 @@ static struct {
     int notrans;            /* no dolly / step back / height (Camera) */
     unsigned mode;
     float last_pos[3], last_fwd[3]; int have_last;
-    float heading[3];       /* Camera: the shot's level heading, world */
+    float heading[3];       /* (unused since T13) */
+    float shot_eye[3], shot_dir[3];   /* Camera: the eye and gaze of the shot (fixed per shot) */
     unsigned fade_at; int fading;
     unsigned shots;
     unsigned shot_frame;
+    /* T14: the court camera's snap at each point's start (StartLoop puts it
+     * ~3-11 m nearer and 3 m lower, then it glides back over ~1.5 s; on TV a
+     * cross-fade hid it): the drawn eye eased from where it was instead */
+    int glide; unsigned glide_at; float glide_from[3], glide_eye[3];
     unsigned mode_seen, mode_frame;   /* the mode last noted, the frame it began: the game's first
                                        * frame in a new mode still has the old camera's view */
 } g_rv;
@@ -394,12 +411,13 @@ static int rv_kind(unsigned mode)
     }
     return k == LG_VIEW_WORLD || k == LG_VIEW_CAMERA ? k : 0;
 }
-static void rv_fade_start(const char *why)
+static int g_rv_hold = 3;               /* black frames of the current dip */
+static void rv_fade_start(const char *why, int hold)
 {
     static int frames = -2;
     if (frames == -2) { const char *v = getenv("LINDBERGH_VT3_REPLAY_FADE"); frames = v && *v ? atoi(v) : 12; }
     if (frames <= 0) return;
-    g_rv.fade_at = g_frame; g_rv.fading = 1;
+    g_rv.fade_at = g_frame; g_rv.fading = 1; g_rv_hold = hold;
     if (rv_log()) fprintf(stderr, "[rview] frame %u: dip to black (%s)\n", g_frame, why);
 }
 /* 0..1: the black over this frame (3 frames black, then clearing) */
@@ -410,34 +428,137 @@ static float rv_fade_alpha(void)
     if (!g_rv.fading || frames <= 0) return 0;
     int d = (int)(g_frame - g_rv.fade_at);
     if (d < 0) d = 0;
-    if (d < 3) return 1;
-    float a = 1.0f - (float)(d - 2) / (float)(frames + 1);
+    if (d < g_rv_hold) return 1;
+    float a = 1.0f - (float)(d - g_rv_hold + 1) / (float)(frames + 1);
     if (a <= 0) { g_rv.fading = 0; return 0; }
     return a;
 }
-/* a level world -> eye view at pos looking along the level heading h */
-static void rv_level_view(const float pos[3], const float h[3], float L[16])
+/* a world -> eye view at pos looking along d (unit), no roll (world up Y) */
+static void rv_look_at(const float pos[3], const float d[3], float L[16])
 {
-    const float R[3][3] = { { -h[2], 0, h[0] }, { 0, 1, 0 }, { -h[0], 0, -h[2] } };   /* rows: right, up, back */
+    float r[3] = { -d[2], 0, d[0] }, rl = sqrtf(r[0] * r[0] + r[2] * r[2]);
+    if (rl < 1e-4f) { r[0] = 1; r[2] = 0; rl = 1; }
+    r[0] /= rl; r[2] /= rl;
+    const float u[3] = { r[1] * d[2] - r[2] * d[1], r[2] * d[0] - r[0] * d[2], r[0] * d[1] - r[1] * d[0] };
+    const float R[3][3] = { { r[0], r[1], r[2] }, { u[0], u[1], u[2] }, { -d[0], -d[1], -d[2] } };   /* rows: right, up, back */
     mat_identity(L);
-    for (int r = 0; r < 3; r++) {
-        for (int c = 0; c < 3; c++) L[c * 4 + r] = R[r][c];
-        L[12 + r] = -(R[r][0] * pos[0] + R[r][1] * pos[1] + R[r][2] * pos[2]);
+    for (int i = 0; i < 3; i++) {
+        for (int c = 0; c < 3; c++) L[c * 4 + i] = R[i][c];
+        L[12 + i] = -(R[i][0] * pos[0] + R[i][1] * pos[1] + R[i][2] * pos[2]);
     }
+}
+static float v3dot(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+/* Camera view's eye for a camera at pos looking along fwd at a target t
+ * (camera+0x44; NULL or off the line of sight: 30 m ahead), its lens
+ * (vertical, proj[5]); players' roots pl. Writes the eye and the gaze. */
+static void rv_frame_shot(unsigned mode, const float pos[3], const float fwd[3], const float *t, float lens,
+                          const float (*pl)[3], int npl, float eye[3], float dir[3], float *dist, float *dist_eye)
+{
+    static float close = -1; static int level = -1;
+    if (close < 0) { const char *v = getenv("LINDBERGH_VT3_REPLAY_CLOSE"); close = v && *v ? (float)atof(v) : 0.6f;
+                     if (close < 0) close = 0; if (close > 1) close = 1;
+                     v = getenv("LINDBERGH_VT3_REPLAY_LEVEL"); level = v && *v == '1'; }
+    float d = 300;                              /* the target's depth along the line of sight */
+    if (t) {
+        float to[3] = { t[0] - pos[0], t[1] - pos[1], t[2] - pos[2] };
+        float along = v3dot(to, fwd), len = sqrtf(v3dot(to, to));
+        if (along > 10.0f && along > 0.9f * len) d = along;
+    }
+    const float tan_eye = g_tan[0][2] > 0 && g_tan[0][3] > 0 ? 0.5f * (g_tan[0][2] + g_tan[0][3]) : 1.0f;
+    const float tan_game = lens > 0.1f ? 1.0f / lens : tan_eye;
+    const float dm = d * tan_game / tan_eye;    /* where the subject has the long lens's size */
+    float de = mode == 7 ? 28.0f : d - close * (d - dm);
+    if (de < 20.0f) de = 20.0f;
+    if (de > d) de = d;
+    float s = d - de;                           /* how far forward along the line */
+    for (int i = 0; i < 3; i++) eye[i] = pos[i] + fwd[i] * s;
+    /* not under the ground */
+    if (eye[1] < 5.0f && fwd[1] < -1e-3f) { s = (pos[1] - 5.0f) / -fwd[1]; if (s < 0) s = 0; for (int i = 0; i < 3; i++) eye[i] = pos[i] + fwd[i] * s; }
+    /* not through the net (z = 0 between the posts, ~1 m high) */
+    if (pos[2] * eye[2] < 0) {
+        float u = pos[2] / (pos[2] - eye[2]), cx = pos[0] + (eye[0] - pos[0]) * u, cy = pos[1] + (eye[1] - pos[1]) * u;
+        if (fabsf(cx) < 70.0f && cy < 12.0f) {
+            s *= u; s -= 5.0f / (fabsf(fwd[2]) > 0.05f ? fabsf(fwd[2]) : 1.0f); if (s < 0) s = 0;
+            for (int i = 0; i < 3; i++) eye[i] = pos[i] + fwd[i] * s;
+        }
+    }
+    /* not inside a player (0.8 m round each, up to 2.2 m high): back along the
+     * line until clear, or - when that ends at the camera (a player right in
+     * front of it) - forward past them, keeping 2 m from the target */
+    {
+        #define RV_INSIDE(sv) ({ int in_ = 0; for (int k = 0; k < npl; k++) { \
+            float ex_ = pos[0] + fwd[0] * (sv), ey_ = pos[1] + fwd[1] * (sv), ez_ = pos[2] + fwd[2] * (sv); \
+            float dx_ = ex_ - pl[k][0], dz_ = ez_ - pl[k][2]; \
+            if (dx_ * dx_ + dz_ * dz_ < 8.0f * 8.0f && ey_ < pl[k][1] + 22.0f) in_ = 1; } in_; })
+        if (RV_INSIDE(s)) {
+            float sb = s, sf = s;
+            while (sb > 0 && RV_INSIDE(sb)) sb -= 2.0f;
+            while (sf < d - 20.0f && RV_INSIDE(sf)) sf += 2.0f;
+            if (sb > 0 && !RV_INSIDE(sb)) s = sb;
+            else if (!RV_INSIDE(sf)) s = sf;
+            else s = 0;
+            for (int i = 0; i < 3; i++) eye[i] = pos[i] + fwd[i] * s;
+        }
+        #undef RV_INSIDE
+    }
+    memcpy(dir, fwd, 3 * sizeof(float));
+    if (level) {                                /* standing height, level gaze */
+        eye[1] = 17.0f;
+        float hl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+        if (hl > 0.05f) { dir[0] = fwd[0] / hl; dir[1] = 0; dir[2] = fwd[2] / hl; }
+    }
+    *dist = d; *dist_eye = d - s;
+}
+/* how many players (a point 1 m above each root) a view L shows to a head
+ * looking straight ahead; *subject: whether the one nearest the target is */
+static int rv_players_seen(const float L[16], const float (*pl)[3], int npl, const float *t, int *subject)
+{
+    int n = 0, near = -1; float best = 1e30f;
+    for (int k = 0; k < npl && t; k++) {
+        float dx = pl[k][0] - t[0], dz = pl[k][2] - t[2];
+        if (dx * dx + dz * dz < best) { best = dx * dx + dz * dz; near = k; }
+    }
+    *subject = -1;
+    for (int k = 0; k < npl; k++) {
+        const float p[3] = { pl[k][0], pl[k][1] + 10.0f, pl[k][2] };
+        float q[3];
+        for (int i = 0; i < 3; i++) q[i] = L[i] * p[0] + L[4 + i] * p[1] + L[8 + i] * p[2] + L[12 + i];
+        if (q[2] < -1.0f) {
+            const float x = q[0] / -q[2], y = q[1] / -q[2];
+            if (x > -g_tan[0][0] && x < g_tan[0][1] && y > -g_tan[0][2] && y < g_tan[0][3]) { n++; if (k == near) *subject = 1; }
+        }
+        if (k == near && *subject < 0) *subject = 0;
+    }
+    return n;
 }
 /* VR's camera height when the human's player is at the far end (hle_sega.c
  * vt3_far_end_note; GL thread, with the camera): always High (+2 m), the
  * panel's Camera height row applies at the near end. An env height
  * (LINDBERGH_VT3_HEIGHT, tests) wins; LINDBERGH_VT3_FAR_HIGH=0 turns it off. */
 static int g_vt3_far_end;
-void stereo_vt3_far_end(int at_far) { g_vt3_far_end = at_far; }
-static float vt3_height(void)
+static float g_h_from = -1000; static unsigned g_h_at;    /* a height change eased over 60 frames (T14) */
+static float vt3_height_target(void)
 {
     static int on = -1;
     if (on < 0) { const char *v = getenv("LINDBERGH_VT3_FAR_HIGH"); on = !(v && *v == '0'); }
     return on && g_vt3_far_end && !world_mode_pinned(WM_HEIGHT) ? 20.0f : world_mode_height();
 }
-void stereo_vt3_view(unsigned mode, const float *view, int cut)
+static float vt3_height(void);
+void stereo_vt3_far_end(int at_far)
+{
+    if (at_far != g_vt3_far_end) { g_h_from = vt3_height(); g_h_at = g_frame; }
+    g_vt3_far_end = at_far;
+}
+static float vt3_height(void)
+{
+    const float h = vt3_height_target();
+    if (g_h_from > -999 && g_frame - g_h_at < 60) {
+        float t = (float)(g_frame - g_h_at) / 60.0f; t = t * t * (3 - 2 * t);
+        return g_h_from + (h - g_h_from) * t;
+    }
+    return h;
+}
+void stereo_vt3_view(unsigned mode, const float *view, int cut, const float *proj, const float *target, const float (*pl)[3], int npl)
 {
     float V[16];
     memset(V, 0, sizeof V);
@@ -471,8 +592,8 @@ void stereo_vt3_view(unsigned mode, const float *view, int cut)
                     g_frame, mode, pos[0], pos[1], pos[2]);
         }
     } else if (k == LG_VIEW_CAMERA) {
-        static int pan = -1;
-        if (pan < 0) { const char *v = getenv("LINDBERGH_VT3_REPLAY_PAN"); pan = v && *v ? atoi(v) : 0; }
+        static int follow = -1;
+        if (follow < 0) { const char *v = getenv("LINDBERGH_VT3_REPLAY_FOLLOW"); follow = v && *v == '1'; }
         const int start = was != k || mode != g_rv.mode;
         int shot = start || cut || !g_rv.have_last || (g_frame - g_rv.mode_frame == 1 && g_rv.shot_frame != g_frame);
         if (!shot) {
@@ -480,33 +601,63 @@ void stereo_vt3_view(unsigned mode, const float *view, int cut)
             for (int i = 0; i < 3; i++) { d2 += (pos[i] - g_rv.last_pos[i]) * (pos[i] - g_rv.last_pos[i]); dt += fwd[i] * g_rv.last_fwd[i]; }
             shot = d2 > 100.0f * 100.0f || dt < 0.94f;   /* 10 m or 20 degrees in a frame: a cut */
         }
-        float hl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
-        if ((shot || pan >= 1) && hl > 0.05f) { g_rv.heading[0] = fwd[0] / hl; g_rv.heading[1] = 0; g_rv.heading[2] = fwd[2] / hl; }
-        else if (shot && hl <= 0.05f) { g_rv.heading[0] = 0; g_rv.heading[1] = 0; g_rv.heading[2] = -1; }
+        float d = 0, de = 0;
+        if (shot || follow)
+            rv_frame_shot(mode, pos, fwd, target, proj ? proj[5] : 0, pl, npl, g_rv.shot_eye, g_rv.shot_dir, &d, &de);
+        float L[16];
+        rv_look_at(g_rv.shot_eye, g_rv.shot_dir, L);
         if (shot && stale) {
-            if (start) rv_fade_start("start");      /* black while the old view is still drawn */
+            if (start) rv_fade_start("start", mode == 6 ? 16 : 3);   /* black while the old view is still drawn; a replay's over the game's intro wipe */
         } else if (shot) {
             /* a new shot within 2 frames of a dip (the first real frame of a new
              * camera mode; the camera's move a frame after the replay's rewind):
              * taken inside that dip, not another */
             const int settle = g_rv.fading && g_frame - g_rv.fade_at <= 2;
+            int subj = -1;
             g_rv.shots++; g_rv.shot_frame = g_frame;
-            fprintf(stderr, "[rview] frame %u: camera mode %u from the camera's place, shot %u at %.0f %.0f %.0f heading %.2f %.2f%s\n",
-                    g_frame, mode, g_rv.shots, pos[0], pos[1], pos[2], g_rv.heading[0], g_rv.heading[2],
-                    cut ? " (rewind)" : settle ? " (settled in the dip)" : start ? " (start)" : " (cut)");
-            if (!settle) rv_fade_start(start ? "start" : cut ? "rewind" : "cut");
+            fprintf(stderr, "[rview] frame %u: camera mode %u shot %u%s: camera %.0f %.0f %.0f aim %.2f %.2f %.2f lens %.2f, "
+                            "target %.0f ahead, eye %.0f %.0f %.0f (%.0f from it), players in view %d/%d, the target's player %s\n",
+                    g_frame, mode, g_rv.shots, cut ? " (rewind)" : settle ? " (in the dip)" : start ? " (start)" : " (cut)",
+                    pos[0], pos[1], pos[2], fwd[0], fwd[1], fwd[2], proj ? proj[5] : 0, d,
+                    g_rv.shot_eye[0], g_rv.shot_eye[1], g_rv.shot_eye[2], de, rv_players_seen(L, pl, npl, target, &subj), npl,
+                    subj > 0 ? "in view" : subj == 0 ? "OUT OF VIEW" : "-");
+            if (!settle) rv_fade_start(start ? "start" : cut ? "rewind" : "cut", start && mode == 6 ? 16 : 3);
         }
-        if (pan == 2) { mat_identity(g_rv.C); g_rv.up[0] = view[1]; g_rv.up[1] = view[5]; g_rv.up[2] = view[9]; }
-        else {
-            float L[16];
-            rv_level_view(pos, g_rv.heading, L);
-            mat_mul(g_rv.C, L, inv);
-            g_rv.up[0] = 0; g_rv.up[1] = 1; g_rv.up[2] = 0;
-        }
+        mat_mul(g_rv.C, L, inv);
+        g_rv.up[0] = L[1]; g_rv.up[1] = L[5]; g_rv.up[2] = L[9];
         g_rv.notrans = 1;
     }
-    if (was == LG_VIEW_CAMERA && k != LG_VIEW_CAMERA) rv_fade_start("end");
+    if (was == LG_VIEW_CAMERA && k != LG_VIEW_CAMERA) rv_fade_start("end", 3);
+    {   /* T14: the court camera's snap at a point's start - the drawn eye eased
+         * from where it was over 60 frames (same aim; a turn or a cut over
+         * 20 m stays a cut). LINDBERGH_VT3_START_GLIDE=0 off. */
+        static int on = -1;
+        if (on < 0) { const char *v = getenv("LINDBERGH_VT3_START_GLIDE"); on = world_mode_immersive() && !(v && *v == '0'); }
+        float d2 = 0, dt = 0;
+        for (int i = 0; i < 3; i++) { d2 += (pos[i] - g_rv.last_pos[i]) * (pos[i] - g_rv.last_pos[i]); dt += fwd[i] * g_rv.last_fwd[i]; }
+        if (on && !k && (mode == 1 || mode == 2) && g_rv.have_last && g_rv.mode == mode && !stale &&
+            d2 > 20.0f * 20.0f && d2 < 200.0f * 200.0f && dt > 0.9994f) {
+            if (!g_rv.glide) memcpy(g_rv.glide_from, g_rv.last_pos, sizeof pos);
+            else memcpy(g_rv.glide_from, g_rv.glide_eye, sizeof pos);
+            g_rv.glide = 1; g_rv.glide_at = g_frame;
+            fprintf(stderr, "[vt3] frame %u: court camera snapped %.1f m (point start) - eased over 60 frames\n", g_frame, sqrtf(d2) / 10.0f);
+        }
+        if (g_rv.glide && (k || !(mode == 1 || mode == 2) || g_frame - g_rv.glide_at >= 60)) g_rv.glide = 0;
+        if (g_rv.glide) {
+            float t = (float)(g_frame - g_rv.glide_at) / 60.0f; t = t * t * (3 - 2 * t);
+            for (int i = 0; i < 3; i++) g_rv.glide_eye[i] = g_rv.glide_from[i] + (pos[i] - g_rv.glide_from[i]) * t;
+            float Vd[16]; memcpy(Vd, V, sizeof Vd);          /* the camera's view, moved to the eased eye */
+            for (int r = 0; r < 3; r++) Vd[12 + r] = -(V[r] * g_rv.glide_eye[0] + V[4 + r] * g_rv.glide_eye[1] + V[8 + r] * g_rv.glide_eye[2]);
+            float iv[16];
+            if (mat_invert(V, iv)) { mat_mul(g_rv.C, Vd, iv); g_rv.up[0] = view[1]; g_rv.up[1] = view[5]; g_rv.up[2] = view[9]; g_rv.notrans = 0; }
+            else g_rv.glide = 0;
+        }
+    }
     if (was && !k) fprintf(stderr, "[rview] frame %u: camera mode %u: the view back as it was\n", g_frame, mode);
+    static int lg3 = -1;     /* LINDBERGH_VT3_CAMMODE_LOG=3: every world camera note, any mode (point-start glitch hunt) */
+    if (lg3 < 0) { const char *v = getenv("LINDBERGH_VT3_CAMMODE_LOG"); lg3 = v && *v == '3'; }
+    if (lg3) fprintf(stderr, "[camnote] frame %u: mode %u eye %.0f %.0f %.0f fwd %.2f %.2f %.2f lens %.2f\n",
+                     g_frame, mode, pos[0], pos[1], pos[2], fwd[0], fwd[1], fwd[2], proj ? proj[5] : 0);
     if (rv_log() && (mode == 6 || mode == 7))
         fprintf(stderr, "[rview] frame %u: mode %u view %d eye %.0f %.0f %.0f fwd %.2f %.2f %.2f\n",
                 g_frame, mode, k, pos[0], pos[1], pos[2], fwd[0], fwd[1], fwd[2]);
@@ -616,7 +767,7 @@ static void eye_projection(const float *p, int hud, int which, float *out)
              * out - they vanished. Those keep the old 0.05. */
             float n2 = (n > 10.0f ? 0.05f : nk) * n, f2 = 4.0f * f;
             /* a replay / close-up in the world (stereo_vt3_view): not the pixel camera's draws */
-            const int rv = g_rv.active && n <= 10.0f;
+            const int rv = (g_rv.active || g_rv.glide) && n <= 10.0f;
             q[10] = -(f2 + n2) / (f2 - n2); q[14] = -2.0f * f2 * n2 / (f2 - n2);
             lg_stereo_eye_projection(q,hud,&eye,out);
             {   /* LINDBERGH_VT3_VIEW_TURN=<yaw>[,<pitch>] degrees (test only): the eyes

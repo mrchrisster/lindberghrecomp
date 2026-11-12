@@ -8,8 +8,9 @@ enum { LASER_ON, LASER_DOT, LASER_OFF };
 enum { LG_SKY_OFF, LG_SKY_STADIUM, LG_SKY_PAINTED };
 /* Immersive's replays and point cutaways (imm_replays, imm_cutaways): off, or
  * shown and how - the flat picture on the screen, in the world from where you
- * are, or from the game camera's own place (vr.cfg off|flat|world|camera; an
- * old "on" is flat). Classic's are on / off (always flat). */
+ * are (tests only since T13), or from the game camera's place (vr.cfg
+ * off|flat|camera; an old "on" is flat, "world" camera). Classic's are on /
+ * off (always flat). */
 enum { LG_VIEW_OFF, LG_VIEW_FLAT, LG_VIEW_WORLD, LG_VIEW_CAMERA };
 typedef struct {
     float scale,screen,aim;
@@ -51,10 +52,10 @@ typedef struct {
 /* ... dual off, stats panel on (vr.cfg "stats off" hides it), medium foveation, arcade overlays shown, replays on;
  * Classic mode, shadows 1024, cutaways on; Immersive: replays, overlays and cutaways off,
  * 200 units closer and 50 back (fixed: no rows since T12), the stadium's own sky, shadows
- * 2048, the camera's own height (Low). (The stands' stretch,
+ * 2048, Camera height Medium (+1 m; T13). (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,0}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10}
 /* Immersive's (VR's) Camera height choices (immersive.height), game units
  * (0.1 m): Low / Medium / High; a stored value off the list is read as the
  * nearest (xr_settings_nearest; the first of two equally near) - an older

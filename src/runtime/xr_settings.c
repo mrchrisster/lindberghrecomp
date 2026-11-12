@@ -8,9 +8,10 @@ static const char *const SIGHT_NAME[]={"none","reddot","holo"};
 static const char *const FOVEATION_NAME[]={"off","low","medium","high"};
 static const char *const VIEW_NAME[]={"off","flat","world","camera"};
 static const char *view_name(int v) { return VIEW_NAME[v < LG_VIEW_OFF || v > LG_VIEW_CAMERA ? LG_VIEW_OFF : v]; }
-/* an Immersive replays / cutaways value: off|flat|world|camera, an old "on" = flat */
+/* an Immersive replays / cutaways value: off|flat|camera, an old "on" = flat, "world" = camera */
 static int view_value(const char *v)
 {
+    if (!strcmp(v, "world")) return LG_VIEW_CAMERA;    /* "In the world" is gone from the panel (T13): its old choice = Camera view */
     for (int i = 0; i < 4; i++) if (!strcmp(v, VIEW_NAME[i])) return i;
     return !strcmp(v, "on") ? LG_VIEW_FLAT : LG_VIEW_OFF;
 }

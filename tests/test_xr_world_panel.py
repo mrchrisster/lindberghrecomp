@@ -56,7 +56,7 @@ int main(void) {
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
     assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
-    assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Low"));
+    assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Medium"));   /* default Medium (T13) */
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
     assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
     assert(!strcmp(it[XW_SKY].label, "Sky"));
@@ -64,16 +64,15 @@ int main(void) {
     /* the non-running mode's page: saved, not live */
     fx = xw_choose(&w, &c, XW_REPLAYS);
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
-    /* Immersive's Replays / Point cutaways: Off > Flat screen > In the world > Camera view > Off */
+    /* VR's Replays / Point cutaways: Off > Flat screen > Camera view > Off (no "In the world" since T13) */
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen"));
-    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_WORLD);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "In the world"));
     xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_CAMERA);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Camera view"));
     xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.replays == 1);
-    xw_choose(&w, &c, XW_CUTAWAYS); xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_WORLD);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_CUTAWAYS].value, "In the world") && !strcmp(it[XW_CUTAWAYS].label, "Point cutaways"));
-    xw_choose(&w, &c, XW_CUTAWAYS); xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_OFF);
+    xw_choose(&w, &c, XW_CUTAWAYS); xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_CAMERA);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_CUTAWAYS].value, "Camera view") && !strcmp(it[XW_CUTAWAYS].label, "Point cutaways"));
+    xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_OFF);
+    c.imm_cutaways = LG_VIEW_WORLD; xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_OFF);   /* a stray world: on to Off */
     xw_choose(&w, &c, XW_REPLAYS);
     /* cycles */
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_PAINTED);
@@ -82,11 +81,11 @@ int main(void) {
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SKY].value, "Off"));
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_STADIUM);
     assert(xw_choose(&w, &c, XW_STEPBACK) == 0 && xw_choose(&w, &c, XW_DOLLY) == 0);    /* gone */
-    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "Medium"));
     xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 20);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "High"));
     xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 0);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "Low"));
+    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);
     c.imm_height = -20; xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);   /* an old -2 m: from Low */
     xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 4096);
     xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);
@@ -94,7 +93,7 @@ int main(void) {
     fx = xw_choose(&w, &c, XW_RESTORE); assert(w.restore_armed && !(fx & XP_SAVE));
     xw_items(&w, &c, it); assert(!strcmp(it[XW_RESTORE].value, "Pull again to restore"));
     fx = xw_choose(&w, &c, XW_RESTORE); assert((fx & XP_SAVE) && !w.restore_armed);
-    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 0 && c.imm_shadow == 2048 && c.imm_replays == 0);
+    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 10 && c.imm_shadow == 2048 && c.imm_replays == 0);
     xw_choose(&w, &c, XW_RESTORE); xw_choose(&w, &c, XW_SKY); assert(!w.restore_armed);    /* another row disarms */
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_MAIN);
     /* the running mode's page: live; a pinned row shows the run's value and ignores clicks */

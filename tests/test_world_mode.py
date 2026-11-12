@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
         imm = "mode immersive\n"
         self.assertEqual(self.views(imm), "0 1 0 1 0 0")                                          # off, flat
         self.assertEqual(self.views(imm + "immersive.replays on\nimmersive.cutaways flat\n"), "1 1 1 1 0 0")
-        self.assertEqual(self.views(imm + "immersive.replays world\nimmersive.cutaways camera\n"), "1 2 1 3 0 0")
+        self.assertEqual(self.views(imm + "immersive.replays world\nimmersive.cutaways camera\n"), "1 3 1 3 0 0")   # stored world = camera (T13)
         # an on/off pin alone: flat, whatever vr.cfg says (a test does not depend on it)
         self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "1"}), "1 1 0 1 1 0")
         self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "0"}), "0 1 0 1 1 0")
@@ -106,7 +106,7 @@ int main(int argc, char **argv) {
         # Classic: on/off only, always flat; its view variables do nothing
         self.assertEqual(self.views("replays on\n", {"LINDBERGH_VT3_REPLAY_VIEW": "world"}), "1 1 1 1 1 0")
         _, log = self.run_wm(imm + "immersive.replays world\n")
-        self.assertIn("replays world (vr.cfg)", log); self.assertIn("cutaways off (default)", log)
+        self.assertIn("replays camera (vr.cfg)", log); self.assertIn("cutaways off (default)", log)
 
     def test_defaults_are_classic(self):
         out, log = self.run_wm()

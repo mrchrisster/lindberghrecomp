@@ -10,7 +10,7 @@
  * cutaways, arcade overlays, shadow quality (replays and cutaways On / Off).
  * VR advanced: camera height (Low / Medium / High; your player at the far
  * end is always High - stereo.c), the same three (replays and cutaways Off /
- * Flat screen / In the world / Camera view), sky (Stadium / Painted / Off),
+ * Flat screen / Camera view), sky (Stadium / Painted / Off),
  * shadow quality. Camera closer and Step back are gone (fixed 20 m / 5 m,
  * T12). Replays, cutaways, overlays, camera height and sky are live for the
  * running mode; shadow quality and the mode apply on restart. A row whose env
@@ -94,7 +94,8 @@ static const char *view_label(int v)
 {
     return v == LG_VIEW_FLAT ? "Flat screen" : v == LG_VIEW_WORLD ? "In the world" : v == LG_VIEW_CAMERA ? "Camera view" : "Off";
 }
-static int view_next(int v) { return v >= LG_VIEW_CAMERA || v < LG_VIEW_OFF ? LG_VIEW_OFF : v + 1; }   /* Off > Flat > World > Camera > Off */
+/* Off > Flat screen > Camera view > Off ("In the world" left out, T13: confusing when the angle does not change) */
+static int view_next(int v) { return v == LG_VIEW_OFF ? LG_VIEW_FLAT : v == LG_VIEW_FLAT ? LG_VIEW_CAMERA : LG_VIEW_OFF; }
 static const char *height_label(float units)
 {
     const int v = (int)lroundf(units);

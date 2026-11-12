@@ -1046,23 +1046,44 @@ static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 
  * whether the replay rewound since the last (replay::reverseFrame: a new shot
  * of the same moment), for the replays and close-ups drawn in the world
  * (stereo.c stereo_vt3_view) */
-typedef struct { float p[16], v[12]; int feeding; unsigned mode; int cut, at_far; } Vt3Cam;
+typedef struct { float p[16], v[12]; int feeding; unsigned mode; int cut, at_far;
+                 float tgt[3]; int has_tgt; float pl[4][3]; int npl; } Vt3Cam;   /* + the camera's target, the players' roots (Camera view) */
 static void vt3_cam_job(void *arg)
 {
     Vt3Cam *k = (Vt3Cam *)arg;
     extern int arb_note_projection(const float *proj, const float *view); extern int g_vt3_feeding;
-    extern void stereo_vt3_view(unsigned mode, const float *view, int cut);
+    extern void stereo_vt3_view(unsigned mode, const float *view, int cut, const float *proj, const float *target, const float (*pl)[3], int npl);
     int was = g_vt3_feeding; g_vt3_feeding = k->feeding;
     int took = arb_note_projection(k->p, k->v);
     g_vt3_feeding = was;
     if (took == 1 && !k->feeding) {
         extern void stereo_vt3_far_end(int at_far);
-        stereo_vt3_view(k->mode, k->v, k->cut);
+        float P[16];        /* GL's layout, as arbprog.c takes it */
+        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) P[c * 4 + r] = k->p[r * 4 + c];
+        stereo_vt3_view(k->mode, k->v, k->cut, P, k->has_tgt ? k->tgt : NULL, (const float (*)[3])k->pl, k->npl);
         stereo_vt3_far_end(k->at_far);
     }
     free(k);
 }
 static int g_vt3_far;           /* the human's player at the far end of the court (vt3_far_end_note) */
+static uint32_t g_vt3_camera;   /* the camera object (camera::gameRoutine's / initUva's this): its mode at +0x38 */
+static float vt3_rf(uint32_t a) { uint32_t u = rd32(a); float f; memcpy(&f, &u, 4); return f; }
+/* the camera's target (+0x44, written by camera::replay / winlose) and the
+ * players' roots (+0x18 of each in [g_pTennis+4]) for the Camera view */
+static void vt3_camera_extras(Vt3Cam *k)
+{
+    if (g_vt3_camera) {
+        for (int i = 0; i < 3; i++) k->tgt[i] = vt3_rf(g_vt3_camera + 0x44 + 4u * (uint32_t)i);
+        k->has_tgt = isfinite(k->tgt[0]) && isfinite(k->tgt[1]) && isfinite(k->tgt[2]);
+    }
+    uint32_t t = rd32(VT3_G_PTENNIS), n = t ? rd32(t) : 0, arr = t ? rd32(t + 4) : 0;
+    for (uint32_t i = 0; i < n && i < 4 && arr; i++) {
+        uint32_t pl = rd32(arr + 4 * i);
+        if (!pl) continue;
+        for (int c = 0; c < 3; c++) k->pl[k->npl][c] = vt3_rf(pl + 0x18 + 4u * (uint32_t)c);
+        k->npl++;
+    }
+}
 static void vt3_note_projection(const float *p, const float *v, int feeding, unsigned mode, int cut)
 {
     extern int glq_active(void); extern uint32_t glq_job(void (*job)(void *), void *arg);
@@ -1071,6 +1092,8 @@ static void vt3_note_projection(const float *p, const float *v, int feeding, uns
     Vt3Cam *k = (Vt3Cam *)malloc(sizeof *k);
     if (!k) return;
     memcpy(k->p, p, sizeof k->p); memcpy(k->v, v, sizeof k->v); k->feeding = feeding; k->mode = mode; k->cut = cut; k->at_far = g_vt3_far;
+    k->has_tgt = 0; k->npl = 0;
+    if (!feeding && (mode == 6 || mode == 7)) vt3_camera_extras(k);
     if (queued && glq_active()) glq_job(vt3_cam_job, k); else vt3_cam_job(k);
 }
 /* VR's camera height at the far end (T12, owner: "on the backside of the
@@ -1103,10 +1126,24 @@ static void vt3_far_end_note(unsigned mode, const float *v)
     }
 }
 static void (*g_vt3_proj_cam)(CPU *);
-static uint32_t g_vt3_camera;   /* the camera object (camera::gameRoutine's / initUva's this): its mode at +0x38 */
 /* replay::reverseFrame (a two-pass replay shot's rewind): runs inside the
  * camera's routine, on one of the game's worker threads - only counted here,
  * handed on by the main thread's next camera (h_vt3_proj_cam) */
+/* LINDBERGH_VT3_REPLAY_TYPE=<0..6>|cycle (test): camera::setReplayType's type
+ * replaced - one type, or 0, 1, 2 ... 6 in turn, replay after replay */
+static void (*g_vt3_set_replay_type)(CPU *);
+static void h_vt3_set_replay_type(CPU *c)
+{
+    static int want = -2, next;
+    if (want == -2) { const char *v = getenv("LINDBERGH_VT3_REPLAY_TYPE"); want = !v || !*v ? -1 : !strcmp(v, "cycle") ? 7 : atoi(v); }
+    if (want >= 0) {
+        extern unsigned g_frame;
+        const uint32_t type = want == 7 ? (uint32_t)(next++ % 7) : (uint32_t)want;
+        fprintf(stderr, "[vt3] frame %u: replay type %u -> %u (LINDBERGH_VT3_REPLAY_TYPE)\n", g_frame, rd32(c->esp + 4), type);
+        wr32(c->esp + 4, type);
+    }
+    push32(c, 0xDEADBEEFu); g_vt3_set_replay_type(c);
+}
 static _Atomic unsigned g_vt3_rewinds;
 static unsigned g_vt3_rewinds_told;
 static void (*g_vt3_reverse)(CPU *);
@@ -1854,6 +1891,9 @@ static void vt3_jumps(void)
             vt3_wrap("_ZN8_sRandom13getRandMT_U32Ev", &g_vt3_rand, h_vt3_rand))
             fprintf(stderr, "[sega] Virtua Tennis 3: %s\n", g_vt3_split ? "every point ends on the split-screen camera (none with the cutaways in the world)"
                                                                     : "the close-up's split screen left out while the cutaways are in the world");
+        { const char *rt = getenv("LINDBERGH_VT3_REPLAY_TYPE");
+          if (rt && *rt && vt3_wrap("_ZN6camera13setReplayTypeEi", &g_vt3_set_replay_type, h_vt3_set_replay_type))
+              fprintf(stderr, "[sega] Virtua Tennis 3: replay type forced (%s)\n", rt); }
         /* a replay shot's rewind (replay::reverseFrame): a new shot for the Camera view */
         if (world_mode_immersive() && !vt3_wrap("_ZN6replay12reverseFrameEl", &g_vt3_reverse, h_vt3_reverse))
             fprintf(stderr, "[sega] Virtua Tennis 3: replay::reverseFrame not wrapped - a replay's rewind is found by the camera's jump alone\n");

@@ -58,7 +58,7 @@ int main(void) {
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
-               "immersive.height":"0"}
+               "immersive.height":"10"}
 
     @staticmethod
     def parse(text):
@@ -75,7 +75,7 @@ int main(void) {
             for k,v in self.MODE_KEYS.items():self.assertEqual(saved[k],v,k)
 
     def test_mode_keys_round_trip(self):
-        cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"world",
+        cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"camera",
              "immersive.overlays":"on","immersive.cutaways":"camera","immersive.sky":"painted","immersive.shadow":"1024",
              "immersive.height":"10"}
         with tempfile.TemporaryDirectory() as d:
@@ -96,6 +96,14 @@ int main(void) {
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"off")
+
+    def test_old_world_view_reads_as_camera(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("immersive.replays world\nimmersive.cutaways world\nimmersive.height 0\n")
+            self.run_settings(d)
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            self.assertEqual(saved["immersive.replays"],"camera");self.assertEqual(saved["immersive.cutaways"],"camera")
+            self.assertEqual(saved["immersive.height"],"0")      # a stored choice is kept (the default is Medium)
 
     def test_unknown_keys_ignored_and_bad_values_defaulted(self):
         with tempfile.TemporaryDirectory() as d:
