@@ -25,6 +25,7 @@
  * Register as a regular app and take focus. */
 void host_menu_install(void);    /* host_menu_mac.m */
 
+static int g_win_msaa;                  /* the window's anti-aliasing samples asked for (LINDBERGH_MSAA, desktop) */
 static void mac_activate(void)
 {
     id app = ((id (*)(Class, SEL))objc_msgSend)(objc_getClass("NSApplication"),
@@ -874,6 +875,22 @@ int host_window_open(const char *title)
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+#if !defined(__ANDROID__) && !defined(LINDBERGH_OPENXR)
+    /* LINDBERGH_MSAA=2|4 (desktop, the headset's Anti-aliasing row's
+     * counterpart): a multisampled window. The game draws its picture into
+     * the window's own framebuffer (its world and HUD; its whole-screen
+     * copies read it resolved), so its edges are smoothed there. Off (0) by
+     * default; a window that cannot be made so is made without. */
+    {
+        const char *v = getenv("LINDBERGH_MSAA");
+        g_win_msaa = v && *v ? atoi(v) : 0;
+        g_win_msaa = g_win_msaa >= 4 ? 4 : g_win_msaa >= 2 ? 2 : 0;
+        if (g_win_msaa) {
+            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, g_win_msaa);
+        }
+    }
+#endif
 #endif
     /* The window: LINDBERGH_WINDOW=WxH, else 1080 tall at the game's aspect
      * (1920x1080 for a 16:9 game), shrunk to fit the screen. Resizable; the
@@ -914,6 +931,16 @@ int host_window_open(const char *title)
                                  SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
 #endif
                                  (hidden ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+#if !defined(__ANDROID__) && !defined(LINDBERGH_OPENXR) && !defined(LINDBERGH_VULKAN)
+    if (!g_win.win && g_win_msaa) {     /* no multisampled window here: as before */
+        fprintf(stderr, "[window] no %dx multisampled window (%s) - anti-aliasing off\n", g_win_msaa, SDL_GetError());
+        g_win_msaa = 0;
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
+        g_win.win = SDL_CreateWindow(title && *title ? title : "lindberghrecomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                     dw, dh, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | (hidden ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+    }
+#endif
     if (!g_win.win) {
         fprintf(stderr, "[window] SDL_CreateWindow: %s\n", SDL_GetError());
         return 0;

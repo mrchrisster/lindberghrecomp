@@ -139,6 +139,25 @@ int main(void) {
       lw.pins = 1u << WM_LANGUAGE; lw.eff.language = 1;
       xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English (env.txt)"));
       assert(xw_choose(&lw, &lc, XW_LANGUAGE) == 0); }
+    /* Anti-aliasing on the main page (both modes), Off by default, Off > 2x > 4x > Off, on restart (T17) */
+    { XwState aw; memset(&aw, 0, sizeof aw); LgXrSettings ac = LG_XR_SETTINGS_DEFAULT;
+      world_mode_resolve(&ac, 0, 1, 0, &aw.eff, NULL);
+      int ar[XW_ROWS_MAX], an = xw_page_rows(&aw, &ac, ar);
+      assert(has(ar, an, XW_ROW(XW_MSAA)) && ac.msaa == 0 && aw.eff.msaa == 0);
+      aw.page = XW_PAGE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
+      aw.page = XW_PAGE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
+      aw.page = XW_PAGE_MAIN;
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].label, "Anti-aliasing") && !strcmp(it[XW_MSAA].value, "Off"));
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.msaa == 2);
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (on restart)"));
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.msaa == 4);
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "4x (on restart)"));
+      aw.eff.msaa = 4; xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "4x"));
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.msaa == 0);
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "Off (on restart)"));
+      aw.pins = 1u << WM_MSAA; aw.eff.msaa = 2;
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (env.txt)"));
+      assert(xw_choose(&aw, &ac, XW_MSAA) == 0 && ac.msaa == 0); }
     /* a mode button on an Advanced page: that mode's page */
     w.pins = 0; w.running = 0; w.page = XW_PAGE_CLASSIC; c.world_mode = 0;
     fx = xw_choose(&w, &c, XW_MODE_VR); assert((fx & XP_SAVE) && c.world_mode == 1 && w.page == XW_PAGE_IMMERSIVE);

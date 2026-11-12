@@ -66,7 +66,11 @@ int gl4es_multiview_copy(unsigned src, int layer, int sx0, int sy0, int sx1, int
 extern int gl4es_mv_trace;
 void gl4es_multiview_read_pixel(int x, int y, unsigned char out[4]);
 void gl4es_multiview_read_pixel_layer(int x, int y, int layer, unsigned char out[4]);
+int gl4es_multiview_msaa(unsigned framebuffer, int samples);
+int gl4es_multiview_msaa_granted(void);
 #endif
+static int g_msaa;                      /* the eyes' anti-aliasing samples granted (0: none) */
+int stereo_msaa(void) { return g_msaa; }
 
 extern unsigned g_frame;
 
@@ -1173,6 +1177,20 @@ static void bind_framebuffer(GLenum target, GLuint fb)
     }
 }
 
+#ifdef LINDBERGH_GL4ES
+/* Anti-aliasing refused after all: the eyes' framebuffer attached again
+ * single-sampled. gl4es skips a re-attach of the texture already attached, so
+ * both are detached first (0), then attached as when anti-aliasing is off. */
+static void eye_reattach_single(void)
+{
+    gl4es_multiview_msaa(g_eye_fbo[0], 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE_ARB, 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_RECTANGLE_ARB, 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE_ARB, g_eye_tex[0], 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_RECTANGLE_ARB, g_eye_tex[1], 0);
+}
+#endif
+
 /* Multiview, wanted unless LINDBERGH_MULTIVIEW=0: one framebuffer for both
  * eyes, its colour and depth rectangle textures that gl4es keeps as two
  * layers. Turned on before the game makes any program or render target. */
@@ -1195,10 +1213,29 @@ static void eye_targets_multiview(void)
     glBindTexture(GL_TEXTURE_RECTANGLE_ARB, 0);
     glGenFramebuffers(1, &g_eye_fbo[0]);
     glBindFramebuffer(GL_FRAMEBUFFER, g_eye_fbo[0]);
+    /* Anti-aliasing (the panel's row, vr.cfg msaa, LINDBERGH_MSAA; on the
+     * next start): the eyes' colour and depth multisampled with implicit
+     * resolve - everything that reads them (the blit to the swapchain, the
+     * game's whole-screen copies, the frame hold, game shots) reads the
+     * resolved picture, each read mid-frame costing a resolve. VR and Classic
+     * alike (both are drawn here). */
+    const int want = world_mode_msaa();
+    if (want > 1) g_msaa = gl4es_multiview_msaa(g_eye_fbo[0], want);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE_ARB, g_eye_tex[0], 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_RECTANGLE_ARB, g_eye_tex[1], 0);
+    if (g_msaa && gl4es_multiview_msaa_granted() != g_msaa) {
+        /* one attachment fell back to single-sampled in gl4es: both as before */
+        fprintf(stderr, "[stereo] anti-aliased attachment refused - anti-aliasing off\n");
+        g_msaa = 0; eye_reattach_single();
+    }
+    if (g_msaa && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {   /* Off: no extra call */
+        /* the multisampled attachments refused: as before, without */
+        fprintf(stderr, "[stereo] anti-aliased eye framebuffer incomplete - anti-aliasing off\n");
+        g_msaa = 0; eye_reattach_single();
+    }
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         fprintf(stderr, "[stereo] multiview eye framebuffer incomplete\n");
+    if (want > 1) fprintf(stderr, "[stereo] anti-aliasing: %dx asked, %dx granted\n", want, g_msaa);
     g_eye_fbo[1] = g_eye_fbo[0];
 #endif
 }
@@ -4409,7 +4446,9 @@ void stereo_set_screen_distance(float d) { if (d > 0) g_screen_dist = d; }
 unsigned stereo_world_depth(float *zn, float *zf)
 {
 #ifdef LINDBERGH_GL4ES
-    if (!g_on || !g_mv || g_flat || g_scene_draws == 0) return 0;
+    /* anti-aliased eyes: a multisampled depth's contents after the resolve are
+     * not defined - no depth for the compositor's reprojection then */
+    if (!g_on || !g_mv || g_flat || g_scene_draws == 0 || g_msaa > 0) return 0;
     GLuint dt = 0;
     for (unsigned i = 0; i < g_nfb_depth; i++) if (g_fb_depth[i].fb == g_world_fb_next) dt = g_fb_depth[i].depth;
     if (g_world_fb_next == 0) dt = g_eye_tex[1];      /* the window: the eyes' own target */

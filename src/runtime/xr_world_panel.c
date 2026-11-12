@@ -46,6 +46,7 @@ static int wm_key(int item)
     case XW_HEIGHT: return WM_HEIGHT;
     case XW_CARD: return WM_CARD;
     case XW_LANGUAGE: return WM_LANGUAGE;
+    case XW_MSAA: return WM_MSAA;
     case XW_SKY: return WM_SKY;
     default: return -1;
     }
@@ -60,7 +61,7 @@ static int pinned(const XwState *w, int item)
 {
     const int k = wm_key(item);
     if (k < 0 || !(w->pins >> k & 1)) return 0;
-    return k == WM_MODE || k == WM_LANGUAGE || page_mode(w) == w->running;
+    return k == WM_MODE || k == WM_LANGUAGE || k == WM_MSAA || page_mode(w) == w->running;
 }
 
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
@@ -84,6 +85,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
         rows[n++] = XW_ROW(XW_LANGUAGE);
+        rows[n++] = XW_ROW(XW_MSAA);
         for (int i = 0; i < XP_COUNT; i++)
             if (i != XP_STATS && i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
         break;
@@ -137,6 +139,12 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_SHADOW].label = "Shadow quality";
     it[XW_CARD].label = "Card reader notice";
     it[XW_LANGUAGE].label = "Language";
+    it[XW_MSAA].label = "Anti-aliasing";
+    {
+        const int m = pinned(w, XW_MSAA) ? w->eff.msaa : cfg->msaa;
+        snprintf(it[XW_MSAA].value, 40, "%s%s", m >= 4 ? "4x" : m >= 2 ? "2x" : "Off",
+                 !pinned(w, XW_MSAA) && m != w->eff.msaa ? " (on restart)" : "");
+    }
     {   /* both apply on the next start: "(on restart)" while the stored one is not the running one */
         int card = cfg->classic_card_notice, lang = cfg->language;
         if (pinned(w, XW_CARD)) card = w->eff.card_notice;
@@ -224,6 +232,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_HEIGHT: if (!im) return 0; c->imm_height = next_step(c->imm_height, LG_XR_HEIGHT_STEPS, LG_XR_HEIGHT_NSTEPS); fx |= live; break;
     case XW_CARD: if (im || page_mode(w) < 0) return 0; c->classic_card_notice = !c->classic_card_notice; break;   /* on restart */
     case XW_LANGUAGE: c->language = !c->language; break;                                                     /* on restart */
+    case XW_MSAA: c->msaa = c->msaa >= 4 ? 0 : c->msaa >= 2 ? 4 : 2; break;                                 /* Off > 2x > 4x, on restart */
     case XW_SHADOW: {
         int *s = im ? &c->imm_shadow : &c->classic_shadow, k = 0;
         while (k < 3 && SHADOWS[k] <= *s) k++;

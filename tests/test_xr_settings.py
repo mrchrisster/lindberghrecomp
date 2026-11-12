@@ -58,7 +58,7 @@ int main(void) {
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
-               "immersive.height":"10","classic.card_notice":"off","language":"english"}
+               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0"}
 
     @staticmethod
     def parse(text):
@@ -77,7 +77,7 @@ int main(void) {
     def test_mode_keys_round_trip(self):
         cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"camera",
              "immersive.overlays":"on","immersive.cutaways":"camera","immersive.sky":"painted","immersive.shadow":"1024",
-             "immersive.height":"10","classic.card_notice":"on","language":"japanese"}
+             "immersive.height":"10","classic.card_notice":"on","language":"japanese","msaa":"4"}
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("".join(f"{k} {v}\n" for k,v in cfg.items()))
             self.run_settings(d)
@@ -85,6 +85,13 @@ int main(void) {
             for k,v in cfg.items():self.assertEqual(saved[k],v,k)
             self.run_settings(d)
             self.assertEqual((Path(d)/"vr.cfg").read_text(),first)
+
+    def test_msaa_off_the_list(self):
+        for stored,want in (("2","2"),("3","2"),("1","2"),("8","4"),("-1","0"),("bogus","0")):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d)/"vr.cfg").write_text(f"msaa {stored}\n")
+                self.run_settings(d)
+                self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["msaa"],want,stored)
 
     def test_old_on_reads_as_flat_screen(self):
         with tempfile.TemporaryDirectory() as d:

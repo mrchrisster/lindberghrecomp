@@ -10,7 +10,7 @@ ENV_KEYS = ["LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OV
             "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK",
             "LINDBERGH_VT3_SKY", "LINDBERGH_VT3_HEIGHT", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE", "LINDBERGH_VT3_LIVE_SWITCH",
             "LINDBERGH_VT3_MODE_AT", "LINDBERGH_VT3_REPLAY_VIEW", "LINDBERGH_VT3_CUTAWAY_VIEW",
-            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION"]
+            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION", "LINDBERGH_MSAA"]
 
 
 class WorldModeTests(unittest.TestCase):
@@ -36,6 +36,10 @@ int main(int argc, char **argv) {
            v->shadow, v->dolly, v->back, v->sky, v->shadow_scale);
     if (argc > 2 && !strcmp(argv[2], "card")) {     /* card notice, language */
         printf(" | %d %d\n", v->card_notice, v->language);
+        return 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "msaa")) {     /* anti-aliasing samples, its pin, the getter */
+        printf(" | %d %d %d\n", v->msaa, world_mode_pinned(WM_MSAA), world_mode_msaa());
         return 0;
     }
     if (argc > 2 && !strcmp(argv[2], "views")) {    /* replays / cutaways: on, view; and the pins */
@@ -122,6 +126,20 @@ int main(int argc, char **argv) {
         self.assertEqual(c(None, {"LINDBERGH_VT3_LANGUAGE": "japanese"}), "0 0")
         _, log = self.run_wm("language japanese\n")
         self.assertIn("card notice off (default) language japanese (vr.cfg)", log)
+
+    def test_antialiasing(self):
+        m = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "msaa"))[0].split(" | ")[1]
+        self.assertEqual(m(), "0 0 0")                                                   # Off by default (T17)
+        self.assertEqual(m("msaa 4\n"), "4 0 4")
+        self.assertEqual(m("mode immersive\nmsaa 2\n"), "2 0 2")                         # one value for both modes
+        self.assertEqual(m("msaa 3\n"), "2 0 2")                                         # off the list: the nearer below
+        self.assertEqual(m("msaa 16\n"), "4 0 4")
+        self.assertEqual(m("msaa 4\n", {"LINDBERGH_MSAA": "0"}), "0 1 0")               # env wins, pinned
+        self.assertEqual(m(None, {"LINDBERGH_MSAA": "2"}), "2 1 2")
+        _, log = self.run_wm("msaa 4\n")
+        self.assertIn("msaa 4 (vr.cfg)", log)
+        _, log = self.run_wm()
+        self.assertIn("msaa 0 (default)", log)
 
     def test_defaults_are_classic(self):
         out, log = self.run_wm()
