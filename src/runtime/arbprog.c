@@ -40,6 +40,23 @@
 #include "gl_posix.h"
 #include "arbprog.h"
 #include "game_profile.h"
+/* GLES has no GL_TEXTURE_LOD_BIAS; gl4es keeps what the game set per texture
+ * (gl4es_texture_lod_bias) and fragment programs pass it as texture2D's bias
+ * argument, u_lodb[unit] (Virtua Tennis 3 asks -1 for its crowd, boards and
+ * more: on the Quest they were a mip level blurrier than on the desktop,
+ * which applies it itself). LINDBERGH_LOD_BIAS=0: as before. On by default
+ * for Virtua Tennis 3 only (world_mode_capable), so the other games sharing
+ * this runtime keep their shaders as they were; LINDBERGH_LOD_BIAS=1 forces it. */
+static int lod_bias_on(void)
+{
+#ifdef LINDBERGH_GL4ES
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_LOD_BIAS"); on = v && *v ? *v != '0' : world_mode_capable(); }
+    return on;
+#else
+    return 0;
+#endif
+}
 #ifdef LINDBERGH_GL4ES
 extern int gl4es_mv_shaders;      /* gl4es' multiview (multiview.c in quest/gl4es.patch) */
 extern int gl4es_mv_trace;
@@ -1029,10 +1046,16 @@ static int emit_instr(Tr *t, char *stmt)
         else if (proj && target == 2 && t->stage == 1 && (g_tr_scr >> unit & 1))   /* a screen copy, where the eye drew this point */
             snprintf(r, sizeof r, "(u_scr[%d].x != 0.0 ? texture2D(s2_%d, (lg_eye0.xy / lg_eye0.w * 0.5 + 0.5) * u_scr[%d].xy + u_scr[%d].zw) : texture2DProj(s2_%d, %s))",
                      unit, unit, unit, unit, unit, X(0));
+        else if (proj && target == 2 && t->stage == 1 && lod_bias_on())   /* GL_TEXTURE_LOD_BIAS, which GLES lacks */
+            snprintf(r, sizeof r, "texture2DProj(s2_%d, %s, u_lodb[%d])", unit, X(0), unit);
         else if (proj && target != 4)
             snprintf(r, sizeof r, "%sProj(%s%d, %s)", fnb[target], sm[target], unit, X(0));
+        else if (bias && target == 2 && t->stage == 1 && lod_bias_on())
+            snprintf(r, sizeof r, "texture2D(s2_%d, %s.xy, %s.w + u_lodb[%d])", unit, X(0), X(0), unit);
         else if (bias)
             snprintf(r, sizeof r, "%s(%s%d, %s%s, %s.w)", fnb[target], sm[target], unit, X(0), sw[target], X(0));
+        else if (target == 2 && t->stage == 1 && lod_bias_on() && !shadow_as_2d)
+            snprintf(r, sizeof r, "texture2D(s2_%d, %s.xy, u_lodb[%d])", unit, X(0), unit);
         else if (shadow_as_2d)
             snprintf(r, sizeof r, "texture2D(s2_%d, %s.xy).xxxx", unit, X(0));
         else
@@ -1345,6 +1368,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
         /* world mode: where the first eye draws this point, for a screen copy's lookup (see g_tr_scr) */
         if (vt3_screen_fix() && (!stage || g_tr_scr)) bput(&g, "varying vec4 lg_eye0;\n");
         if (stage && g_tr_scr) bput(&g, "uniform vec4 u_scr[16];\n");
+        if (stage && lod_bias_on()) bput(&g, "uniform float u_lodb[16];\n");
         for (int a = 1; a < 16; a++) if (t->attrib_used[a]) bput(&g, "attribute vec4 va_%d;\n", a);
         if (!stage && t->gen_alias) bput(&g, "uniform float u_gen[16];\n");
         bput(&g, "vec4 arb_lit(vec4 s) {\n"
@@ -1456,7 +1480,7 @@ out:
 
 typedef struct {
     GLuint vid, fid; unsigned vgen, fgen, cmp2d, scr;
-    GLint  u_scr;
+    GLint  u_scr, u_lodb;
     GLuint prog;
     int    ok;
     MatRef mat[2][16]; int nmat[2];
@@ -1471,6 +1495,7 @@ typedef struct {
     unsigned shadow_units;              /* and as shadow maps (a depth compare) */
     unsigned cube_units;                /* read as cube maps */
     unsigned up_env[2], up_loc[2];      /* generations last uploaded */
+    int    lodb_any;                    /* u_lodb last uploaded with a bias in it */
 } Linked;
 
 #define MAX_LINKED 1024
@@ -1870,6 +1895,7 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     l->u_gen = glGetUniformLocation(l->prog, "u_gen");
     l->u_gnd = glGetUniformLocation(l->prog, "u_gnd");
     l->u_scr = glGetUniformLocation(l->prog, "u_scr");
+    l->u_lodb = glGetUniformLocation(l->prog, "u_lodb");
     l->u_gP = glGetUniformLocation(l->prog, "u_gP");
     l->u_gPi = glGetUniformLocation(l->prog, "u_gPi");
 #ifdef LINDBERGH_GL4ES
@@ -1963,6 +1989,15 @@ void arb_attrib_array(unsigned index, int on)
 
 static void upload(Linked *l)
 {
+#ifdef LINDBERGH_GL4ES
+    if (l->u_lodb >= 0) {           /* each unit's 2D texture's LOD bias, as the game set it */
+        extern float gl4es_texture_lod_bias(int unit);
+        float b[16]; int any = 0;
+        for (int u = 0; u < 16; u++) { b[u] = gl4es_texture_lod_bias(u); any |= b[u] != 0; }
+        if (any || l->lodb_any) glUniform1fv(l->u_lodb, 16, b);
+        l->lodb_any = any;
+    }
+#endif
     if (l->u_scr >= 0 && l->scr) {    /* each screen copy's place in its texture (zero: the game's own lookup - not a world draw) */
         extern int stereo_screen_copy_map(unsigned tex, float out[4]);
         extern int stereo_draw_world(void);
