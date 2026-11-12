@@ -12,8 +12,11 @@
 extern "C" {
 #endif
 
+/* XW_MODE_CLASSIC / XW_MODE_VR: the two big mode buttons at the top of every
+ * page (always its first two rows; xm_paint_modes draws them side by side).
+ * XW_MODE (a toggle), XW_DOLLY and XW_STEPBACK are no rows any more (T12). */
 enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPLAYS, XW_CUTAWAYS,
-       XW_OVERLAYS, XW_SKY, XW_SHADOW, XW_RESTORE, XW_HEIGHT, XW_COUNT };
+       XW_OVERLAYS, XW_SKY, XW_SHADOW, XW_RESTORE, XW_HEIGHT, XW_MODE_CLASSIC, XW_MODE_VR, XW_COUNT };
 enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGES };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */
@@ -37,7 +40,11 @@ typedef struct {
  * overlays and Replays (on the Advanced pages here): the host still leaves
  * out rows its game has no use for. */
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows);
-/* Labels and values of all XW_COUNT items for the current page */
+/* The line under the mode buttons: which mode runs, and whether the choice
+ * waits for a restart (or is pinned by env.txt) */
+const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg);
+/* Labels and values of all XW_COUNT items for the current page (a mode
+ * button's value: "selected" for the chosen mode, "" for the other) */
 void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *items);
 /* An XW_ item chosen: the settings changed, effects returned (0: nothing,
  * e.g. a row pinned by env). */

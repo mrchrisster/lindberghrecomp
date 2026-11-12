@@ -425,6 +425,18 @@ static void rv_level_view(const float pos[3], const float h[3], float L[16])
         L[12 + r] = -(R[r][0] * pos[0] + R[r][1] * pos[1] + R[r][2] * pos[2]);
     }
 }
+/* VR's camera height when the human's player is at the far end (hle_sega.c
+ * vt3_far_end_note; GL thread, with the camera): always High (+2 m), the
+ * panel's Camera height row applies at the near end. An env height
+ * (LINDBERGH_VT3_HEIGHT, tests) wins; LINDBERGH_VT3_FAR_HIGH=0 turns it off. */
+static int g_vt3_far_end;
+void stereo_vt3_far_end(int at_far) { g_vt3_far_end = at_far; }
+static float vt3_height(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_FAR_HIGH"); on = !(v && *v == '0'); }
+    return on && g_vt3_far_end && !world_mode_pinned(WM_HEIGHT) ? 20.0f : world_mode_height();
+}
 void stereo_vt3_view(unsigned mode, const float *view, int cut)
 {
     float V[16];
@@ -666,7 +678,7 @@ static void eye_projection(const float *p, int hud, int which, float *out)
                 /* ...then raised or lowered along the world's up
                  * (LINDBERGH_VT3_HEIGHT game units, the panel's Camera
                  * height; default 0): the scene moved the other way */
-                const float lift = world_mode_height();
+                const float lift = vt3_height();      /* the panel's row; High at the far end */
                 for (int i = 0; i < 3; i++) t[i] -= lift * u[i] / ul;
             }
             for (int r = 0; r < 4; r++) out[12 + r] += t[0] * out[r] + t[1] * out[4 + r] + t[2] * out[8 + r];

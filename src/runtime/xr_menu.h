@@ -36,6 +36,15 @@ void xm_paint_lines(unsigned char *rgba, const char *const *lines, int n);
 void xm_paint_message(unsigned char *rgba, const char *title, const char *line);
 /* The row under panel coordinates u, v (0..1 from the top left); -1 if none. */
 int  xm_row_at(float u, float v, int n);
+/* The same panel with a mode bar (a game with Classic / VR modes): items[0]
+ * and items[1] are drawn as two big buttons side by side under the title -
+ * the one whose value is not empty highlighted as the chosen one - with
+ * `note` on a line under them; the other items as rows below. Hover 0 / 1 is
+ * a button. xm_row_at_modes: 0 / 1 for the buttons, 2.. the rows below. */
+#define XM_BAR_H 136            /* the buttons' band: 88 high and the note's line */
+#define XM_MODE_ROWS 18         /* rows that fit below the band, the buttons counted */
+void xm_paint_modes(unsigned char *rgba, const char *title, const XmItem *items, int n, int hover, const char *note, const char *hint);
+int  xm_row_at_modes(float u, float v, int n);
 
 #ifdef __cplusplus
 }

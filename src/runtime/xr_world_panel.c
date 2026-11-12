@@ -1,19 +1,22 @@
 /*
  * xr_world_panel.c - the world-mode game's panel pages (xr_world_panel.h).
  *
- * Main page: Mode (Classic / Immersive, applies on the next start), Restart
- * now (only while the saved mode is not the running one), Advanced settings
- * (the saved mode's page), then the shared rows. Classic advanced: replays,
- * point cutaways, arcade overlays, shadow quality (replays and cutaways On /
- * Off). Immersive advanced: camera
- * closer, step back (5 / 6 / 7 / 8 m), camera height (2 m lower .. 2 m higher),
- * the same three (replays and cutaways Off / Flat screen / In the world /
- * Camera view), sky (Stadium / Painted / Off), shadow quality. Replays,
- * cutaways, overlays, closer, step back, camera height and sky are live for
- * the running mode; shadow quality and the mode apply on restart. A row whose
- * env variable is set shows "(env.txt)" with the run's value and ignores clicks.
+ * Every page starts with two big buttons, Classic and VR (= Immersive; the
+ * vr.cfg keys and env names keep "immersive"), the chosen mode highlighted;
+ * it applies on the next start, and the line under them says so. Main page:
+ * Restart now (only while the saved mode is not the running one), Advanced
+ * settings (the saved mode's page), then the shared rows; choosing a mode on
+ * an Advanced page shows that mode's page. Classic advanced: replays, point
+ * cutaways, arcade overlays, shadow quality (replays and cutaways On / Off).
+ * VR advanced: camera height (Low / Medium / High; your player at the far
+ * end is always High - stereo.c), the same three (replays and cutaways Off /
+ * Flat screen / In the world / Camera view), sky (Stadium / Painted / Off),
+ * shadow quality. Camera closer and Step back are gone (fixed 20 m / 5 m,
+ * T12). Replays, cutaways, overlays, camera height and sky are live for the
+ * running mode; shadow quality and the mode apply on restart. A row whose env
+ * variable is set shows "(env.txt)" with the run's value and ignores clicks.
  * With XwState.live (switching live, Phase B; host_xr.c keeps it 0 for now)
- * the Mode row applies at once: no Restart now, no "(on restart)".
+ * the mode applies at once: no Restart now.
  */
 #include "xr_world_panel.h"
 #include <math.h>
@@ -33,7 +36,7 @@ static int next_step(int v, const int *steps, int n)
 static int wm_key(int item)
 {
     switch (item) {
-    case XW_MODE: return WM_MODE;
+    case XW_MODE: case XW_MODE_CLASSIC: case XW_MODE_VR: return WM_MODE;
     case XW_REPLAYS: return WM_REPLAYS;
     case XW_CUTAWAYS: return WM_CUTAWAYS;
     case XW_OVERLAYS: return WM_OVERLAYS;
@@ -61,6 +64,8 @@ static int pinned(const XwState *w, int item)
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
 {
     int n = 0;
+    rows[n++] = XW_ROW(XW_MODE_CLASSIC);        /* the mode buttons, first on every page */
+    rows[n++] = XW_ROW(XW_MODE_VR);
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS),
@@ -68,13 +73,12 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
-        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_DOLLY), XW_ROW(XW_STEPBACK), XW_ROW(XW_HEIGHT),
+        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_HEIGHT),
                                  XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
                                  XW_ROW(XW_SHADOW), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     default:
-        rows[n++] = XW_ROW(XW_MODE);
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
         for (int i = 0; i < XP_COUNT; i++)
@@ -91,6 +95,11 @@ static const char *view_label(int v)
     return v == LG_VIEW_FLAT ? "Flat screen" : v == LG_VIEW_WORLD ? "In the world" : v == LG_VIEW_CAMERA ? "Camera view" : "Off";
 }
 static int view_next(int v) { return v >= LG_VIEW_CAMERA || v < LG_VIEW_OFF ? LG_VIEW_OFF : v + 1; }   /* Off > Flat > World > Camera > Off */
+static const char *height_label(float units)
+{
+    const int v = (int)lroundf(units);
+    return v == 0 ? "Low" : v == 10 ? "Medium" : v == 20 ? "High" : NULL;
+}
 static void metres(char *s, float units) { if (fabsf(units - roundf(units / 10) * 10) < 0.01f) snprintf(s, 40, "%.0f m", units / 10); else snprintf(s, 40, "%.1f m", units / 10); }
 static const char *sky_label(int v) { return v == LG_SKY_OFF ? "Off" : v == LG_SKY_PAINTED ? "Painted" : "Stadium"; }
 static void shadow(char *s, int size)
@@ -105,11 +114,14 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_MODE].label = "Mode";
     {
         const int m = pinned(w, XW_MODE) ? w->running : cfg->world_mode;
-        snprintf(it[XW_MODE].value, 40, "%s%s", m ? "Immersive (3D world)" : "Classic (2D screen)",
+        snprintf(it[XW_MODE].value, 40, "%s%s", m ? "VR (3D world)" : "Classic (2D screen)",
                  pinned(w, XW_MODE) ? " (env.txt)" : !w->live && m != w->running ? " (on restart)" : "");
+        it[XW_MODE_CLASSIC].label = "Classic";
+        it[XW_MODE_VR].label = "VR";
+        snprintf(it[m ? XW_MODE_VR : XW_MODE_CLASSIC].value, 40, "selected");
     }
-    it[XW_RESTART].label = cfg->world_mode ? "Restart now in Immersive mode" : "Restart now in Classic mode";
-    it[XW_ADVANCED].label = cfg->world_mode ? "Advanced settings (Immersive) >" : "Advanced settings (Classic) >";
+    it[XW_RESTART].label = cfg->world_mode ? "Restart now in VR mode" : "Restart now in Classic mode";
+    it[XW_ADVANCED].label = cfg->world_mode ? "Advanced settings (VR) >" : "Advanced settings (Classic) >";
     it[XW_BACK].label = "< Back";
     it[XW_DOLLY].label = "Camera closer";
     it[XW_STEPBACK].label = "Step back";
@@ -119,7 +131,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_OVERLAYS].label = "Arcade overlays";
     it[XW_SKY].label = "Sky";
     it[XW_SHADOW].label = "Shadow quality";
-    it[XW_RESTORE].label = im ? "Restore Immersive defaults" : "Restore Classic defaults";
+    it[XW_RESTORE].label = im ? "Restore VR defaults" : "Restore Classic defaults";
     /* the page's stored values; a pinned row the run's own */
     const WmValues *e = &w->eff;
     int replays = im ? cfg->imm_replays : cfg->replays, cut = im ? cfg->imm_cutaways : cfg->classic_cutaways;
@@ -139,13 +151,13 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     snprintf(it[XW_SKY].value, 40, "%s", sky_label(sky));
     metres(it[XW_DOLLY].value, dl);
     metres(it[XW_STEPBACK].value, bk);
-    if (fabsf(ht) < 0.5f) snprintf(it[XW_HEIGHT].value, 40, "Standard");
-    else { metres(it[XW_HEIGHT].value, fabsf(ht)); size_t l = strlen(it[XW_HEIGHT].value);
-           snprintf(it[XW_HEIGHT].value + l, 40 - l, ht > 0 ? " higher" : " lower"); }
+    if (height_label(ht)) snprintf(it[XW_HEIGHT].value, 40, "%s", height_label(ht));
+    else { metres(it[XW_HEIGHT].value, fabsf(ht)); size_t l = strlen(it[XW_HEIGHT].value);    /* an env value off the list */
+           snprintf(it[XW_HEIGHT].value + l, 40 - l, ht >= 0 ? " higher" : " lower"); }
     shadow(it[XW_SHADOW].value, sh);
     for (int i = 0; i < XW_COUNT; i++) {
         size_t l = strlen(it[i].value);
-        if (i != XW_MODE && pinned(w, i)) snprintf(it[i].value + l, 40 - l, " (env.txt)");
+        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && pinned(w, i)) snprintf(it[i].value + l, 40 - l, " (env.txt)");
     }
     if (!pinned(w, XW_SHADOW) && page_mode(w) == w->running && sh != e->shadow) {
         size_t l = strlen(it[XW_SHADOW].value);
@@ -159,7 +171,7 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
     const LgXrSettings d = LG_XR_SETTINGS_DEFAULT;
     if (immersive) {
         c->imm_replays = d.imm_replays; c->imm_overlays = d.imm_overlays; c->imm_cutaways = d.imm_cutaways;
-        c->imm_dolly = d.imm_dolly; c->imm_back = d.imm_back; c->imm_height = d.imm_height;
+        c->imm_height = d.imm_height;
         c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow;
     } else {
         c->replays = d.replays; c->arcade_overlays = d.arcade_overlays;
@@ -178,6 +190,12 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     unsigned fx = XP_SAVE;
     switch (item) {
     case XW_MODE: c->world_mode = !c->world_mode; fx |= XW_PAGE_CHANGED | (w->live ? XW_LIVE_CHANGED : 0); break;
+    case XW_MODE_CLASSIC: case XW_MODE_VR: {
+        const int m = item == XW_MODE_VR;
+        if (c->world_mode == m) return armed ? XW_PAGE_CHANGED : 0;
+        c->world_mode = m;
+        if (page_mode(w) >= 0) w->page = m ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC;   /* an Advanced page: the chosen mode's */
+        fx |= XW_PAGE_CHANGED | (w->live ? XW_LIVE_CHANGED : 0); break; }
     case XW_RESTART: return XP_RESTART;
     case XW_ADVANCED: w->page = c->world_mode ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; return XW_PAGE_CHANGED;
     case XW_BACK: w->page = XW_PAGE_MAIN; return XW_PAGE_CHANGED;
@@ -188,8 +206,6 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
         if (!im) return 0;
         c->imm_sky = c->imm_sky == LG_SKY_STADIUM ? LG_SKY_PAINTED : c->imm_sky == LG_SKY_PAINTED ? LG_SKY_OFF : LG_SKY_STADIUM;
         fx |= live; break;
-    case XW_DOLLY: if (!im) return 0; c->imm_dolly = c->imm_dolly >= 300 ? 0 : (c->imm_dolly / 50 + 1) * 50; fx |= live; break;
-    case XW_STEPBACK: if (!im) return 0; c->imm_back = next_step(c->imm_back, LG_XR_BACK_STEPS, LG_XR_BACK_NSTEPS); fx |= live; break;
     case XW_HEIGHT: if (!im) return 0; c->imm_height = next_step(c->imm_height, LG_XR_HEIGHT_STEPS, LG_XR_HEIGHT_NSTEPS); fx |= live; break;
     case XW_SHADOW: {
         int *s = im ? &c->imm_shadow : &c->classic_shadow, k = 0;
@@ -207,13 +223,21 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
 const char *xw_title(const XwState *w)
 {
     return w->page == XW_PAGE_CLASSIC ? "Classic mode - advanced settings"
-         : w->page == XW_PAGE_IMMERSIVE ? "Immersive mode - advanced settings" : NULL;
+         : w->page == XW_PAGE_IMMERSIVE ? "VR mode - advanced settings" : NULL;
+}
+
+const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg)
+{
+    if (pinned(w, XW_MODE)) return w->running ? "VR runs (set by env.txt)" : "Classic runs (set by env.txt)";
+    if (!w->live && cfg->world_mode != w->running)
+        return cfg->world_mode ? "Classic runs now - VR after a restart" : "VR runs now - Classic after a restart";
+    return w->running ? "VR runs now" : "Classic runs now";
 }
 
 const char *xw_hint(const XwState *w)
 {
     const int m = page_mode(w);
     if (m >= 0 && m != w->running)
-        return m ? "Applies when Immersive mode runs." : "Applies when Classic mode runs.";
+        return m ? "Applies when VR mode runs." : "Applies when Classic mode runs.";
     return "Point and pull the trigger. Menu: close.";    /* 42 characters fit */
 }

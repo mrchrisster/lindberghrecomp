@@ -20,7 +20,7 @@ static int render(const LgXrSettings *c, char *b, size_t n)
     return snprintf(b, n, "scale %g\nscreen %g\naim %g\nresolution %d\nwidth %d\nrefresh %d\nhand %s\nlaser %s\ncoins %s\n"
                "sight %s\ncrosshair %s\ngun %s\nhud_pitch %d\ndual %s\nstats %s\nfoveation %s\noverlays %s\nreplays %s\n"
                "mode %s\nclassic.shadow %d\nclassic.cutaways %s\nimmersive.replays %s\nimmersive.overlays %s\n"
-               "immersive.cutaways %s\nimmersive.dolly %d\nimmersive.back %d\nimmersive.sky %s\nimmersive.shadow %d\n"
+               "immersive.cutaways %s\nimmersive.sky %s\nimmersive.shadow %d\n"
                "immersive.height %d\n",
             c->scale, c->screen, c->aim, c->resolution, c->width, c->refresh, c->left_handed ? "left" : "right",
             LASER_NAME[c->laser], c->auto_coins ? "auto" : "manual",
@@ -28,7 +28,7 @@ static int render(const LgXrSettings *c, char *b, size_t n)
             FOVEATION_NAME[c->foveation < 0 || c->foveation > 3 ? 3 : c->foveation], c->arcade_overlays ? "on" : "off", c->replays ? "on" : "off",
             c->world_mode ? "immersive" : "classic", c->classic_shadow, c->classic_cutaways ? "on" : "off",
             view_name(c->imm_replays), c->imm_overlays ? "on" : "off", view_name(c->imm_cutaways),
-            c->imm_dolly, c->imm_back, c->imm_sky == LG_SKY_OFF ? "off" : c->imm_sky == LG_SKY_PAINTED ? "painted" : "stadium", c->imm_shadow,
+            c->imm_sky == LG_SKY_OFF ? "off" : c->imm_sky == LG_SKY_PAINTED ? "painted" : "stadium", c->imm_shadow,
             c->imm_height);
 }
 
@@ -93,12 +93,11 @@ void xr_settings_load(LgXrSettings *c)
     if (c->classic_shadow != 1024 && c->classic_shadow != 2048 && c->classic_shadow != 4096) c->classic_shadow = d.classic_shadow;
     if (c->imm_shadow != 1024 && c->imm_shadow != 2048 && c->imm_shadow != 4096) c->imm_shadow = d.imm_shadow;
     if (c->imm_sky < LG_SKY_OFF || c->imm_sky > LG_SKY_PAINTED) c->imm_sky = d.imm_sky;
-    if (c->imm_dolly < 0 || c->imm_dolly > 400) c->imm_dolly = d.imm_dolly;
+    c->imm_dolly = d.imm_dolly; c->imm_back = d.imm_back;
     if (c->imm_replays < LG_VIEW_OFF || c->imm_replays > LG_VIEW_CAMERA) c->imm_replays = d.imm_replays;
     if (c->imm_cutaways < LG_VIEW_OFF || c->imm_cutaways > LG_VIEW_CAMERA) c->imm_cutaways = d.imm_cutaways;
     /* the panel's choices (xr_world_panel.c); any other stored value - an
-     * older panel's 0 / 3 / 9 / 12 m, a hand edit - becomes the nearest one */
-    c->imm_back = xr_settings_nearest(c->imm_back, LG_XR_BACK_STEPS, LG_XR_BACK_NSTEPS);
+     * older panel's -2 / -1 m, a hand edit - becomes the nearest one */
     c->imm_height = xr_settings_nearest(c->imm_height, LG_XR_HEIGHT_STEPS, LG_XR_HEIGHT_NSTEPS);
 }
 
@@ -129,8 +128,7 @@ void xr_settings_set(LgXrSettings *c,const char *key,const char *val)
         else if (!strcmp(key, "immersive.overlays")) c->imm_overlays = !strcmp(val, "on");
         else if (!strcmp(key, "immersive.cutaways")) c->imm_cutaways = view_value(val);
         /* "immersive.stand_y" (the stands' old stretch) is ignored: it is not a key any more */
-        else if (!strcmp(key, "immersive.dolly")) c->imm_dolly = atoi(val);
-        else if (!strcmp(key, "immersive.back")) c->imm_back = atoi(val);
+        /* "immersive.dolly" / ".back" (the old Camera closer / Step back rows) are ignored: fixed now */
         else if (!strcmp(key, "immersive.sky")) c->imm_sky = !strcmp(val, "off") ? LG_SKY_OFF : !strcmp(val, "painted") ? LG_SKY_PAINTED : LG_SKY_STADIUM;   /* "on" (before 2026-11-12): a sky, now the stadium's */
         else if (!strcmp(key, "immersive.shadow")) c->imm_shadow = atoi(val);
         else if (!strcmp(key, "immersive.height")) c->imm_height = atoi(val);

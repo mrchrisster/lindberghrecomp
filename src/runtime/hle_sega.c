@@ -1046,7 +1046,7 @@ static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 
  * whether the replay rewound since the last (replay::reverseFrame: a new shot
  * of the same moment), for the replays and close-ups drawn in the world
  * (stereo.c stereo_vt3_view) */
-typedef struct { float p[16], v[12]; int feeding; unsigned mode; int cut; } Vt3Cam;
+typedef struct { float p[16], v[12]; int feeding; unsigned mode; int cut, at_far; } Vt3Cam;
 static void vt3_cam_job(void *arg)
 {
     Vt3Cam *k = (Vt3Cam *)arg;
@@ -1055,9 +1055,14 @@ static void vt3_cam_job(void *arg)
     int was = g_vt3_feeding; g_vt3_feeding = k->feeding;
     int took = arb_note_projection(k->p, k->v);
     g_vt3_feeding = was;
-    if (took == 1 && !k->feeding) stereo_vt3_view(k->mode, k->v, k->cut);
+    if (took == 1 && !k->feeding) {
+        extern void stereo_vt3_far_end(int at_far);
+        stereo_vt3_view(k->mode, k->v, k->cut);
+        stereo_vt3_far_end(k->at_far);
+    }
     free(k);
 }
+static int g_vt3_far;           /* the human's player at the far end of the court (vt3_far_end_note) */
 static void vt3_note_projection(const float *p, const float *v, int feeding, unsigned mode, int cut)
 {
     extern int glq_active(void); extern uint32_t glq_job(void (*job)(void *), void *arg);
@@ -1065,8 +1070,37 @@ static void vt3_note_projection(const float *p, const float *v, int feeding, uns
     if (queued < 0) { const char *e = getenv("LINDBERGH_VT3_CAM_QUEUE"); queued = !(e && *e == '0'); }
     Vt3Cam *k = (Vt3Cam *)malloc(sizeof *k);
     if (!k) return;
-    memcpy(k->p, p, sizeof k->p); memcpy(k->v, v, sizeof k->v); k->feeding = feeding; k->mode = mode; k->cut = cut;
+    memcpy(k->p, p, sizeof k->p); memcpy(k->v, v, sizeof k->v); k->feeding = feeding; k->mode = mode; k->cut = cut; k->at_far = g_vt3_far;
     if (queued && glq_active()) glq_job(vt3_cam_job, k); else vt3_cam_job(k);
+}
+/* VR's camera height at the far end (T12, owner: "on the backside of the
+ * court make camera height +2 m"): the court camera does not keep the human
+ * at the near end - after a change of ends the human (player +0x08 <= 3 in
+ * [g_pTennis+4]) plays from the far side, its root z (+0x18 +8) of the other
+ * sign than the camera's eye. Latched only outside a rally (the arcade loop
+ * not GameLoop, mode 4: the switch comes with the change of ends, never in
+ * play) and only once it held for 10 camera notes (~3 frames); handed to
+ * the GL thread with the camera (stereo_vt3_far_end). */
+static unsigned g_vt3_loop = ~0u;       /* the arcade loop manager's mode last set (h_vt3_set_mode) */
+static void vt3_far_end_note(unsigned mode, const float *v)
+{
+    if (mode != 1 && mode != 2) return;
+    uint32_t t = rd32(VT3_G_PTENNIS), n = t ? rd32(t) : 0, arr = t ? rd32(t + 4) : 0;
+    int found = 0; float pz = 0;
+    for (uint32_t i = 0; i < n && i < 4 && arr; i++) {
+        uint32_t pl = rd32(arr + 4 * i);
+        if (pl && (int32_t)rd32(pl + 8) <= 3) { uint32_t b = rd32(pl + 0x18 + 8); memcpy(&pz, &b, 4); found = 1; break; }
+    }
+    const float ez = -(v[2] * v[3] + v[6] * v[7] + v[10] * v[11]);
+    const int at_far = found && fabsf(pz) > 5.0f && fabsf(ez) > 50.0f && pz * ez < 0;
+    static int held, last = -1;
+    held = at_far == last ? held + 1 : 0; last = at_far;
+    if (at_far != g_vt3_far && held >= 10 && g_vt3_loop != 4) {
+        extern unsigned g_frame;
+        g_vt3_far = at_far;
+        fprintf(stderr, "[vt3] frame %u: your player at the %s end (player z %.0f, camera z %.0f)%s\n", g_frame, at_far ? "far" : "near", pz, ez,
+                at_far ? " - VR camera height High" : "");
+    }
 }
 static void (*g_vt3_proj_cam)(CPU *);
 static uint32_t g_vt3_camera;   /* the camera object (camera::gameRoutine's / initUva's this): its mode at +0x38 */
@@ -1110,6 +1144,7 @@ static void h_vt3_proj_cam(CPU *c)
             fprintf(stderr, "[cammode] frame %u: mode %u replay type %d shot %d fov %.1f lens %.2f%s\n", g_frame, m,
                     (int)rd32(g_vt3_camera + 0x1f0), (int)rd32(g_vt3_camera + 0x1f4), fov, p[0], cut ? " (rewound)" : "");
         }
+        if (p[0] > 0 && p[10] != 1.0f && p[11] / (p[10] - 1.0f) < 10.0f) vt3_far_end_note(m, v);   /* a world camera */
         vt3_note_projection(p, v, 0, m, cut);
     }
     /* a world camera (not the pixel camera, near 800): its mode and lens to the
@@ -1446,6 +1481,7 @@ static void h_vt3_set_mode(CPU *c)
                                        change ? "change of ends (mode 9)" : "the next point (mode 3)");
         }
     }
+    if (mgr && self == rd32(rd32(mgr + 0x104) + 0x14)) g_vt3_loop = mode;   /* the arcade loops' (far-end height latch) */
     if (g_vt3_flowlog && from >= 0x0807E000u && from < 0x0808F000u)    /* the arcade screen loops' choices */
         fprintf(stderr, "[flow] frame %u: setMode(%#x, %u) from %#x\n", g_frame, self, mode, from);
     push32(c, 0xDEADBEEFu); g_vt3_set_mode(c);

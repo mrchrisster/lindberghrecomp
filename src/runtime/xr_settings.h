@@ -26,11 +26,13 @@ typedef struct {
     int classic_cutaways;       /* "classic.cutaways": the close-up of the winner after each point */
     int imm_replays, imm_overlays, imm_cutaways;   /* "immersive.replays" / ".overlays" / ".cutaways";
                                  * replays and cutaways LG_VIEW_ (off|flat|world|camera), overlays on/off */
-    int imm_dolly, imm_back;    /* "immersive.dolly" / ".back": the viewpoint forward / back, game units (0.1 m) */
+    int imm_dolly, imm_back;    /* the viewpoint forward / back, game units (0.1 m): fixed since 2026-11-12
+                                 * (T12: no rows; "immersive.dolly" / ".back" are no longer read or written;
+                                 * env LINDBERGH_VT3_DOLLY / _BACK for tests) */
     int imm_sky;                /* "immersive.sky stadium|painted|off" (old "on" = stadium): LG_SKY_ */
     int imm_shadow;             /* "immersive.shadow" */
-    int imm_height;             /* "immersive.height": the viewpoint raised (+) / lowered (-) from the
-                                 * camera's own, game units (0.1 m): -20 / -10 / 0 / 10 / 20 */
+    int imm_height;             /* "immersive.height": the viewpoint raised from the camera's own, game
+                                 * units (0.1 m): 0 / 10 / 20 = Low / Medium / High (an older negative = Low) */
 } LgXrSettings;
 /* Each eye's image by default: the headset's own panel, pixel for pixel.
  * OpenXR reports only a runtime-scaled recommendation, so the panel is the
@@ -48,18 +50,20 @@ typedef struct {
 #endif
 /* ... dual off, stats panel on (vr.cfg "stats off" hides it), medium foveation, arcade overlays shown, replays on;
  * Classic mode, shadows 1024, cutaways on; Immersive: replays, overlays and cutaways off,
- * 200 units closer, 60 back (5 / 6 / 7 / 8 m), the stadium's own sky, shadows 2048, the
- * camera's own height. (The stands' stretch,
+ * 200 units closer and 50 back (fixed: no rows since T12), the stadium's own sky, shadows
+ * 2048, the camera's own height (Low). (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,60,LG_SKY_STADIUM,2048,0}
-/* Immersive's Step back (immersive.back) and Camera height (immersive.height)
- * choices, game units (0.1 m); a stored value off the list is read as the
- * nearest (xr_settings_nearest; the first of two equally near) */
-#define LG_XR_BACK_NSTEPS 4
-#define LG_XR_HEIGHT_NSTEPS 5
-static const int LG_XR_BACK_STEPS[LG_XR_BACK_NSTEPS] = { 50, 60, 70, 80 };
-static const int LG_XR_HEIGHT_STEPS[LG_XR_HEIGHT_NSTEPS] = { -20, -10, 0, 10, 20 };
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,0}
+/* Immersive's (VR's) Camera height choices (immersive.height), game units
+ * (0.1 m): Low / Medium / High; a stored value off the list is read as the
+ * nearest (xr_settings_nearest; the first of two equally near) - an older
+ * negative one as Low */
+#define LG_XR_HEIGHT_NSTEPS 3
+static const int LG_XR_HEIGHT_STEPS[LG_XR_HEIGHT_NSTEPS] = { 0, 10, 20 };
+/* the fixed viewpoint (T12): 200 units closer, 50 back (5 m) */
+#define LG_XR_DOLLY_FIXED 200
+#define LG_XR_BACK_FIXED 50
 static inline int xr_settings_nearest(int v, const int *steps, int n)
 {
     int best = steps[0];

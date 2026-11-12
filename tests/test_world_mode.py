@@ -110,12 +110,12 @@ int main(int argc, char **argv) {
 
     def test_defaults_are_classic(self):
         out, log = self.run_wm()
-        self.assertEqual(out, "0 1 1 1 1024 200 60 1 0.0")
+        self.assertEqual(out, "0 1 1 1 1024 200 50 1 0.0")
         self.assertIn("[world] mode classic (default)", log)
 
     def test_vr_cfg_mode_immersive_has_immersive_defaults(self):
         out, log = self.run_wm("mode immersive\nreplays on\noverlays on\n")
-        self.assertEqual(out, "1 0 0 0 2048 200 60 1 2.0")
+        self.assertEqual(out, "1 0 0 0 2048 200 50 1 2.0")
         self.assertIn("[world] mode immersive (vr.cfg) dolly 200 (default)", log)
 
     def test_env_pins_the_mode_and_wins_over_vr_cfg(self):
@@ -126,8 +126,8 @@ int main(int argc, char **argv) {
     def test_env_values_win_over_vr_cfg(self):
         cfg = "mode immersive\nimmersive.replays on\nimmersive.dolly 100\nimmersive.sky off\nimmersive.shadow 4096\n"
         out, log = self.run_wm(cfg)
-        self.assertEqual(out, "1 1 0 0 4096 100 60 0 4.0")
-        self.assertIn("dolly 100 (vr.cfg)", log)
+        self.assertEqual(out, "1 1 0 0 4096 200 50 0 4.0")    # Camera closer / Step back fixed (T12): vr.cfg ignored
+        self.assertIn("dolly 200 (default) back 50 (default)", log)
         out, log = self.run_wm(cfg, {"LINDBERGH_REPLAYS": "0", "LINDBERGH_VT3_DOLLY": "250", "LINDBERGH_VT3_SKY": "1",
                                      "LINDBERGH_SHADOW_SCALE": "2",
                                      "LINDBERGH_VT3_CUTAWAYS": "1", "LINDBERGH_ARCADE_OVERLAYS": "1", "LINDBERGH_VT3_BACK": "0"})
@@ -146,12 +146,12 @@ int main(int argc, char **argv) {
 
     def test_old_stand_key_is_ignored(self):
         out, log = self.run_wm("mode immersive\nimmersive.stand_y 1.5\n")
-        self.assertEqual(out, "1 0 0 0 2048 200 60 1 2.0")
+        self.assertEqual(out, "1 0 0 0 2048 200 50 1 2.0")
         self.assertNotIn("stand", log)
 
     def test_classic_reads_the_old_keys(self):
         out, _ = self.run_wm("replays off\noverlays off\nclassic.cutaways off\nclassic.shadow 2048\nimmersive.replays on\n")
-        self.assertEqual(out, "0 0 0 0 2048 200 60 1 2.0")
+        self.assertEqual(out, "0 0 0 0 2048 200 50 1 2.0")
 
     def test_a_game_without_world_mode_ignores_the_stored_mode(self):
         self.assertEqual(self.run_wm("mode immersive\n", args=("0",))[0].split()[0], "0")
@@ -164,22 +164,22 @@ int main(int argc, char **argv) {
 
     def test_live_update_keeps_mode_and_shadow(self):
         out, _ = self.run_wm("mode immersive\n", args=("1", "update"))
-        self.assertEqual(out.split(" | ")[1], "1 1 50 2048")       # replays now on, dolly 50, shadow as started
+        self.assertEqual(out.split(" | ")[1], "1 1 200 2048")       # replays now on, dolly fixed, shadow as started
         out, _ = self.run_wm("mode immersive\n", {"LINDBERGH_REPLAYS": "0"}, args=("1", "update"))
-        self.assertEqual(out.split(" | ")[1], "1 0 50 2048")       # env still wins
+        self.assertEqual(out.split(" | ")[1], "1 0 200 2048")       # env still wins
         out, _ = self.run_wm("mode classic\n", args=("1", "update"))
-        self.assertEqual(out.split(" | ")[1], "0 0 50 1024")       # classic: its own replays (now off)
+        self.assertEqual(out.split(" | ")[1], "0 0 200 1024")       # classic: its own replays (now off)
 
     # Live switching (Phase B groundwork): off unless a switch callback is registered ("cb").
     def test_no_callback_keeps_the_start_mode(self):
         out, log = self.run_wm("mode classic\n", args=("1", "latch"))
-        self.assertEqual(out, "0 1 1 1 1024 200 60 1 0.0 | 0 0 0 | | 0 0 0 1 | | 0 0")
+        self.assertEqual(out, "0 1 1 1 1024 200 50 1 0.0 | 0 0 0 | | 0 0 0 1 | | 0 0")
         self.assertNotIn("mode ->", log)
 
     def test_mode_latches_at_the_next_frame_and_calls_back_once(self):
         out, log = self.run_wm("mode classic\n", args=("1", "latch", "cb"))
         # target at once, the game's mode at frame 10 (callback once, Immersive's values), GL when latched
-        self.assertEqual(out, "0 1 1 1 1024 200 60 1 0.0 | 0 1 1 | cb1 | 1 0 1 0 | | 1 1")
+        self.assertEqual(out, "0 1 1 1 1024 200 50 1 0.0 | 0 1 1 | cb1 | 1 0 1 0 | | 1 1")
         self.assertIn("[world] frame 10: mode -> immersive (panel)", log)
         self.assertEqual(log.count("mode ->"), 1)
         out, log = self.run_wm("mode immersive\n", args=("1", "latch", "cb"))

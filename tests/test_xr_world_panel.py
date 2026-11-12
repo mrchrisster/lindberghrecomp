@@ -17,6 +17,7 @@ class WorldPanelTests(unittest.TestCase):
 #include "xr_world_panel.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 static int has(const int *r, int n, int id) { for (int i = 0; i < n; i++) if (r[i] == id) return 1; return 0; }
 static int find(const XwState *w, const LgXrSettings *c, int id) { int r[XW_ROWS_MAX]; int n = xw_page_rows(w, c, r);
@@ -27,32 +28,39 @@ int main(void) {
     world_mode_resolve(&c, 0, 1, 0, &w.eff, NULL);
     int r[XW_ROWS_MAX], n;
     XmItem it[XW_COUNT];
-    /* main page, Classic running: Mode, Advanced, the shared rows less stats/overlays/replays; no Restart */
+    /* main page, Classic running: the Classic / VR buttons, Advanced, the shared rows less stats/overlays/replays; no Restart */
     n = xw_page_rows(&w, &c, r);
-    assert(r[0] == XW_ROW(XW_MODE) && r[1] == XW_ROW(XW_ADVANCED) && !has(r, n, XW_ROW(XW_RESTART)));
+    assert(r[0] == XW_ROW(XW_MODE_CLASSIC) && r[1] == XW_ROW(XW_MODE_VR) && r[2] == XW_ROW(XW_ADVANCED) && !has(r, n, XW_ROW(XW_RESTART)));
+    assert(!has(r, n, XW_ROW(XW_MODE)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     assert(!has(r, n, XP_STATS) && !has(r, n, XP_OVERLAYS) && !has(r, n, XP_REPLAYS) && has(r, n, XP_RESET) && r[n - 1] == XP_CLOSE);
-    assert(n <= XW_ROWS_MAX && n - 6 <= XM_ROWS);        /* minus the gun rows a lever cabinet drops */
+    assert(n <= XW_ROWS_MAX && n - 6 + 1 <= XM_MODE_ROWS);     /* minus the gun rows a lever cabinet drops, plus Restart */
     xw_items(&w, &c, it);
-    assert(!strcmp(it[XW_MODE].value, "Classic (2D screen)"));
+    assert(!strcmp(it[XW_MODE_CLASSIC].label, "Classic") && !strcmp(it[XW_MODE_CLASSIC].value, "selected"));
+    assert(!strcmp(it[XW_MODE_VR].label, "VR") && !it[XW_MODE_VR].value[0]);
+    assert(!strcmp(xw_mode_note(&w, &c), "Classic runs now"));
     assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (Classic) >") && !it[XW_ADVANCED].value[0]);
-    /* Mode: saved, "(on restart)", Restart now shows */
-    unsigned fx = xw_choose(&w, &c, XW_MODE);
+    /* the chosen button again: nothing */
+    assert(xw_choose(&w, &c, XW_MODE_CLASSIC) == 0 && c.world_mode == 0);
+    /* VR: saved, applies on restart, Restart now shows right under the buttons */
+    unsigned fx = xw_choose(&w, &c, XW_MODE_VR);
     assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && !(fx & XW_LIVE_CHANGED) && c.world_mode == 1);   /* live = 0 */
     xw_items(&w, &c, it);
-    assert(!strcmp(it[XW_MODE].value, "Immersive (3D world) (on restart)"));
-    assert(find(&w, &c, XW_ROW(XW_RESTART)) == 1);
+    assert(!strcmp(it[XW_MODE_VR].value, "selected") && !it[XW_MODE_CLASSIC].value[0]);
+    assert(!strcmp(xw_mode_note(&w, &c), "Classic runs now - VR after a restart"));
+    assert(find(&w, &c, XW_ROW(XW_RESTART)) == 2 && !strcmp(it[XW_RESTART].label, "Restart now in VR mode"));
     assert(xw_choose(&w, &c, XW_RESTART) == XP_RESTART);
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 12 && r[0] == XW_ROW(XW_BACK) && r[1] == XW_ROW(XW_DOLLY) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 12 && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
-    assert(!strcmp(it[XW_DOLLY].value, "20 m") && !strcmp(it[XW_STEPBACK].value, "6 m"));
-    assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Standard"));
+    assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
+    assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Low"));
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
     assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
     assert(!strcmp(it[XW_SKY].label, "Sky"));
-    assert(!strcmp(xw_hint(&w), "Applies when Immersive mode runs."));
+    assert(!strcmp(xw_hint(&w), "Applies when VR mode runs."));
     /* the non-running mode's page: saved, not live */
     fx = xw_choose(&w, &c, XW_REPLAYS);
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
@@ -73,34 +81,27 @@ int main(void) {
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_OFF);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SKY].value, "Off"));
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_STADIUM);
-    xw_choose(&w, &c, XW_DOLLY); assert(c.imm_dolly == 250);
-    xw_choose(&w, &c, XW_DOLLY); xw_choose(&w, &c, XW_DOLLY); assert(c.imm_dolly == 0);
-    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 70);
-    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 80);
-    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 50);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_STEPBACK].value, "5 m"));
-    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 60);
-    c.imm_back = 120; xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 50);   /* off the list: from its nearest (8 m) */
+    assert(xw_choose(&w, &c, XW_STEPBACK) == 0 && xw_choose(&w, &c, XW_DOLLY) == 0);    /* gone */
     xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "1 m higher"));
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "Medium"));
     xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 20);
-    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == -20);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "2 m lower"));
-    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == -10);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "High"));
+    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 0);
+    c.imm_height = -20; xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);   /* an old -2 m: from Low */
     xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 4096);
     xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);
     /* restore: two pulls */
     fx = xw_choose(&w, &c, XW_RESTORE); assert(w.restore_armed && !(fx & XP_SAVE));
     xw_items(&w, &c, it); assert(!strcmp(it[XW_RESTORE].value, "Pull again to restore"));
     fx = xw_choose(&w, &c, XW_RESTORE); assert((fx & XP_SAVE) && !w.restore_armed);
-    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_dolly == 200 && c.imm_back == 60 && c.imm_height == 0 && c.imm_shadow == 2048 && c.imm_replays == 0);
+    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 0 && c.imm_shadow == 2048 && c.imm_replays == 0);
     xw_choose(&w, &c, XW_RESTORE); xw_choose(&w, &c, XW_SKY); assert(!w.restore_armed);    /* another row disarms */
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_MAIN);
     /* the running mode's page: live; a pinned row shows the run's value and ignores clicks */
     c.world_mode = 0; w.page = XW_PAGE_CLASSIC;
     fx = xw_choose(&w, &c, XW_CUTAWAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 8 && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 10 && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -117,8 +118,13 @@ int main(void) {
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SHADOW].value, "High 2048 (on restart)"));
     /* a pinned mode: no Restart row, clicks ignored */
     w.page = XW_PAGE_MAIN; w.pins = 1u << WM_MODE; w.running = 1; c.world_mode = 0;
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_MODE].value, "Immersive (3D world) (env.txt)"));
-    assert(find(&w, &c, XW_ROW(XW_RESTART)) < 0 && xw_choose(&w, &c, XW_MODE) == 0 && c.world_mode == 0);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_MODE_VR].value, "selected") && !strcmp(xw_mode_note(&w, &c), "VR runs (set by env.txt)"));
+    assert(find(&w, &c, XW_ROW(XW_RESTART)) < 0 && xw_choose(&w, &c, XW_MODE_CLASSIC) == 0 && c.world_mode == 0);
+    /* a mode button on an Advanced page: that mode's page */
+    w.pins = 0; w.running = 0; w.page = XW_PAGE_CLASSIC; c.world_mode = 0;
+    fx = xw_choose(&w, &c, XW_MODE_VR); assert((fx & XP_SAVE) && c.world_mode == 1 && w.page == XW_PAGE_IMMERSIVE);
+    xw_choose(&w, &c, XW_MODE_CLASSIC); assert(c.world_mode == 0 && w.page == XW_PAGE_CLASSIC);
+    w.page = XW_PAGE_MAIN;
     /* live (Phase B): no Restart row, Mode without "(on restart)", the Mode click is live */
     {
         LgXrSettings lc = LG_XR_SETTINGS_DEFAULT;
@@ -127,9 +133,9 @@ int main(void) {
         l.live = 1;
         fx = xw_choose(&l, &lc, XW_MODE);
         assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && (fx & XW_LIVE_CHANGED) && lc.world_mode == 1);
-        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Immersive (3D world)"));
-        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_ADVANCED)) == 1);
-        assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (Immersive) >"));
+        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "VR (3D world)"));
+        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_ADVANCED)) == 2);
+        assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (VR) >"));
         fx = xw_choose(&l, &lc, XW_MODE);
         assert((fx & XW_LIVE_CHANGED) && lc.world_mode == 0);
         xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Classic (2D screen)"));
@@ -137,7 +143,7 @@ int main(void) {
         l.page = XW_PAGE_CLASSIC; l.eff.shadow = 1024; lc.classic_shadow = 2048;
         xw_items(&l, &lc, it); assert(!strcmp(it[XW_SHADOW].value, "High 2048 (on restart)"));
         l.page = XW_PAGE_MAIN; l.pins = 1u << WM_MODE; l.running = 1; lc.world_mode = 0;
-        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Immersive (3D world) (env.txt)"));
+        xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "VR (3D world) (env.txt)"));
         assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && xw_choose(&l, &lc, XW_MODE) == 0 && lc.world_mode == 0);
     }
     /* every value fits beside its label: 42 characters across the panel */
@@ -150,13 +156,48 @@ int main(void) {
     }
     /* rows under the pointer: each row's middle maps back to the row */
     for (int i = 0; i < XM_ROWS; i++) assert(xm_row_at(0.5f, (64 + 8 + 36 * i + 18) / (float)XM_H, XM_ROWS) == i);
+    /* with the mode buttons: left 0, right 1, the gap and the margins none, rows from 2 below the band */
+    assert(xm_row_at_modes(0.25f, (74 + 44) / (float)XM_H, XM_MODE_ROWS) == 0);
+    assert(xm_row_at_modes(0.75f, (74 + 44) / (float)XM_H, XM_MODE_ROWS) == 1);
+    assert(xm_row_at_modes(0.5f, (74 + 44) / (float)XM_H, XM_MODE_ROWS) < 0 && xm_row_at_modes(0.01f, (74 + 44) / (float)XM_H, XM_MODE_ROWS) < 0);
+    for (int i = 2; i < XM_MODE_ROWS; i++) assert(xm_row_at_modes(0.5f, (64 + XM_BAR_H + 8 + 36 * (i - 2) + 18) / (float)XM_H, XM_MODE_ROWS) == i);
+    assert(64 + XM_BAR_H + 8 + 36 * (XM_MODE_ROWS - 2) <= XM_H - 34 - 10);   /* above the hint */
+    {   /* LINDBERGH_TEST_PANEL_PPM=<file>: the main page painted (the picture for the docs) */
+        const char *pp = getenv("LINDBERGH_TEST_PANEL_PPM");
+        if (pp) {
+            static unsigned char img[XM_W * XM_H * 4];
+            LgXrSettings pc = LG_XR_SETTINGS_DEFAULT; XwState pw; memset(&pw, 0, sizeof pw);
+            world_mode_resolve(&pc, 1, 1, 0, &pw.eff, NULL);
+            pw.running = 0; pc.world_mode = 1;
+            int pr[XW_ROWS_MAX], pn = xw_page_rows(&pw, &pc, pr), m = 0;
+            XmItem all[XP_COUNT], wall[XW_COUNT], rows[XW_ROWS_MAX];
+            XpPanel panel; memset(&panel, 0, sizeof panel);
+            xp_items(&panel, &pc, 0, 0, 2208, 2064, all);
+            xw_items(&pw, &pc, wall);
+            for (int i = 0; i < pn; i++) {
+                const int id = pr[i];
+                if (id == XP_SIGHT || id == XP_LASER || id == XP_CROSSHAIR || id == XP_GUN || id == XP_HAND || id == XP_DUAL) continue;
+                rows[m++] = id < XP_COUNT ? all[id] : wall[id - XP_COUNT];
+            }
+            const char *page = getenv("LINDBERGH_TEST_PANEL_PAGE");
+            if (page && *page == '2') {      /* the VR page instead */
+                pw.page = XW_PAGE_IMMERSIVE; pn = xw_page_rows(&pw, &pc, pr); m = 0; xw_items(&pw, &pc, wall);
+                for (int i = 0; i < pn; i++) rows[m++] = pr[i] < XP_COUNT ? all[pr[i]] : wall[pr[i] - XP_COUNT];
+            }
+            xm_paint_modes(img, xw_title(&pw) ? xw_title(&pw) : "Virtua Tennis 3 - settings", rows, m, 1, xw_mode_note(&pw, &pc), xw_hint(&pw));
+            FILE *f = fopen(pp, "wb");
+            fprintf(f, "P6\n%d %d\n255\n", XM_W, XM_H);
+            for (int i = 0; i < XM_W * XM_H; i++) fwrite(img + 4 * i, 1, 3, f);
+            fclose(f);
+        }
+    }
     puts("ok");
     return 0;
 }
 ''')
             b = Path(temp) / "wp"
             subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(rt), str(src), str(rt / "xr_world_panel.c"),
-                            str(rt / "world_mode.c"), str(rt / "xr_menu.c"), "-pthread", "-lm", "-o", str(b)], check=True)
+                            str(rt / "world_mode.c"), str(rt / "xr_menu.c"), str(rt / "xr_panel.c"), str(rt / "stereo_projection.c"), str(rt / "xr_settings.c"), "-pthread", "-lm", "-o", str(b)], check=True)
             self.assertEqual(subprocess.run([str(b)], check=True, capture_output=True, text=True).stdout.strip(), "ok")
 
 

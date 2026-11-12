@@ -104,7 +104,7 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     o->overlays = im ? s->imm_overlays : s->arcade_overlays;
     o->shadow = im ? s->imm_shadow : s->classic_shadow;
     o->shadow_scale = scale_of(o->shadow);
-    o->dolly = (float)s->imm_dolly; o->back = (float)s->imm_back; o->sky = s->imm_sky;
+    o->dolly = (float)LG_XR_DOLLY_FIXED; o->back = (float)LG_XR_BACK_FIXED; o->sky = s->imm_sky;   /* fixed (T12); env for tests */
     o->height = (float)s->imm_height;
     resolve_view(WM_REPLAYS, im, im ? s->imm_replays : s->replays, &o->replays, &o->replay_view, &k[WM_REPLAYS]);
     resolve_view(WM_CUTAWAYS, im, im ? s->imm_cutaways : s->classic_cutaways, &o->cutaways, &o->cutaway_view, &k[WM_CUTAWAYS]);
@@ -115,6 +115,8 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     }
     if ((v = env(WM_DOLLY))) { o->dolly = (float)atof(v); k[WM_DOLLY] = WM_SRC_ENV; }
     if ((v = env(WM_BACK))) { o->back = (float)atof(v); k[WM_BACK] = WM_SRC_ENV; }
+    if (k[WM_DOLLY] == WM_SRC_FILE) k[WM_DOLLY] = WM_SRC_DEFAULT;   /* (no longer read from vr.cfg) */
+    if (k[WM_BACK] == WM_SRC_FILE) k[WM_BACK] = WM_SRC_DEFAULT;
     if ((v = env(WM_HEIGHT))) { o->height = (float)atof(v); k[WM_HEIGHT] = WM_SRC_ENV; }
     if ((v = env(WM_SKY))) { o->sky = world_mode_sky_value(v); k[WM_SKY] = WM_SRC_ENV; }
     if (src) memcpy(src, k, sizeof k);

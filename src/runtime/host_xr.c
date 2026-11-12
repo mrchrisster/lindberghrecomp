@@ -359,7 +359,7 @@ static void menu_rows(void)
         if ((i == XP_OVERLAYS || i == XW_ROW(XW_OVERLAYS)) && !g_arcade_overlay_hooks) continue;
         if ((i == XP_REPLAYS || i == XW_ROW(XW_REPLAYS)) && !g_replay_hook) continue;
         if (i == XW_ROW(XW_CUTAWAYS) && !g_cutaway_hook) continue;
-        if (menu_n < XM_ROWS) menu_ids[menu_n++] = i;
+        if (menu_n < (g_world_capable ? XM_MODE_ROWS : XM_ROWS)) menu_ids[menu_n++] = i;
     }
 }
 /* a run's env variable pins Arcade overlays / Replays (games without pages):
@@ -430,8 +430,10 @@ static void menu_paint(void)
     snprintf(title, sizeof title, "%s", wt ? wt : app_title());
     if (!wt) snprintf(title, sizeof title, "%s - settings", app_title());
     /* (the hint: 42 characters fit the panel's width) */
-    xm_paint(img, title, it, menu_n, menu.hover,
-             g_world_capable ? xw_hint(&wpanel) : "Point and pull the trigger. Menu: close.");
+    if (g_world_capable)    /* the Classic / VR buttons on top (the pages' first two rows) */
+        xm_paint_modes(img, title, it, menu_n, menu.hover, xw_mode_note(&wpanel, &cfg), xw_hint(&wpanel));
+    else
+        xm_paint(img, title, it, menu_n, menu.hover, "Point and pull the trigger. Menu: close.");
     xo_panel_upload(img, XM_W, XM_H);
     menu.dirty = 0;
     {   /* LINDBERGH_XR_MENU_DUMP=1 (tests): each painted panel as menu_p<page>_<frame>.ppm beside the game */
@@ -702,7 +704,7 @@ static int aim_gun(int h, int pl, XrTime t, int *trig, XoFrame *x, float *gx_, f
         if (menu.open) {        /* the laser points at the panel; the game is not aimed at */
             float u, v, hit[3];
             int on = menu_hit(p, d, &u, &v, hit);
-            int row = on ? (menu_rows(), xm_row_at(u, v, menu_n)) : -1;
+            int row = on ? (menu_rows(), g_world_capable ? xm_row_at_modes(u, v, menu_n) : xm_row_at(u, v, menu_n)) : -1;
             /* the panel's highlight follows the gun last on it */
             if (on && row != menu.hover) { menu.hover = row; menu.dirty = 1; }
             if (!on && pl == 0 && !cfg.dual && menu.hover != -1) { menu.hover = -1; menu.dirty = 1; }

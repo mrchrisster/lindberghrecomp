@@ -57,8 +57,7 @@ int main(void) {
             self.assertEqual(self.run_settings(d,{"LINDBERGH_XR_SET":"width=-1,resolution=1,screen=0,scale=-2"}),NATIVE+" 120 1.000 3.000 0 0 0")
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
-               "immersive.overlays":"off","immersive.cutaways":"off","immersive.dolly":"200",
-               "immersive.back":"60","immersive.sky":"stadium","immersive.shadow":"2048",
+               "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
                "immersive.height":"0"}
 
     @staticmethod
@@ -77,9 +76,8 @@ int main(void) {
 
     def test_mode_keys_round_trip(self):
         cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"world",
-             "immersive.overlays":"on","immersive.cutaways":"camera","immersive.dolly":"250",
-             "immersive.back":"70","immersive.sky":"painted","immersive.shadow":"1024",
-             "immersive.height":"-10"}
+             "immersive.overlays":"on","immersive.cutaways":"camera","immersive.sky":"painted","immersive.shadow":"1024",
+             "immersive.height":"10"}
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("".join(f"{k} {v}\n" for k,v in cfg.items()))
             self.run_settings(d)
@@ -106,17 +104,17 @@ int main(void) {
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             self.assertNotIn("bogus",saved);self.assertNotIn("future.key",saved)
             self.assertEqual(saved["mode"],"immersive");self.assertEqual(saved["immersive.shadow"],"2048")
-            self.assertNotIn("immersive.stand_y",saved);self.assertEqual(saved["immersive.dolly"],"200")
+            self.assertNotIn("immersive.stand_y",saved);self.assertNotIn("immersive.dolly",saved)
 
-    def test_step_back_and_height_snap_to_choices(self):
-        # an older panel's Step back (0 / 3 / 9 / 12 m) and odd heights become the nearest choice
-        for back,want in (("0","50"),("30","50"),("90","80"),("120","80"),("65","60"),("-7","50"),("999","80")):
+    def test_step_back_gone_and_height_low_medium_high(self):
+        # the old Camera closer / Step back keys are dropped (fixed now); heights: <= 0 Low, +1 m Medium, +2 m High
+        for h,want in (("-20","0"),("-10","0"),("0","0"),("10","10"),("20","20"),("35","20"),("4","0")):
             with tempfile.TemporaryDirectory() as d:
-                (Path(d)/"vr.cfg").write_text(f"immersive.back {back}\nimmersive.height {int(back)//4}\n")
+                (Path(d)/"vr.cfg").write_text(f"immersive.back 80\nimmersive.dolly 300\nimmersive.height {h}\n")
                 self.run_settings(d)
                 saved=self.parse((Path(d)/"vr.cfg").read_text())
-                self.assertEqual(saved["immersive.back"],want,back)
-                self.assertIn(saved["immersive.height"],("-20","-10","0","10","20"))
+                self.assertNotIn("immersive.back",saved);self.assertNotIn("immersive.dolly",saved)
+                self.assertEqual(saved["immersive.height"],want,h)
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("immersive.height 14\n")
             self.run_settings(d)
@@ -129,7 +127,7 @@ int main(void) {
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             self.assertNotIn("immersive.stand_y",saved);self.assertEqual(saved["immersive.sky"],"stadium")
-            self.assertEqual(saved["immersive.dolly"],"150")
+            self.assertNotIn("immersive.dolly",saved)
         for v in ("off","painted","stadium"):
             with tempfile.TemporaryDirectory() as d:
                 (Path(d)/"vr.cfg").write_text("immersive.sky %s\n"%v)
@@ -143,6 +141,6 @@ int main(void) {
                                  "LINDBERGH_REPLAYS":"0","LINDBERGH_VT3_IMMERSIVE":"1"})
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             self.assertEqual(saved["replays"],"on");self.assertEqual(saved["mode"],"classic")
-            self.assertEqual(saved["immersive.dolly"],"200")
+            self.assertNotIn("immersive.dolly",saved)
 
 if __name__=="__main__":unittest.main()
