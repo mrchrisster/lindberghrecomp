@@ -41,11 +41,14 @@ void lg_blit_over(uint8_t *dst, int dw, int dh, const uint8_t *src, int sw, int 
                   int x, int y, int w, int h);
 
 /* The start-up picture's places (splash_art.c, all in atlas pixels, top down):
- * logo_at  where the logo goes (x, y, w, h; fitted, centred, aspect kept)
+ * logo_at  where the logo goes (x, y, w, h; fitted, aspect kept); the group of
+ *          the logo and the VR badge - their drawn pixels, measured - is centred
+ *          on the place's centre line, and so is the fallback title
  * vr       our "VR" badge in the atlas (x, y, w, h); vr_at (dx, dy): its left
  *          edge dx right of the fitted logo's right edge, its bottom dy below
  *          the logo's bottom (negative: up) - it follows the logo's real size
- * title    our text title in the atlas (x, y, w, h), title_at where it goes (x, y)
+ * title    our text title in the atlas (x, y, w, h), title_at where it goes
+ *          (its y; x only when the title has no drawn pixels)
  * file     the logo's file, relative to the game's folder */
 typedef struct {
     const int *logo_at, *vr, *vr_at, *title, *title_at;

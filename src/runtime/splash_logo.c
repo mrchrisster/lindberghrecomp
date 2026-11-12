@@ -145,6 +145,16 @@ static uint8_t *atlas_part(const uint8_t *px, int aw, int ah, const int r[4])
     return p;
 }
 
+/* the drawn part (alpha > 8) of an RGBA picture: its left edge and width (0 width: nothing drawn) */
+static void drawn_x(const uint8_t *p, int w, int h, int *x0, int *dw)
+{
+    int a = w, b = -1;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            if (p[((size_t)y * w + x) * 4 + 3] > 8) { if (x < a) a = x; if (x > b) b = x; }
+    *x0 = b < a ? 0 : a; *dw = b < a ? 0 : b - a + 1;
+}
+
 int lg_splash_compose(uint8_t *px, int aw, int ah, const LgSplashPlaces *pl)
 {
     if (!px || !pl || !pl->logo_at || !pl->vr || !pl->vr_at || !pl->title || !pl->title_at || !pl->file) return -1;
@@ -158,17 +168,27 @@ int lg_splash_compose(uint8_t *px, int aw, int ah, const LgSplashPlaces *pl)
         const int *at = pl->logo_at;
         int fw = at[2], fh = (int)((long)at[2] * lh / lw);
         if (fh > at[3]) { fh = at[3]; fw = (int)((long)at[3] * lw / lh); }
-        const int fx = at[0] + (at[2] - fw) / 2, fy = at[1] + (at[3] - fh) / 2;
         uint8_t *vr = atlas_part(px, aw, ah, pl->vr);
+        /* the whole group - the logo's drawn part (cropped already), the gap, the badge's drawn
+         * part - centred on the place's centre line (the screen's), measured, not the rectangles */
+        int vx0 = 0, vdw = 0;
+        if (vr) drawn_x(vr, pl->vr[2], pl->vr[3], &vx0, &vdw);
+        const int group = fw + (vr && vdw ? pl->vr_at[0] + vdw : 0);
+        const int fx = at[0] + at[2] / 2 - group / 2, fy = at[1] + (at[3] - fh) / 2;
         lg_blit_over(px, aw, ah, logo, lw, lh, fx, fy, fw, fh);
-        if (vr) lg_blit_over(px, aw, ah, vr, pl->vr[2], pl->vr[3], fx + fw + pl->vr_at[0], fy + fh + pl->vr_at[1] - pl->vr[3],
+        if (vr) lg_blit_over(px, aw, ah, vr, pl->vr[2], pl->vr[3], fx + fw + pl->vr_at[0] - vx0, fy + fh + pl->vr_at[1] - pl->vr[3],
                              pl->vr[2], pl->vr[3]);
         free(vr); free(logo);
         fprintf(stderr, "[xr] splash: the game's title logo from %s (%dx%d, shown %dx%d) with VR\n", pl->file, lw, lh, fw, fh);
         return 1;
     }
     uint8_t *t = atlas_part(px, aw, ah, pl->title);
-    if (t) lg_blit_over(px, aw, ah, t, pl->title[2], pl->title[3], pl->title_at[0], pl->title_at[1], pl->title[2], pl->title[3]);
+    if (t) {   /* its drawn part centred on the logo place's centre line; title_at's y kept */
+        int tx0 = 0, tdw = 0;
+        drawn_x(t, pl->title[2], pl->title[3], &tx0, &tdw);
+        const int x = tdw ? pl->logo_at[0] + pl->logo_at[2] / 2 - tdw / 2 - tx0 : pl->title_at[0];
+        lg_blit_over(px, aw, ah, t, pl->title[2], pl->title[3], x, pl->title_at[1], pl->title[2], pl->title[3]);
+    }
     free(t);
     fprintf(stderr, "[xr] splash: our own title (the game's logo: %s)\n", why);
     return 0;

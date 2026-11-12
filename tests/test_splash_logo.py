@@ -100,10 +100,14 @@ int main(int argc, char **argv) {
         self.assertEqual(r, "1")
         self.assertIn("the game's title logo from", log)
         self.assertIn("(1024x512, shown 200x100) with VR", log)
+        # the group (logo 200 + gap -5 + badge 40 = 235) centred on the place's centre (200): logo x 83..283
+        self.assertEqual(at(84, 70), (0, 0, 255)); self.assertEqual(at(81, 70), (50, 50, 50))
+        self.assertEqual(at(281, 25), (255, 0, 0)); self.assertEqual(at(285, 25), (50, 50, 50))
         self.assertEqual(at(250, 25), (255, 0, 0))                            # the right part: the whole height
         self.assertEqual(at(110, 70), (0, 0, 255))                            # the left part: the middle half
         self.assertEqual(at(110, 25), (50, 50, 50))                           # above it: the panel shows
         self.assertEqual(at(300, 100), (0, 255, 0))                           # VR: logo right - 5, bottom up 5
+        self.assertEqual(at(316, 100), (0, 255, 0)); self.assertEqual(at(320, 100), (50, 50, 50))
         self.assertEqual(at(20, 20), (50, 50, 50))                            # no fallback title
 
     def test_missing_or_bad_file_gives_our_title(self):
@@ -113,8 +117,9 @@ int main(int argc, char **argv) {
             self.assertEqual(r, "0", why)
             self.assertIn("our own title", log)
             self.assertIn(why, log)
-            self.assertEqual(at(20, 20), (0, 0, 255))                         # the title, at title_at
-            self.assertEqual(at(250, 25), (50, 50, 50))                       # no logo, no VR badge
+            self.assertEqual(at(200, 20), (0, 0, 255))                        # the title, centred on the place
+            self.assertEqual(at(20, 20), (50, 50, 50))                        # (not at title_at's x)
+            self.assertEqual(at(300, 25), (50, 50, 50))                       # no logo, no VR badge
             self.assertEqual(at(300, 100), (50, 50, 50))
 
     def test_env_forces_the_fallback(self):
