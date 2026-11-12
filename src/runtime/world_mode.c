@@ -25,12 +25,12 @@
 static const char *const ENV_NAME[WM_COUNT] = {
     "LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OVERLAYS", "LINDBERGH_VT3_CUTAWAYS",
     "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK", "LINDBERGH_VT3_SKY",
-    "LINDBERGH_VT3_HEIGHT", "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE" };
+    "LINDBERGH_VT3_HEIGHT", "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE", "LINDBERGH_ANISO" };
 static const char *const KEY_CLASSIC[WM_COUNT] = {
-    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, "classic.card_notice", "language", "msaa", "save" };
+    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, "classic.card_notice", "language", "msaa", "save", "aniso" };
 static const char *const KEY_IMMERSIVE[WM_COUNT] = {
     "mode", "immersive.replays", "immersive.overlays", "immersive.cutaways", "immersive.shadow",
-    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height", NULL, "language", "msaa", "save" };
+    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height", NULL, "language", "msaa", "save", "aniso" };
 
 const char *world_mode_env_name(int key) { return key >= 0 && key < WM_COUNT ? ENV_NAME[key] : NULL; }
 const char *world_mode_key(int key, int immersive)
@@ -125,6 +125,10 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     o->msaa = s->msaa;
     o->save = s->save;
     if ((v = env(WM_SAVE))) { o->save = *v == '1' || !strcmp(v, "on"); k[WM_SAVE] = WM_SRC_ENV; }
+    o->aniso = xr_settings_aniso(s->aniso);
+    if ((v = env(WM_ANISO))) { o->aniso = xr_settings_aniso(atoi(v)); k[WM_ANISO] = WM_SRC_ENV; }
+    {   const char *nm = getenv("LINDBERGH_VT3_SAVE_NAME");
+        if (!(nm && *nm && xr_settings_save_name(nm, o->save_name))) xr_settings_save_name(s->save_name, o->save_name); }
     if ((v = env(WM_MSAA))) { int n = atoi(v); o->msaa = n >= 4 ? 4 : n >= 2 ? 2 : 0; k[WM_MSAA] = WM_SRC_ENV; }
     if ((v = env(WM_LANGUAGE))) { o->language = !(*v == '0' || !strcmp(v, "japanese")); k[WM_LANGUAGE] = WM_SRC_ENV; }
     if ((v = env(WM_SKY))) { o->sky = world_mode_sky_value(v); k[WM_SKY] = WM_SRC_ENV; }
@@ -178,17 +182,29 @@ void world_mode_init(int capable)
     xr_settings_load(&s);                   /* the headset's stored settings (a scratch copy) */
     world_mode_resolve(&s, -1, capable, 0, &g_wm, NULL);
     present = file_present(g_wm.immersive);
+#else
+    {   /* the desktop: only the game settings its Game menu writes to vr.cfg (host_menu_mac.m:
+         * save, save_name) - display settings stay the headset's */
+        LgXrSettings f = LG_XR_SETTINGS_DEFAULT;
+        FILE *t = fopen("vr.cfg", "r");
+        if (t) {
+            fclose(t);
+            xr_settings_load(&f);
+            s.save = f.save; memcpy(s.save_name, f.save_name, sizeof s.save_name);
+            present = 1u << WM_SAVE;
+        }
+    }
 #endif
     world_mode_resolve(&s, -1, capable, present, &g_wm, src);
     static const char *const SRC[] = { "default", "vr.cfg", "env" };
     fprintf(stderr, "[world] mode %s (%s) dolly %.0f (%s) back %.0f (%s) height %.0f (%s) sky %s (%s) shadow %d (%s) "
-                    "replays %s (%s) overlays %s (%s) cutaways %s (%s) card notice %s (%s) language %s (%s) msaa %d (%s) save %s (%s)%s\n",
+                    "replays %s (%s) overlays %s (%s) cutaways %s (%s) card notice %s (%s) language %s (%s) msaa %d (%s) save %s (%s) aniso %d (%s) save name %s%s\n",
             g_wm.immersive ? "immersive" : "classic", SRC[src[WM_MODE]],
             g_wm.dolly, SRC[src[WM_DOLLY]], g_wm.back, SRC[src[WM_BACK]], g_wm.height, SRC[src[WM_HEIGHT]],
             sky_name(g_wm.sky), SRC[src[WM_SKY]], g_wm.shadow, SRC[src[WM_SHADOW]],
             view_label(g_wm.replays, g_wm.replay_view, g_wm.immersive), SRC[src[WM_REPLAYS]], g_wm.overlays ? "on" : "off", SRC[src[WM_OVERLAYS]],
             view_label(g_wm.cutaways, g_wm.cutaway_view, g_wm.immersive), SRC[src[WM_CUTAWAYS]],
-            g_wm.card_notice ? "on" : "off", SRC[src[WM_CARD]], g_wm.language ? "english" : "japanese", SRC[src[WM_LANGUAGE]], g_wm.msaa, SRC[src[WM_MSAA]], g_wm.save ? "on" : "off", SRC[src[WM_SAVE]], capable ? "" : " - this game has no world mode");
+            g_wm.card_notice ? "on" : "off", SRC[src[WM_CARD]], g_wm.language ? "english" : "japanese", SRC[src[WM_LANGUAGE]], g_wm.msaa, SRC[src[WM_MSAA]], g_wm.save ? "on" : "off", SRC[src[WM_SAVE]], g_wm.aniso, SRC[src[WM_ANISO]], g_wm.save_name, capable ? "" : " - this game has no world mode");
     g_start = g_game = g_panel_req = g_wm.immersive;
     atomic_store(&g_target, g_start);
     atomic_store(&g_gl, g_start);
@@ -285,6 +301,8 @@ int world_mode_card_notice(void) { return wm()->card_notice; }
 int world_mode_language(void) { return wm()->language; }
 int world_mode_msaa(void) { return wm()->msaa; }
 int world_mode_save(void) { return wm()->save; }
+int world_mode_aniso(void) { return wm()->aniso; }
+const char *world_mode_save_name(void) { return wm()->save_name; }
 int world_mode_replay_view(void) { return wm()->replay_view; }
 int world_mode_cutaway_view(void) { return wm()->cutaway_view; }
 int world_mode_sky(void) { return wm()->sky; }

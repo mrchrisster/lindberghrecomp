@@ -11,7 +11,9 @@
  * VR advanced: camera height (Low / Medium / High; your player at the far
  * end is always High - stereo.c), the same three (replays and cutaways Off /
  * Flat screen / Camera view), sky (Stadium / Painted / Off),
- * shadow quality. Camera closer and Step back are gone (fixed 20 m / 5 m,
+ * shadow quality; both: Save progress, Reset save (pull twice) and Texture
+ * filtering (one value each for both modes, on restart; the main page is
+ * full). Camera closer and Step back are gone (fixed 20 m / 5 m,
  * T12). Replays, cutaways, overlays, camera height and sky are live for the
  * running mode; shadow quality and the mode apply on restart. A row whose env
  * variable is set shows "(env.txt)" with the run's value and ignores clicks.
@@ -48,6 +50,7 @@ static int wm_key(int item)
     case XW_LANGUAGE: return WM_LANGUAGE;
     case XW_MSAA: return WM_MSAA;
     case XW_SAVE: return WM_SAVE;
+    case XW_ANISO: return WM_ANISO;
     case XW_SKY: return WM_SKY;
     default: return -1;
     }
@@ -62,7 +65,7 @@ static int pinned(const XwState *w, int item)
 {
     const int k = wm_key(item);
     if (k < 0 || !(w->pins >> k & 1)) return 0;
-    return k == WM_MODE || k == WM_LANGUAGE || k == WM_MSAA || k == WM_SAVE || page_mode(w) == w->running;
+    return k == WM_MODE || k == WM_LANGUAGE || k == WM_MSAA || k == WM_SAVE || k == WM_ANISO || page_mode(w) == w->running;
 }
 
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
@@ -73,13 +76,13 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS),
-                                 XW_ROW(XW_CARD), XW_ROW(XW_SAVE), XW_ROW(XW_SHADOW), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
+                                 XW_ROW(XW_CARD), XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_HEIGHT),
                                  XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
-                                 XW_ROW(XW_SAVE), XW_ROW(XW_SHADOW), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
+                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     default:
@@ -142,6 +145,14 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_LANGUAGE].label = "Language";
     it[XW_MSAA].label = "Anti-aliasing";
     it[XW_SAVE].label = "Save progress";
+    it[XW_RESET_SAVE].label = "Reset save";
+    snprintf(it[XW_RESET_SAVE].value, 40, "%s", w->reset_save_armed ? "Pull again to erase" : w->reset_save_done ? "Done (fresh at next game)" : "");
+    it[XW_ANISO].label = "Texture filtering";
+    {
+        const int a = pinned(w, XW_ANISO) ? w->eff.aniso : xr_settings_aniso(cfg->aniso);
+        if (a >= 2) snprintf(it[XW_ANISO].value, 40, "Sharp %dx%s", a, !pinned(w, XW_ANISO) && a != w->eff.aniso ? " (on restart)" : "");
+        else snprintf(it[XW_ANISO].value, 40, "Standard%s", !pinned(w, XW_ANISO) && a != w->eff.aniso ? " (on restart)" : "");
+    }
     {
         const int v = pinned(w, XW_SAVE) ? w->eff.save : cfg->save;
         snprintf(it[XW_SAVE].value, 40, "%s%s", on_off(v), !pinned(w, XW_SAVE) && v != w->eff.save ? " (on restart)" : "");
@@ -211,9 +222,15 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
 unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
 {
     if (item < 0 || item >= XW_COUNT) return 0;
-    const int armed = w->restore_armed;
-    w->restore_armed = 0;
-    if (pinned(w, item)) return armed ? XW_PAGE_CHANGED : 0;     /* (env.txt): the run's own value */
+    const int armed = w->restore_armed, save_armed = w->reset_save_armed;
+    w->restore_armed = 0; w->reset_save_armed = 0;
+    if (item == XW_RESET_SAVE) {        /* an action, not a setting: nothing stored, no env pin */
+        if (page_mode(w) < 0) return 0;
+        if (!save_armed) { w->reset_save_armed = 1; return XW_PAGE_CHANGED; }
+        w->reset_save_done = 1;
+        return XW_RESET_SAVE_FX | XW_PAGE_CHANGED;
+    }
+    if (pinned(w, item)) return armed || save_armed ? XW_PAGE_CHANGED : 0;     /* (env.txt): the run's own value */
     const int im = page_mode(w) == 1;
     const unsigned live = page_mode(w) == w->running ? XW_LIVE_CHANGED : 0;   /* the other mode's: saved for later */
     unsigned fx = XP_SAVE;
@@ -240,6 +257,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_LANGUAGE: c->language = !c->language; break;                                                     /* on restart */
     case XW_SAVE: if (page_mode(w) < 0) return 0; c->save = !c->save; break;                               /* on restart */
     case XW_MSAA: c->msaa = c->msaa >= 4 ? 0 : c->msaa >= 2 ? 4 : 2; break;                                 /* Off > 2x > 4x, on restart */
+    case XW_ANISO: c->aniso = next_step(xr_settings_aniso(c->aniso), LG_XR_ANISO_STEPS, LG_XR_ANISO_NSTEPS); break;   /* Standard > 4x > 8x, on restart */
     case XW_SHADOW: {
         int *s = im ? &c->imm_shadow : &c->classic_shadow, k = 0;
         while (k < 3 && SHADOWS[k] <= *s) k++;

@@ -10,7 +10,8 @@ ENV_KEYS = ["LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OV
             "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK",
             "LINDBERGH_VT3_SKY", "LINDBERGH_VT3_HEIGHT", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE", "LINDBERGH_VT3_LIVE_SWITCH",
             "LINDBERGH_VT3_MODE_AT", "LINDBERGH_VT3_REPLAY_VIEW", "LINDBERGH_VT3_CUTAWAY_VIEW",
-            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE"]
+            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE",
+            "LINDBERGH_ANISO", "LINDBERGH_VT3_SAVE_NAME"]
 
 
 class WorldModeTests(unittest.TestCase):
@@ -41,6 +42,10 @@ int main(int argc, char **argv) {
     if (argc > 2 && !strcmp(argv[2], "msaa")) {     /* anti-aliasing samples, its pin, the getter */
         printf(" | %d %d %d | %d %d %d\n", v->msaa, world_mode_pinned(WM_MSAA), world_mode_msaa(),
                v->save, world_mode_pinned(WM_SAVE), world_mode_save());
+        return 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "aniso")) {    /* texture filtering, its pin, the getter; the save's name */
+        printf(" | %d %d %d | %s %s\n", v->aniso, world_mode_pinned(WM_ANISO), world_mode_aniso(), v->save_name, world_mode_save_name());
         return 0;
     }
     if (argc > 2 && !strcmp(argv[2], "views")) {    /* replays / cutaways: on, view; and the pins */
@@ -148,6 +153,24 @@ int main(int argc, char **argv) {
         self.assertIn("msaa 4 (vr.cfg)", log)
         _, log = self.run_wm()
         self.assertIn("msaa 0 (default)", log)
+
+    def test_texture_filtering_and_save_name(self):
+        a = lambda cfg=None, env=None, **k: self.run_wm(cfg, env, args=("1", "aniso"), **k)[0].split(" | ")
+        self.assertEqual(a()[1:], ["0 0 0", "PLAYER PLAYER"])                                # defaults: Standard, PLAYER
+        self.assertEqual(a("aniso 8\n")[1], "8 0 8")
+        self.assertEqual(a("mode immersive\naniso 4\n")[1], "4 0 4")                         # one value for both modes
+        self.assertEqual(a("aniso 6\n")[1], "4 0 4")                                          # off the list: the nearer below
+        self.assertEqual(a("aniso 8\n", {"LINDBERGH_ANISO": "16"})[1], "16 1 16")             # env wins, pinned
+        self.assertEqual(a("aniso 8\n", {"LINDBERGH_ANISO": "0"})[1], "0 1 0")
+        self.assertEqual(a("save_name rally\n")[2], "RALLY RALLY")
+        self.assertEqual(a("save_name rally\n", {"LINDBERGH_VT3_SAVE_NAME": "Ace"})[2], "ACE ACE")
+        self.assertEqual(a("save_name rally\n", {"LINDBERGH_VT3_SAVE_NAME": "bad name"})[2], "RALLY RALLY")  # a bad env name: vr.cfg's
+        self.assertIn("aniso 8 (vr.cfg)", self.run_wm("aniso 8\n")[1])
+        # the desktop: only Save progress and its name from vr.cfg (its Game menu writes them)
+        d = lambda cfg, env=None: self.run_wm(cfg, env, args=("1", "aniso"), binary=self.desk)[0].split(" | ")
+        self.assertEqual(d("aniso 8\nsave_name rally\n")[1:], ["0 0 0", "RALLY RALLY"])
+        self.assertEqual(d("aniso 8\n", {"LINDBERGH_ANISO": "8"})[1], "8 1 8")
+        self.assertEqual(self.run_wm("save on\nmode immersive\n", args=("1", "msaa"), binary=self.desk)[0].split(" | ")[2], "1 0 1")
 
     def test_defaults_are_classic(self):
         out, log = self.run_wm()

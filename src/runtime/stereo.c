@@ -2631,6 +2631,19 @@ static void fix_query(CPU *c, int k)
     }
 }
 
+/* a texture the game renders or copies into (a framebuffer's colour or depth
+ * texture, a copy of the screen, a view): never given anisotropic filtering
+ * (hle_gl_posix.c's Texture filtering). Known only once seen. */
+int stereo_texture_is_target(unsigned tex)
+{
+    if (!tex) return 0;
+    for (unsigned i = 0; i < g_nfb_color; i++) if (g_fb_color[i].tex == tex) return 1;
+    for (unsigned i = 0; i < g_nfb_depth; i++) if (g_fb_depth[i].depth == tex) return 1;
+    for (unsigned i = 0; i < g_nscreen_copy; i++) if (g_screen_copy[i] == tex) return 1;
+    for (int i = 0; i < g_n_view_tex; i++) if (g_view_tex[i] == tex) return 1;
+    return 0;
+}
+
 static void exec(CPU *c, HleId id, HleHandler fn)
 {
     int k = cls(id)->kind;
@@ -3767,7 +3780,47 @@ static void stereo_gl_call_inner(CPU *c, HleId id, HleHandler fn)
             else if (cur && nl < 20000) { nl++; fprintf(stderr, "[list] %#x %s %#x %#x %#x %#x\n", cur, nm, A32(0), A32(1), A32(2), A32(3)); }
         }
     }
-    if (!g_on) { fn(c); return; }
+    if (!g_on) {
+        /* LINDBERGH_PICK=<frame>,<x0>,<y>[,<x1>] (desktop, flat): every draw of that frame that changes
+         * a pixel of the row x0..x1 at y (from the bottom left of the bound framebuffer), with its
+         * texture and state - which draw is the net, and how it is drawn (alpha test / blend, filter,
+         * mips). A glBegin's pixels are read at the glBegin (none can be read inside it). */
+        static long pf = -2; static int px, py, px1;
+        static unsigned char row0[4 * 256];
+        if (pf == -2) { const char *v = getenv("LINDBERGH_PICK"); pf = -1;
+                        if (v) { int n = sscanf(v, "%ld,%d,%d,%d", &pf, &px, &py, &px1); if (n < 3) pf = -1; if (n < 4) px1 = px;
+                                 if (px1 < px) px1 = px; if (px1 - px > 255) px1 = px + 255; } }
+        const int k = cls(id)->kind;
+        if ((long)g_frame == pf && (is_draw(k) || k == K_END || k == K_BEGIN)) {
+            const int n = px1 - px + 1;
+            unsigned char b[4 * 256];
+            if (k == K_BEGIN) { glReadPixels(px, py, n, 1, GL_RGBA, GL_UNSIGNED_BYTE, row0); fn(c); return; }
+            if (k != K_END) glReadPixels(px, py, n, 1, GL_RGBA, GL_UNSIGNED_BYTE, row0);
+            fn(c);
+            glReadPixels(px, py, n, 1, GL_RGBA, GL_UNSIGNED_BYTE, b);
+            int changed = 0, first = -1;
+            for (int i = 0; i < n; i++) if (memcmp(row0 + 4 * i, b + 4 * i, 4)) { changed++; if (first < 0) first = i; }
+            if (changed) {
+                const unsigned char *a = row0 + 4 * first, *z = b + 4 * first;
+                GLint t2 = 0, fb = 0, minf = 0, magf = 0, maxl = 0, w = 0, h = 0, af = 0, unit = 0, gm = 0; GLfloat aref = 0, an = 0, lodb = 0;
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &unit); glActiveTexture(GL_TEXTURE0);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D, &t2); glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fb);
+                glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minf); glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magf);
+                glGetTexParameteriv(GL_TEXTURE_2D, 0x813D /* MAX_LEVEL */, &maxl); glGetTexParameterfv(GL_TEXTURE_2D, 0x84FE, &an);
+                glGetTexParameterfv(GL_TEXTURE_2D, 0x8501 /* LOD_BIAS */, &lodb); glGetTexParameteriv(GL_TEXTURE_2D, 0x8191 /* GENERATE_MIPMAP */, &gm);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w); glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
+                glGetIntegerv(GL_ALPHA_TEST_FUNC, &af); glGetFloatv(GL_ALPHA_TEST_REF, &aref);
+                glActiveTexture((GLenum)unit);
+                GLint fp = 0; int fpon = 0; glGetProgramivARB(GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_BINDING_ARB, &fp); arb_is_enabled(GL_FRAGMENT_PROGRAM_ARB, &fpon);
+                fprintf(stderr, "[pick] frame %u %s: %d of %d pixels (first x %d: %02x%02x%02x%02x -> %02x%02x%02x%02x) | fb %d tex %d %dx%d min %#x mag %#x maxlevel %d "
+                                "genmip %d aniso %.0f lodbias %.1f | alpha test %d func %#x ref %.2f blend %d depth %d fp %d%s\n", g_frame, hle_name(id), changed, n,
+                        px + first, a[0], a[1], a[2], a[3], z[0], z[1], z[2], z[3], fb, t2, w, h, minf, magf, maxl, gm, an, lodb,
+                        glIsEnabled(GL_ALPHA_TEST), af, aref, glIsEnabled(GL_BLEND), glIsEnabled(GL_DEPTH_TEST), fp, fpon ? "" : "(off)");
+            }
+            return;
+        }
+        fn(c); return;
+    }
     const char *n = hle_name(id);
 #ifdef LINDBERGH_GL4ES
     if (gl4es_mv_trace) {   /* the dump frame with LIBGL_MV_CHECK: which call fails */

@@ -52,7 +52,7 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 13 && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 15 && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
     assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
@@ -100,7 +100,7 @@ int main(void) {
     c.world_mode = 0; w.page = XW_PAGE_CLASSIC;
     fx = xw_choose(&w, &c, XW_CUTAWAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 12 && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 14 && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -173,6 +173,50 @@ int main(void) {
       sw.pins = 1u << WM_SAVE; sw.eff.save = 0;
       xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "Off (env.txt)"));
       assert(xw_choose(&sw, &sc, XW_SAVE) == 0 && sc.save == 1); }
+    /* Reset save below Save progress on both Advanced pages: pull twice (like Restore defaults), an action - nothing stored */
+    { XwState rw; memset(&rw, 0, sizeof rw); LgXrSettings rc = LG_XR_SETTINGS_DEFAULT, before;
+      world_mode_resolve(&rc, 0, 1, 0, &rw.eff, NULL);
+      int rr[XW_ROWS_MAX], rn = xw_page_rows(&rw, &rc, rr);
+      assert(!has(rr, rn, XW_ROW(XW_RESET_SAVE)));
+      for (int pg = XW_PAGE_CLASSIC; pg <= XW_PAGE_IMMERSIVE; pg++) {
+          rw.page = pg; rn = xw_page_rows(&rw, &rc, rr);
+          assert(find(&rw, &rc, XW_ROW(XW_RESET_SAVE)) == find(&rw, &rc, XW_ROW(XW_SAVE)) + 1);
+          assert(rn <= XM_MODE_ROWS);
+          rw.reset_save_done = 0;
+          xw_items(&rw, &rc, it); assert(!strcmp(it[XW_RESET_SAVE].label, "Reset save") && !it[XW_RESET_SAVE].value[0]);
+          before = rc;
+          assert(xw_choose(&rw, &rc, XW_RESET_SAVE) == XW_PAGE_CHANGED && rw.reset_save_armed);   /* first pull: armed */
+          xw_items(&rw, &rc, it); assert(!strcmp(it[XW_RESET_SAVE].value, "Pull again to erase"));
+          unsigned f2 = xw_choose(&rw, &rc, XW_RESET_SAVE);
+          assert((f2 & XW_RESET_SAVE_FX) && !(f2 & XP_SAVE) && !rw.reset_save_armed && !memcmp(&before, &rc, sizeof rc));
+          xw_items(&rw, &rc, it); assert(!strcmp(it[XW_RESET_SAVE].value, "Done (fresh at next game)"));
+          /* armed, then another row: disarmed, no reset */
+          xw_choose(&rw, &rc, XW_RESET_SAVE); assert(rw.reset_save_armed);
+          assert(!(xw_choose(&rw, &rc, XW_SHADOW) & XW_RESET_SAVE_FX) && !rw.reset_save_armed);
+          assert(!(xw_choose(&rw, &rc, XW_RESET_SAVE) & XW_RESET_SAVE_FX));                        /* one pull again: armed only */
+          rw.reset_save_armed = 0;
+      }
+      rw.page = XW_PAGE_MAIN; assert(xw_choose(&rw, &rc, XW_RESET_SAVE) == 0); }
+    /* Texture filtering on both Advanced pages (one value), Standard by default, Standard > Sharp 4x > Sharp 8x, on restart */
+    { XwState tw; memset(&tw, 0, sizeof tw); LgXrSettings tc = LG_XR_SETTINGS_DEFAULT;
+      world_mode_resolve(&tc, 0, 1, 0, &tw.eff, NULL);
+      int tr[XW_ROWS_MAX], tn = xw_page_rows(&tw, &tc, tr);
+      assert(!has(tr, tn, XW_ROW(XW_ANISO)) && tc.aniso == 0 && tw.eff.aniso == 0);
+      tw.page = XW_PAGE_CLASSIC; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
+      xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].label, "Texture filtering") && !strcmp(it[XW_ANISO].value, "Standard"));
+      assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
+      xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 4x (on restart)"));
+      tw.page = XW_PAGE_IMMERSIVE; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
+      assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 8);
+      tw.eff.aniso = 8; xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 8x"));
+      assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 0);
+      xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Standard (on restart)"));
+      tc.aniso = 16; assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 0);        /* 16 (env / hand edit) -> 8 nearest -> Standard */
+      tc.aniso = 2; assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
+      xw_restore_defaults(&tc, 1); assert(tc.aniso == 4);                                      /* Restore defaults keeps it */
+      tw.pins = 1u << WM_ANISO; tw.eff.aniso = 16;
+      xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 16x (env.txt)"));
+      assert(xw_choose(&tw, &tc, XW_ANISO) == 0 && tc.aniso == 4); }
     /* a mode button on an Advanced page: that mode's page */
     w.pins = 0; w.running = 0; w.page = XW_PAGE_CLASSIC; c.world_mode = 0;
     fx = xw_choose(&w, &c, XW_MODE_VR); assert((fx & XP_SAVE) && c.world_mode == 1 && w.page == XW_PAGE_IMMERSIVE);

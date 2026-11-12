@@ -19,7 +19,7 @@ extern "C" {
 
 /* the values, for their env variables, sources and pins */
 enum { WM_MODE, WM_REPLAYS, WM_OVERLAYS, WM_CUTAWAYS, WM_SHADOW, WM_DOLLY, WM_BACK, WM_SKY, WM_HEIGHT,
-       WM_CARD, WM_LANGUAGE, WM_MSAA, WM_SAVE, WM_COUNT };
+       WM_CARD, WM_LANGUAGE, WM_MSAA, WM_SAVE, WM_ANISO, WM_COUNT };
 enum { WM_SRC_DEFAULT, WM_SRC_FILE, WM_SRC_ENV };
 
 typedef struct {
@@ -40,6 +40,10 @@ typedef struct {
     int language;               /* 1 English, 0 Japanese (vr.cfg language, LINDBERGH_VT3_LANGUAGE); on restart */
     int msaa;                   /* anti-aliasing samples asked for: 0, 2, 4 (vr.cfg msaa, LINDBERGH_MSAA); on restart */
     int save;                   /* Save progress: 1P's card record kept in vt3_save.bin (vr.cfg save, LINDBERGH_VT3_SAVE); on restart */
+    int aniso;                  /* anisotropic filtering of mipmapped world textures: 0 (off), 2, 4, 8, 16
+                                 * (vr.cfg aniso, LINDBERGH_ANISO); on restart */
+    char save_name[16];         /* the save record's name (vr.cfg save_name, LINDBERGH_VT3_SAVE_NAME; checked:
+                                 * xr_settings_save_name) */
 } WmValues;
 
 /* the env variable that pins a value for a run (LINDBERGH_REPLAYS, ...) */
@@ -101,6 +105,8 @@ int world_mode_card_notice(void);
 int world_mode_language(void);
 int world_mode_msaa(void);
 int world_mode_save(void);
+int world_mode_aniso(void);
+const char *world_mode_save_name(void);
 /* LG_VIEW_FLAT / _WORLD / _CAMERA (live) */
 int world_mode_replay_view(void);
 int world_mode_cutaway_view(void);

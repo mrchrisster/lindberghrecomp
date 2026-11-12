@@ -5,6 +5,7 @@
 #include "vt3_save.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,9 @@ static struct { int character; uint64_t when; uint8_t rec[VT3_SAVE_REC]; } g_ent
 static int g_n;
 static int g_nowrite;                    /* an unreadable file could not be moved aside: never written over */
 static char g_path[512];
+static unsigned g_gen;
+/* the panel's Reset save comes from the host's thread, the stores from the game's */
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 uint32_t vt3_save_crc32(const uint8_t *p, size_t n)
 {
@@ -115,9 +119,51 @@ const uint8_t *vt3_save_find(int character)
     return NULL;
 }
 
+static int store_locked(int character, const uint8_t rec[VT3_SAVE_REC]);
 int vt3_save_store(int character, const uint8_t rec[VT3_SAVE_REC])
 {
     if (!g_path[0]) vt3_save_open(NULL);
+    pthread_mutex_lock(&g_lock);
+    const int r = store_locked(character, rec);
+    pthread_mutex_unlock(&g_lock);
+    return r;
+}
+
+static void default_path(void)
+{
+    if (g_path[0]) return;
+    const char *e = getenv("LINDBERGH_VT3_SAVE_FILE");
+    snprintf(g_path, sizeof g_path, "%s", e && *e ? e : "vt3_save.bin");
+}
+
+unsigned vt3_save_generation(void) { return g_gen; }
+
+int vt3_save_reset(void)
+{
+    pthread_mutex_lock(&g_lock);
+    default_path();
+    char bak[540], to[600], to_prev[620];
+    const long t = (long)time(NULL);
+    snprintf(bak, sizeof bak, "%s.bak", g_path);
+    snprintf(to, sizeof to, "%s.reset-%ld.bak", g_path, t);
+    snprintf(to_prev, sizeof to_prev, "%s.reset-%ld.prev.bak", g_path, t);
+    int moved = 0, bad = 0;
+    FILE *f = fopen(g_path, "rb");
+    if (f) { fclose(f); if (rename(g_path, to) == 0) moved++; else bad = 1; }
+    f = bad ? NULL : fopen(bak, "rb");      /* else the next start would load the backup */
+    if (f) { fclose(f); if (rename(bak, to_prev) == 0) moved++; else bad = 1; }
+    if (bad) fprintf(stderr, "[save] reset: could not move %s aside (%s) - the save is kept\n", g_path, strerror(errno));
+    else {
+        g_n = 0; g_nowrite = 0; g_gen++;
+        fprintf(stderr, "[save] reset: %s%s%s - a fresh save at the next character select\n",
+                moved ? "kept as " : "no save file yet", moved ? to : "", moved > 1 ? " (and its backup)" : "");
+    }
+    pthread_mutex_unlock(&g_lock);
+    return bad ? -1 : moved;
+}
+
+static int store_locked(int character, const uint8_t rec[VT3_SAVE_REC])
+{
     int k = -1;
     for (int i = 0; i < g_n; i++) if (g_ent[i].character == character) k = i;
     if (k < 0) {

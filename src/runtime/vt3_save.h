@@ -44,6 +44,16 @@ const uint8_t *vt3_save_find(int character);
  * (logged; memory keeps it, the next store tries again) */
 int vt3_save_store(int character, const uint8_t rec[VT3_SAVE_REC]);
 uint32_t vt3_save_crc32(const uint8_t *p, size_t n);
+/* Reset save (panel row / desktop menu): the save file is renamed
+ * <file>.reset-<time>.bak and its backup <file>.bak to
+ * <file>.reset-<time>.prev.bak (both kept, nothing deleted), the records in
+ * memory are dropped and the generation goes up, so a record loaded before
+ * is not written back (hle_sega.c) - the next character select starts a
+ * fresh one. Any thread. Returns the files moved (0: there was none), -1
+ * when one could not be moved (then nothing is dropped). */
+int vt3_save_reset(void);
+/* bumped by each reset */
+unsigned vt3_save_generation(void);
 
 #ifdef __cplusplus
 }

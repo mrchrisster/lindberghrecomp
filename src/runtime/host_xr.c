@@ -82,6 +82,7 @@
 #include "xr_menu.h"
 #include "xr_world_panel.h"
 #include "world_mode.h"
+#include "vt3_save.h"
 
 /* a debug switch, looked up once */
 #define ENV_ON(name) ({ static int _on = -1; if (_on < 0) _on = getenv(name) != NULL; _on; })
@@ -531,6 +532,7 @@ static void menu_choose(int row)
     if((effects&XP_RATE_CHANGED)&&request_rate)request_rate(session,(float)cfg.refresh);
     if(effects&XP_RECENTER)anchor_pending=1;
     if(effects&XP_SAVE)cfg_save();
+    if(effects&XW_RESET_SAVE_FX){int n=vt3_save_reset();fprintf(stderr,"[xr] Reset save: %d file(s) moved aside - a fresh save at the next character select\n",n);}
     if(effects&XP_RESTART)reset_game();
 }
 
@@ -761,7 +763,7 @@ static void input_frame(XrTime t)
     if (fake_menu && views_ok && !fake_placed) { fake_placed = 1; menu_place(); menu.dirty = 1; }
     if (xp_menu_button(&menu,menu_btn,prev[HAND_L][6])) {
         fprintf(stderr, "[xr] settings panel %s\n", menu.open ? "open" : "closed");
-        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; }
+        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; wpanel.reset_save_armed = 0; }
     }
     int g = gun_hand, off = 1 - g;
 
@@ -790,7 +792,7 @@ static void input_frame(XrTime t)
     /* (not on a lever cabinet: there Y is a shot - the lob, held while it charges -
      * and the left controller's menu button opens the panel) */
     if(!lever_cab && xp_hold_button(&menu,btn_b[off],prev[off][3],dual,t,&panel_held)) {
-        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; }
+        if (menu.open) { menu_place(); menu.hover = -1; menu.dirty = 1; wpanel.page = XW_PAGE_MAIN; wpanel.restore_armed = 0; wpanel.reset_save_armed = 0; }
         rumble(off, 0.3f, 20);
         fprintf(stderr, "[xr] settings panel %s (held button)\n", menu.open ? "open" : "closed");
     }

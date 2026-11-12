@@ -13,12 +13,14 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "gl_posix.h"
 #include "arbprog.h"
 #include "glsl_pp.h"
 #include "glsl_compat.h"
 #include "stereo.h"
+#include "world_mode.h"
 
 int g_gl_trace;
 int g_list_log;
@@ -546,6 +548,10 @@ static void h_glGetError(CPU *c)
     RET(GL_NO_ERROR);
 }
 
+#ifndef LINDBERGH_VULKAN
+static float g_aniso;                   /* Texture filtering, below */
+static void aniso_upload(GLenum target, GLint level);
+#endif
 static void h_glTexImage2D(CPU *c)
 {
     {   /* LINDBERGH_CUBE_LOG=1: uploads into a cube map's faces */
@@ -567,9 +573,11 @@ static void h_glTexImage2D(CPU *c)
         glTexImage2D(A32(0), AI32(1), GL_RGBA, w, h, AI32(5), GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         glPixelStorei(GL_UNPACK_ALIGNMENT, was);
         free(rgba);
+        if (g_aniso != 0) aniso_upload(A32(0), AI32(1));
         return;
     }
     glTexImage2D(A32(0), AI32(1), ifmt, w, h, AI32(5), fmt, type, px);
+    if (g_aniso != 0) aniso_upload(A32(0), AI32(1));
 }
 
 static void h_glTexSubImage2D(CPU *c)
@@ -776,6 +784,141 @@ static void h_glIsEnabled(CPU *c)
     int on;
     if (arb_is_enabled(A32(0), &on)) RET(on); else RET(glIsEnabled(A32(0)));
 }
+/* Texture filtering (vr.cfg aniso, LINDBERGH_ANISO=0|2|4|8|16; Virtua Tennis
+ * 3's Advanced pages, on restart): anisotropic filtering for the game's
+ * mipmapped 2D textures - the court lines, the net, the ad boards seen at a
+ * grazing angle stay sharp instead of blurring to a coarser mip level (MSAA
+ * does nothing for a texture's inside). Given where the game itself sets a
+ * mip-using minification filter (glTexParameteri / f, GL_TEXTURE_MIN_FILTER
+ * *_MIPMAP_*): GL_TEXTURE_MAX_ANISOTROPY_EXT set right after, on the same
+ * texture - inside a display list too (Virtua Tennis 3 sets texture state in
+ * lists; the extra call is compiled with it and replays with it). A filter
+ * without mips sets it back to 1. VT3 makes no mipmaps itself (no
+ * glGenerateMipmap: its mip levels come from files), so a mip filter means a
+ * file texture: render targets, depth textures and screen copies never have
+ * one, and a texture the stereo layer has seen rendered / copied into is
+ * skipped anyway. HUD and font atlases with mips are drawn screen-aligned,
+ * where anisotropic filtering samples as before. The runtime's own textures
+ * (splash, panel, sky) are made with direct GL calls, not through here.
+ * Off (the default): the game's call as it was, nothing added. Decided at
+ * the first call (world_mode is resolved by then). Not on the Vulkan host. */
+#ifndef LINDBERGH_VULKAN
+static float g_aniso = -1;      /* -1 not decided yet, 0 off, else the level (clamped to the driver's) */
+static unsigned g_aniso_sets, g_aniso_resets, g_aniso_skipped;
+static void aniso_decide(void)
+{
+    const char *e = getenv("LINDBERGH_ANISO");
+    int want = world_mode_aniso();
+    if (!world_mode_capable() && !(e && *e)) want = 0;     /* another game: only by env */
+    g_aniso = 0;
+    if (want < 2) return;
+    const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+    GLfloat max = 0;
+    if (ext && strstr(ext, "GL_EXT_texture_filter_anisotropic")) glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &max);
+    if (max < 2) { fprintf(stderr, "[gl] texture filtering: %dx asked, the driver has no anisotropic filtering - standard\n", want); return; }
+    g_aniso = (float)want < max ? (float)want : max;
+    fprintf(stderr, "[gl] texture filtering: anisotropic %.0fx (asked %d, driver max %.0f) on mipmapped textures\n", g_aniso, want, max);
+}
+static void aniso_after(GLenum target, GLenum pname, GLint param)
+{
+    if (g_aniso < 0) aniso_decide();
+    if (g_aniso <= 0 || target != GL_TEXTURE_2D || pname != GL_TEXTURE_MIN_FILTER) return;
+    const int mip = param == GL_NEAREST_MIPMAP_NEAREST || param == GL_LINEAR_MIPMAP_NEAREST ||
+                    param == GL_NEAREST_MIPMAP_LINEAR || param == GL_LINEAR_MIPMAP_LINEAR;
+    if (mip) {
+        GLint bound = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+        if (stereo_texture_is_target((unsigned)bound)) { g_aniso_skipped++; return; }
+    }
+    glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */, mip ? g_aniso : 1.0f);
+    if (mip) g_aniso_sets++; else g_aniso_resets++;
+    if ((mip ? g_aniso_sets : g_aniso_resets) == 1 || g_aniso_sets % 5000 == 1)
+        fprintf(stderr, "[gl] texture filtering: %u mipmapped filter sets given %.0fx, %u plain set back to 1, %u render targets skipped\n",
+                g_aniso_sets, g_aniso, g_aniso_resets, g_aniso_skipped);
+}
+/* ...and at a texture's upload (glTexImage2D / glCompressedTexImage2D, level 0) when its filter
+ * is a mip filter then: most of VT3's textures never set one and keep GL's default,
+ * NEAREST_MIPMAP_LINEAR, and get their mips from GL_GENERATE_MIPMAP - the parameter calls alone
+ * reached 1 texture by frame 2600 (macOS log). A mip filter on a texture without mips samples
+ * black, so the game makes mips for every such texture. */
+static unsigned g_aniso_uploads;
+static void aniso_upload(GLenum target, GLint level)
+{
+    if (g_aniso < 0) aniso_decide();
+    {   static int lg = -1, n;      /* LINDBERGH_ANISO_LOG=1: each upload seen (60 at most) */
+        if (lg < 0) { const char *v = getenv("LINDBERGH_ANISO_LOG"); lg = v && *v == '1'; }
+        if (lg && n++ < 60) { GLint b = 0, mf = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D, &b); glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &mf);
+                              fprintf(stderr, "[gl] upload target %#x level %d texture %d min filter %#x\n", target, level, b, mf); } }
+    if (g_aniso <= 0 || target != GL_TEXTURE_2D || level != 0) return;
+    GLint bound = 0, minf = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minf);
+    if (minf != GL_NEAREST_MIPMAP_NEAREST && minf != GL_LINEAR_MIPMAP_NEAREST && minf != GL_NEAREST_MIPMAP_LINEAR && minf != GL_LINEAR_MIPMAP_LINEAR) return;
+    if (stereo_texture_is_target((unsigned)bound)) { g_aniso_skipped++; return; }
+    glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */, g_aniso);
+    if (++g_aniso_uploads == 1 || g_aniso_uploads % 500 == 0)
+        fprintf(stderr, "[gl] texture filtering: %u mipmapped textures given %.0fx at their upload (last: texture %d, min filter %#x)\n",
+                g_aniso_uploads, g_aniso, bound, minf);
+}
+static void h_glCompressedTexImage2D(CPU *c)
+{
+    glCompressedTexImage2D(A32(0), AI32(1), A32(2), AI32(3), AI32(4), AI32(5), AI32(6), APTR(7));
+    if (g_aniso != 0) aniso_upload(A32(0), AI32(1));
+}
+#ifndef LINDBERGH_GL4ES
+static void h_glTexImage2D_desk(CPU *c)
+{
+    glTexImage2D(A32(0), AI32(1), AI32(2), AI32(3), AI32(4), AI32(5), A32(6), A32(7), APTR(8));
+    if (g_aniso != 0) aniso_upload(A32(0), AI32(1));
+}
+#endif
+/* the game's own anisotropy (VT3 asks 2x on its court texture): with Texture filtering on, the
+ * larger of the two */
+static unsigned g_aniso_game[2];        /* the game's own anisotropy calls: kept, raised */
+static float aniso_game(GLenum target, float v)
+{
+    if (g_aniso < 0) aniso_decide();
+    int raise = 0;
+    if (g_aniso > v && target == GL_TEXTURE_2D) {      /* a mipmapped file texture only, as above */
+        GLint bound = 0, minf = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minf);
+        raise = (minf == GL_NEAREST_MIPMAP_NEAREST || minf == GL_LINEAR_MIPMAP_NEAREST || minf == GL_NEAREST_MIPMAP_LINEAR ||
+                 minf == GL_LINEAR_MIPMAP_LINEAR) && !stereo_texture_is_target((unsigned)bound);
+    }
+    if (g_aniso_game[raise]++ == 0)
+        fprintf(stderr, "[gl] the game asks %.0fx anisotropic filtering on a texture%s\n", v,
+                raise ? " - Texture filtering raises it" : g_aniso > v ? " - kept (no mip filter)" : " - kept");
+    return raise ? g_aniso : v;
+}
+static void h_glTexParameteri(CPU *c)
+{
+    if (A32(1) == 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */ && g_aniso != 0) {
+        glTexParameterf(A32(0), A32(1), aniso_game(A32(0), (float)AI32(2)));
+        return;
+    }
+    glTexParameteri(A32(0), A32(1), AI32(2));
+    if (g_aniso != 0) aniso_after(A32(0), A32(1), AI32(2));
+}
+static void h_glTexParameterf(CPU *c)
+{
+    uint32_t raw = A32(2); float f; memcpy(&f, &raw, 4);
+#ifndef LINDBERGH_GL4ES
+    if (A32(1) == 0x8501 /* GL_TEXTURE_LOD_BIAS */) {
+        /* LINDBERGH_LOD_BIAS=0 on the desktop: the game's bias (-1 on the crowd, boards, court) left
+         * out, as GLES had it before T5 - for comparing pictures (the desktop applies it natively) */
+        static int keep = -1;
+        if (keep < 0) { const char *v = getenv("LINDBERGH_LOD_BIAS"); keep = !(v && *v == '0');
+                        if (!keep) fprintf(stderr, "[gl] the game's texture LOD bias left out (LINDBERGH_LOD_BIAS=0)\n"); }
+        if (!keep) return;
+    }
+#endif
+    if (A32(1) == 0x84FE && g_aniso != 0) f = aniso_game(A32(0), f);
+    glTexParameterf(A32(0), A32(1), f);
+    if (g_aniso != 0) aniso_after(A32(0), A32(1), (GLint)f);
+}
+#endif
+
 static void h_glPushAttrib(CPU *c) { arb_push_attrib(A32(0)); glPushAttrib(A32(0)); }
 static void h_glPopAttrib(CPU *c)  { arb_pop_attrib(); glPopAttrib(); }
 
@@ -941,6 +1084,15 @@ void hle_register_gl(void)
     hle_bind("glGetUniformLocationARB", h_glGetUniformLocationARB); gl_bind_named("glGetUniformLocationARB", h_glGetUniformLocationARB);
     hle_bind("glGetAttribLocationARB", h_glGetAttribLocationARB); gl_bind_named("glGetAttribLocationARB", h_glGetAttribLocationARB);
     hle_bind("glGetObjectParameterivARB", h_glGetObjectParameterivARB); gl_bind_named("glGetObjectParameterivARB", h_glGetObjectParameterivARB);
+#ifndef LINDBERGH_VULKAN
+    hle_bind("glTexParameteri", h_glTexParameteri); gl_bind_named("glTexParameteri", h_glTexParameteri);
+    hle_bind("glTexParameterf", h_glTexParameterf); gl_bind_named("glTexParameterf", h_glTexParameterf);
+    hle_bind("glCompressedTexImage2DARB", h_glCompressedTexImage2D); gl_bind_named("glCompressedTexImage2DARB", h_glCompressedTexImage2D);
+    hle_bind("glCompressedTexImage2D", h_glCompressedTexImage2D); gl_bind_named("glCompressedTexImage2D", h_glCompressedTexImage2D);
+#endif
+#if !defined(LINDBERGH_GL4ES) && !defined(LINDBERGH_VULKAN)
+    hle_bind("glTexImage2D", h_glTexImage2D_desk); gl_bind_named("glTexImage2D", h_glTexImage2D_desk);
+#endif
 #ifdef LINDBERGH_GL4ES
     hle_bind("glTexImage2D", h_glTexImage2D); gl_bind_named("glTexImage2D", h_glTexImage2D);
     hle_bind("glGetError", h_glGetError); gl_bind_named("glGetError", h_glGetError);

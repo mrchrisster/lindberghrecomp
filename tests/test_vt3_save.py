@@ -23,9 +23,16 @@ class Vt3SaveTests(unittest.TestCase):
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* sv <file> open | store <ch> <fill> [<ch> <fill> ...] : prints the open result, the count, each character's first byte */
+/* sv <file> open | store <ch> <fill> [<ch> <fill> ...] : prints the open result, the count, each character's first byte
+ * sv <file> reset : opens, resets (prints "R<moved> g<generation> n<count>"), then stores nothing */
 int main(int argc, char **argv) {
     int r = vt3_save_open(argv[1]);
+    if (argc > 2 && !strcmp(argv[2], "reset")) {
+        unsigned g = vt3_save_generation();
+        int m = vt3_save_reset();
+        printf("R%d g%u n%d\n", m, vt3_save_generation() - g, vt3_save_count());
+        return 0;
+    }
     printf("%d %d", r, vt3_save_count());
     for (int i = 3; i + 1 < argc; i += 2) {
         unsigned char rec[VT3_SAVE_REC];
@@ -106,6 +113,32 @@ int main(int argc, char **argv) {
             out, log = self.sv(f)
             self.assertEqual(out, "2 1 3:7")
             self.assertIn("loaded from the backup", log)
+
+    def reset(self, path):
+        p = subprocess.run([str(self.bin), str(path), "reset"], text=True, capture_output=True, check=True)
+        return p.stdout.strip(), p.stderr
+
+    def test_reset_moves_the_save_and_its_backup_aside(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "vt3_save.bin"
+            self.sv(f, 3, 7); self.sv(f, 3, 8)                                   # file + .bak
+            out, log = self.reset(f)
+            self.assertEqual(out, "R2 g1 n0")                                    # both moved, records dropped
+            self.assertIn("a fresh save at the next character select", log)
+            self.assertFalse(f.exists()); self.assertFalse((Path(d) / "vt3_save.bin.bak").exists())
+            kept = sorted(p for p in os.listdir(d) if ".reset-" in p)
+            self.assertEqual(len(kept), 2)
+            self.assertTrue(kept[0].endswith(".bak") and kept[1].endswith(".prev.bak"), kept)
+            self.assertEqual(self.sv(f)[0], "0 0")                               # the next start: fresh (not the backup)
+            # the moved file is still a good save (recoverable by renaming it back)
+            main = Path(d) / [p for p in kept if not p.endswith(".prev.bak")][0]
+            shutil.copy(main, f); self.assertEqual(self.sv(f)[0], "1 1 3:8")
+
+    def test_reset_without_a_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "vt3_save.bin"
+            self.assertEqual(self.reset(f)[0], "R0 g1 n0")
+            self.assertEqual(os.listdir(d), [])
 
     def test_record_checksum_and_length_checked(self):
         with tempfile.TemporaryDirectory() as d:

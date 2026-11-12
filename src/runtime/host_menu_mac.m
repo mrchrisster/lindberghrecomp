@@ -17,6 +17,7 @@
 #include "host_settings.h"
 #include "xr_settings.h"
 #include "world_mode.h"
+#include "vt3_save.h"
 
 void host_audio_toggle_mute(void);
 
@@ -83,6 +84,7 @@ static NSString *binding_title(HostAction a)
             item(menu, @"Save Progress (1P's card record in vt3_save.bin)", @selector(toggleSave:), 0).state =
                 s.save ? NSControlStateValueOn : NSControlStateValueOff;
             if (world_mode_pinned(WM_SAVE)) item(menu, @"This run: set by LINDBERGH_VT3_SAVE", nil, 0).enabled = NO;
+            item(menu, @"Reset Save…", @selector(resetSave:), 0);
             [menu addItem:[NSMenuItem separatorItem]];
             item(menu, @"Takes effect when the game next starts", nil, 0).enabled = NO;
         } else item(menu, @"(no game settings)", nil, 0).enabled = NO;
@@ -99,6 +101,16 @@ static NSString *binding_title(HostAction a)
 - (void)toggleMute:(id)s             { host_audio_toggle_mute(); }
 - (void)setVolume:(NSMenuItem *)i    { settings()->volume = (int)i.tag; settings_save(); }
 - (void)setLanguage:(NSMenuItem *)i  { settings()->country = (int)i.tag; settings_save(); }
+- (void)resetSave:(id)s
+{
+    /* the desktop's "pull twice": a confirmation; the file is moved aside, not deleted (vt3_save_reset) */
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = @"Reset the saved progress?";
+    a.informativeText = @"The save is moved aside (kept as a .bak file next to it). The next game starts a fresh save.";
+    [a addButtonWithTitle:@"Reset Save"];
+    [a addButtonWithTitle:@"Cancel"];
+    if ([a runModal] == NSAlertFirstButtonReturn) vt3_save_reset();
+}
 - (void)toggleSave:(id)s             { LgXrSettings c = LG_XR_SETTINGS_DEFAULT; xr_settings_load(&c); c.save = !c.save; xr_settings_save(&c); }
 
 @end

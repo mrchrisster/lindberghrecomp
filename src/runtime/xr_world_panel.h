@@ -17,13 +17,16 @@ extern "C" {
  * XW_MODE (a toggle), XW_DOLLY and XW_STEPBACK are no rows any more (T12). */
 enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPLAYS, XW_CUTAWAYS,
        XW_OVERLAYS, XW_SKY, XW_SHADOW, XW_RESTORE, XW_HEIGHT, XW_MODE_CLASSIC, XW_MODE_VR,
-       XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_COUNT };
-/* Classic's Card reader notice; the main page's Language and Anti-aliasing; both
- * Advanced pages' Save progress (one value for both modes) - all on restart */
+       XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_ANISO, XW_RESET_SAVE, XW_COUNT };
+/* Classic's Card reader notice; the main page's Language and Anti-aliasing;
+ * both Advanced pages' Save progress and Texture filtering (one value each
+ * for both modes) - all on restart. Reset save (both Advanced pages, below Save
+ * progress): pull twice, like Restore defaults - returns XW_RESET_SAVE */
 enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGES };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */
-       XW_PAGE_CHANGED = 1 << 17 };    /* the page or its rows changed */
+       XW_PAGE_CHANGED = 1 << 17,      /* the page or its rows changed */
+       XW_RESET_SAVE_FX = 1 << 18 };   /* Reset save confirmed: the host moves the save aside (vt3_save_reset) */
 /* a page's row, as host_xr.c's menu_ids hold them: an XP_ item, or XP_COUNT + an XW_ item */
 #define XW_ROW(x) (XP_COUNT + (x))
 #define XW_ROWS_MAX (XP_COUNT + XW_COUNT)
@@ -31,6 +34,8 @@ enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, 
 typedef struct {
     int page;                   /* XW_PAGE_ */
     int restore_armed;          /* "Restore ... defaults" pulled once */
+    int reset_save_armed;       /* "Reset save" pulled once */
+    int reset_save_done;        /* the save was reset this run (the row says so) */
     int running;                /* the mode this run started in: 0 Classic, 1 Immersive */
     unsigned pins;              /* WM_ bits whose env variable is set (for the running mode's rows) */
     WmValues eff;               /* the running values (world_mode_values) */

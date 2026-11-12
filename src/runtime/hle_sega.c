@@ -882,6 +882,8 @@ static int watch_route(void)
  *   LINDBERGH_VT3_WIN=1     1P wins every point (the point's winner, match
  *                           +0x61, is set to player 0 before match::calcPoint
  *                           scores it): matches won in a few rallies
+ *   LINDBERGH_VT3_LOSE=1    the mirror: every point to the other side (1) -
+ *                           the lose path (continue, game over, ranking)
  *   LINDBERGH_VT3_PRIZE_TRACE=N  LINDBERGH_TRACE_VP starts N frames after the
  *                           result slate's first prize coin sound (its
  *                           counter rolling), whatever frame that lands on */
@@ -978,9 +980,10 @@ static void h_vt3_rand(CPU *c)
     g_vt3_rand(c);
 }
 static void (*g_vt3_calc_point)(CPU *);
+static uint8_t g_vt3_point_to;              /* LINDBERGH_VT3_WIN=1: 0 (1P), LINDBERGH_VT3_LOSE=1: 1 (the opponent) */
 static void h_vt3_calc_point(CPU *c)
 {
-    wr8(A32(0) + 0x61, 0);                  /* the point goes to 1P */
+    wr8(A32(0) + 0x61, g_vt3_point_to);     /* the point goes to 1P (WIN) or the other side (LOSE) */
     push32(c, 0xDEADBEEFu);
     g_vt3_calc_point(c);
 }
@@ -1095,6 +1098,7 @@ static void h_vt3_card_rw_off(CPU *c) { RET(0xFFFFFFFFu); }
 #define VT3_FROM_NO_CARD_DECIDE 0x0812A8DDu
 static void (*g_vt3_reset_card)(CPU *), (*g_vt3_calc_card)(CPU *), (*g_vt3_reset_use)(CPU *);
 static uint32_t g_save_player;          /* 1P's player with a loaded record, this session */
+static unsigned g_save_gen;             /* vt3_save_generation() when it was loaded: a Reset save since drops it */
 static uint8_t g_save_before[VT3_SAVE_REC];
 static void vt3_save_describe(const char *what, uint32_t p)
 {
@@ -1136,6 +1140,17 @@ static void h_vt3_reset_card(CPU *c)
         if (set_use) guest_call(c, set_use, a, 1); else wr32(p + VT3_CARD_FLAGS, rd32(p + VT3_CARD_FLAGS) | 1u);
         vt3_save_describe("fresh record (first time for this character)", p);
     }
+    {   /* the record's name (+0x04, 32 bytes, NUL-padded; the game's blank record says "noname"):
+         * vr.cfg save_name / LINDBERGH_VT3_SAVE_NAME, default PLAYER - up to 10 of A-Z 0-9, as the
+         * game's own name entry (nameEntry::decideNameEntry: 10 characters, copied to player+0x494) */
+        const char *nm = world_mode_save_name();
+        uint8_t *dst = GP(p + VT3_CARD_DATA + 4);
+        if (nm && *nm && strncmp((const char *)dst, nm, 32)) {
+            memset(dst, 0, 32);
+            memcpy(dst, nm, strlen(nm) < 31 ? strlen(nm) : 31);
+            vt3_save_describe("named", p);
+        }
+    }
     vt3_save_card_row(p);
     {   /* the name the game shows for a card player (result slate: "(null)" without it):
          * usrMenuCharLoop::setRealPlayerName(side 0, plno) - copies the record's name
@@ -1149,11 +1164,17 @@ static void h_vt3_reset_card(CPU *c)
     }
     memcpy(g_save_before, GP(p + VT3_CARD_DATA), VT3_SAVE_REC);
     g_save_player = p;
+    g_save_gen = vt3_save_generation();
 }
 static void vt3_save_take(const char *when)
 {
     const uint32_t p = g_save_player;
     if (!p || !(rd32(p + VT3_CARD_FLAGS) & 1u)) return;
+    if (g_save_gen != vt3_save_generation()) {      /* Reset save since this record was loaded: not written back */
+        extern unsigned g_frame;
+        fprintf(stderr, "[save] frame %u: %s - the save was reset during this game: this record is not kept\n", g_frame, when);
+        return;
+    }
     const uint8_t *r = GP(p + VT3_CARD_DATA);
     int changed = 0, first = -1, last = -1;
     for (int i = 0; i < VT3_SAVE_REC; i++) if (r[i] != g_save_before[i]) { changed++; if (first < 0) first = i; last = i; }
@@ -1181,6 +1202,22 @@ static void h_vt3_reset_use(CPU *c)
     push32(c, 0xDEADBEEFu);
     g_vt3_reset_use(c);
 }
+/* The card result windows (CCardResultWindowManager: "Remove Card.", card
+ * written / not written - opened by the stats, game over, to-be-continued
+ * and ending game over loops' draw_card for a player with the use-card bit)
+ * talk about a card that is not there: with Save progress on they stay shut.
+ * Draw-only (nothing waits on them; the loops' timing is their own): window_open,
+ * window_open_card and set_message_mode do nothing. */
+static void h_vt3_card_result_open(CPU *c)
+{
+    static int once;
+    extern unsigned g_frame;
+    if (!once++) fprintf(stderr, "[save] frame %u: card result window (side %u, message %u) left shut - no card to remove\n", g_frame, A32(1), A32(2));
+    (void)c;
+}
+/* ...and their lines' messages (set on a window the game opened just before:
+ * an empty bar drew where the ending's game over set two) */
+static void h_vt3_card_result_msg(CPU *c) { (void)c; }
 static void h_vt3_slot_open(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot_open(c); }
 static void h_vt3_slot(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot(c); }
 static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot_card(c); }
@@ -1385,7 +1422,11 @@ static void vt3_camlog_install(void)
     X(GameoverLoop, "_ZN17usrAcGameoverLoop4initEv") \
     X(ChangeendLoop, "_ZN18usrAcChangeendLoop4initEv") \
     X(GamesetmatchLoop, "_ZN21usrAcGamesetmatchLoop4initEv") \
-    X(TobecontinuedLoop, "_ZN22usrAcTobecontinuedLoop4initEv")
+    X(TobecontinuedLoop, "_ZN22usrAcTobecontinuedLoop4initEv") \
+    X(RankingLoop, "_ZN16usrAcRankingLoop4initEv") \
+    X(NameentryLoop, "_ZN18usrAcNameentryLoop4initEv") \
+    X(StaffrollLoop, "_ZN18usrAcStaffrollLoop4initEv") \
+    X(EndingGameoverLoop, "_ZN23usrAcEndingGameoverLoop4initEv")
 /* Virtua Tennis 3, each match's start (usrAcEntranceLoop::init): the game's
  * next frame draws the stadium through the menus' camera (from high above,
  * lens 1.45) before the intro's camera is set - not seen on the arcade, a
@@ -1997,7 +2038,10 @@ static void vt3_jumps(void)
                 vt3_save_open(NULL);
                 if (vt3_wrap("_ZN6player15reset_card_dataEv", &g_vt3_reset_card, h_vt3_reset_card) &&
                     vt3_wrap("_ZN13playerManager13calcCard_dataEv", &g_vt3_calc_card, h_vt3_calc_card) &&
-                    vt3_wrap("_ZN13playerManager13resetUse_cardEv", &g_vt3_reset_use, h_vt3_reset_use))
+                    vt3_wrap("_ZN13playerManager13resetUse_cardEv", &g_vt3_reset_use, h_vt3_reset_use) &&
+                    guest_override("_ZN24CCardResultWindowManager11window_openElm", h_vt3_card_result_open) &&
+                    guest_override("_ZN24CCardResultWindowManager16window_open_cardEl", h_vt3_card_result_open) &&
+                    guest_override("_ZN24CCardResultWindowManager16set_message_modeElmlb", h_vt3_card_result_msg))
                     fprintf(stderr, "[sega] Virtua Tennis 3: Save progress on - 1P's card record kept in %s\n", vt3_save_path());
                 else fprintf(stderr, "[sega] Virtua Tennis 3: WARNING Save progress hooks not installed\n");
             } }
@@ -2057,9 +2101,11 @@ static void vt3_jumps(void)
                     fprintf(stderr, "[sega] Virtua Tennis 3: match::isHeatup not wrapped - big-point serve close-ups stay\n");
                 fprintf(stderr, "[sega] Virtua Tennis 3: point cutaways %s\n", g_cutaways ? "on" : "off (skipped)");
             } }
-        const char *w = getenv("LINDBERGH_VT3_WIN");
-        if (w && *w == '1' && vt3_wrap("_ZN5match9calcPointEv", &g_vt3_calc_point, h_vt3_calc_point))
-            fprintf(stderr, "[sega] Virtua Tennis 3: 1P wins every point\n");
+        const char *w = getenv("LINDBERGH_VT3_WIN"), *lo = getenv("LINDBERGH_VT3_LOSE");
+        const int lose = lo && *lo == '1' && !(w && *w == '1');     /* WIN wins if both are set */
+        g_vt3_point_to = lose ? 1 : 0;
+        if (((w && *w == '1') || lose) && vt3_wrap("_ZN5match9calcPointEv", &g_vt3_calc_point, h_vt3_calc_point))
+            fprintf(stderr, "[sega] Virtua Tennis 3: %s every point\n", lose ? "1P loses" : "1P wins");
         const char *sp = getenv("LINDBERGH_VT3_SPLIT");
         g_vt3_split = sp && *sp == '1';
         /* the close-up's pick: forced split (test), or no split while the cutaways
