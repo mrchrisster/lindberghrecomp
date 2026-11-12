@@ -45,9 +45,10 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 11 && r[0] == XW_ROW(XW_BACK) && r[1] == XW_ROW(XW_DOLLY) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 12 && r[0] == XW_ROW(XW_BACK) && r[1] == XW_ROW(XW_DOLLY) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
     xw_items(&w, &c, it);
     assert(!strcmp(it[XW_DOLLY].value, "20 m") && !strcmp(it[XW_STEPBACK].value, "6 m"));
+    assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Standard"));
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
     assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
     assert(!strcmp(it[XW_SKY].label, "Sky"));
@@ -63,15 +64,25 @@ int main(void) {
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_STADIUM);
     xw_choose(&w, &c, XW_DOLLY); assert(c.imm_dolly == 250);
     xw_choose(&w, &c, XW_DOLLY); xw_choose(&w, &c, XW_DOLLY); assert(c.imm_dolly == 0);
-    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 90);
-    xw_choose(&w, &c, XW_STEPBACK); xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 0);
+    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 70);
+    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 80);
+    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 50);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_STEPBACK].value, "5 m"));
+    xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 60);
+    c.imm_back = 120; xw_choose(&w, &c, XW_STEPBACK); assert(c.imm_back == 50);   /* off the list: from its nearest (8 m) */
+    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "1 m higher"));
+    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 20);
+    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == -20);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "2 m lower"));
+    xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == -10);
     xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 4096);
     xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);
     /* restore: two pulls */
     fx = xw_choose(&w, &c, XW_RESTORE); assert(w.restore_armed && !(fx & XP_SAVE));
     xw_items(&w, &c, it); assert(!strcmp(it[XW_RESTORE].value, "Pull again to restore"));
     fx = xw_choose(&w, &c, XW_RESTORE); assert((fx & XP_SAVE) && !w.restore_armed);
-    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_dolly == 200 && c.imm_back == 60 && c.imm_shadow == 2048 && c.imm_replays == 0);
+    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_dolly == 200 && c.imm_back == 60 && c.imm_height == 0 && c.imm_shadow == 2048 && c.imm_replays == 0);
     xw_choose(&w, &c, XW_RESTORE); xw_choose(&w, &c, XW_SKY); assert(!w.restore_armed);    /* another row disarms */
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_MAIN);
     /* the running mode's page: live; a pinned row shows the run's value and ignores clicks */

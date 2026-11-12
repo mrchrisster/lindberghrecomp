@@ -24,12 +24,13 @@
 
 static const char *const ENV_NAME[WM_COUNT] = {
     "LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OVERLAYS", "LINDBERGH_VT3_CUTAWAYS",
-    "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK", "LINDBERGH_VT3_SKY" };
+    "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK", "LINDBERGH_VT3_SKY",
+    "LINDBERGH_VT3_HEIGHT" };
 static const char *const KEY_CLASSIC[WM_COUNT] = {
-    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL };
+    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL };
 static const char *const KEY_IMMERSIVE[WM_COUNT] = {
     "mode", "immersive.replays", "immersive.overlays", "immersive.cutaways", "immersive.shadow",
-    "immersive.dolly", "immersive.back", "immersive.sky" };
+    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height" };
 
 const char *world_mode_env_name(int key) { return key >= 0 && key < WM_COUNT ? ENV_NAME[key] : NULL; }
 const char *world_mode_key(int key, int immersive)
@@ -70,6 +71,7 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     o->shadow = im ? s->imm_shadow : s->classic_shadow;
     o->shadow_scale = scale_of(o->shadow);
     o->dolly = (float)s->imm_dolly; o->back = (float)s->imm_back; o->sky = s->imm_sky;
+    o->height = (float)s->imm_height;
     if ((v = env(WM_REPLAYS))) { o->replays = *v != '0'; k[WM_REPLAYS] = WM_SRC_ENV; }
     if ((v = env(WM_OVERLAYS))) { o->overlays = *v != '0'; k[WM_OVERLAYS] = WM_SRC_ENV; }
     if ((v = env(WM_CUTAWAYS))) { o->cutaways = *v != '0'; k[WM_CUTAWAYS] = WM_SRC_ENV; }
@@ -79,6 +81,7 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     }
     if ((v = env(WM_DOLLY))) { o->dolly = (float)atof(v); k[WM_DOLLY] = WM_SRC_ENV; }
     if ((v = env(WM_BACK))) { o->back = (float)atof(v); k[WM_BACK] = WM_SRC_ENV; }
+    if ((v = env(WM_HEIGHT))) { o->height = (float)atof(v); k[WM_HEIGHT] = WM_SRC_ENV; }
     if ((v = env(WM_SKY))) { o->sky = world_mode_sky_value(v); k[WM_SKY] = WM_SRC_ENV; }
     if (src) memcpy(src, k, sizeof k);
 }
@@ -133,10 +136,10 @@ void world_mode_init(int capable)
 #endif
     world_mode_resolve(&s, -1, capable, present, &g_wm, src);
     static const char *const SRC[] = { "default", "vr.cfg", "env" };
-    fprintf(stderr, "[world] mode %s (%s) dolly %.0f (%s) back %.0f (%s) sky %s (%s) shadow %d (%s) "
+    fprintf(stderr, "[world] mode %s (%s) dolly %.0f (%s) back %.0f (%s) height %.0f (%s) sky %s (%s) shadow %d (%s) "
                     "replays %s (%s) overlays %s (%s) cutaways %s (%s)%s\n",
             g_wm.immersive ? "immersive" : "classic", SRC[src[WM_MODE]],
-            g_wm.dolly, SRC[src[WM_DOLLY]], g_wm.back, SRC[src[WM_BACK]],
+            g_wm.dolly, SRC[src[WM_DOLLY]], g_wm.back, SRC[src[WM_BACK]], g_wm.height, SRC[src[WM_HEIGHT]],
             sky_name(g_wm.sky), SRC[src[WM_SKY]], g_wm.shadow, SRC[src[WM_SHADOW]],
             g_wm.replays ? "on" : "off", SRC[src[WM_REPLAYS]], g_wm.overlays ? "on" : "off", SRC[src[WM_OVERLAYS]],
             g_wm.cutaways ? "on" : "off", SRC[src[WM_CUTAWAYS]], capable ? "" : " - this game has no world mode");
@@ -236,3 +239,4 @@ int world_mode_sky(void) { return wm()->sky; }
 float world_mode_shadow_scale(void) { return wm()->shadow_scale; }
 float world_mode_dolly(void) { return wm()->dolly; }
 float world_mode_back(void) { return wm()->back; }
+float world_mode_height(void) { return wm()->height; }

@@ -436,6 +436,11 @@ static void eye_projection(const float *p, int hud, int which, float *out)
                 float h[3] = { u[2] / ul * (u[0] / ul), u[2] / ul * (u[1] / ul), -1 + (u[2] / ul) * (u[2] / ul) };   /* (0,0,-1) less its up part */
                 float hl = sqrtf(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]);
                 if (hl > 0.1f) for (int i = 0; i < 3; i++) t[i] += back * h[i] / hl;
+                /* ...then raised or lowered along the world's up
+                 * (LINDBERGH_VT3_HEIGHT game units, the panel's Camera
+                 * height; default 0): the scene moved the other way */
+                const float lift = world_mode_height();
+                for (int i = 0; i < 3; i++) t[i] -= lift * u[i] / ul;
             }
             for (int r = 0; r < 4; r++) out[12 + r] += t[0] * out[r] + t[1] * out[4 + r] + t[2] * out[8 + r];
             return;

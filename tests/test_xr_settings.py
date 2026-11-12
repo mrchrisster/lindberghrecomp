@@ -58,7 +58,8 @@ int main(void) {
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.dolly":"200",
-               "immersive.back":"60","immersive.sky":"stadium","immersive.shadow":"2048"}
+               "immersive.back":"60","immersive.sky":"stadium","immersive.shadow":"2048",
+               "immersive.height":"0"}
 
     @staticmethod
     def parse(text):
@@ -77,7 +78,8 @@ int main(void) {
     def test_mode_keys_round_trip(self):
         cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"on",
              "immersive.overlays":"on","immersive.cutaways":"on","immersive.dolly":"250",
-             "immersive.back":"90","immersive.sky":"painted","immersive.shadow":"1024"}
+             "immersive.back":"70","immersive.sky":"painted","immersive.shadow":"1024",
+             "immersive.height":"-10"}
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("".join(f"{k} {v}\n" for k,v in cfg.items()))
             self.run_settings(d)
@@ -94,6 +96,20 @@ int main(void) {
             self.assertNotIn("bogus",saved);self.assertNotIn("future.key",saved)
             self.assertEqual(saved["mode"],"immersive");self.assertEqual(saved["immersive.shadow"],"2048")
             self.assertNotIn("immersive.stand_y",saved);self.assertEqual(saved["immersive.dolly"],"200")
+
+    def test_step_back_and_height_snap_to_choices(self):
+        # an older panel's Step back (0 / 3 / 9 / 12 m) and odd heights become the nearest choice
+        for back,want in (("0","50"),("30","50"),("90","80"),("120","80"),("65","60"),("-7","50"),("999","80")):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d)/"vr.cfg").write_text(f"immersive.back {back}\nimmersive.height {int(back)//4}\n")
+                self.run_settings(d)
+                saved=self.parse((Path(d)/"vr.cfg").read_text())
+                self.assertEqual(saved["immersive.back"],want,back)
+                self.assertIn(saved["immersive.height"],("-20","-10","0","10","20"))
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("immersive.height 14\n")
+            self.run_settings(d)
+            self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["immersive.height"],"10")
 
     def test_old_stand_and_sky_keys(self):
         # a file from before the stadium sky: the stands' stretch key is dropped, sky on = the stadium's
