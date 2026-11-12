@@ -17,6 +17,7 @@
  * these was found rather than guessed.
  */
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
@@ -933,20 +934,43 @@ static void h_vt3_calc_game(CPU *c)
     g_vt3_calc_game(c);
     vt3_new_game(m, "game");
 }
+/* camera::initWinlose's first random number picks the close-up: 0 of 10 is
+ * the split screen (camera::setSplit_screen, both players side by side).
+ * LINDBERGH_VT3_SPLIT=1 (test) answers 0 every time; a point cutaway drawn in
+ * the world (Immersive, Point cutaways In the world / Camera view) never
+ * takes it - two pictures of the scene would land on top of each other - the
+ * roll is moved off 0 and the game takes its usual single close-up. The flag
+ * is the calling thread's: the camera's routine runs on a worker thread. */
 static void (*g_vt3_init_winlose)(CPU *), (*g_vt3_rand)(CPU *);
-static int g_vt3_split, g_vt3_split_next;
+static int g_vt3_split;
+static __thread int g_vt3_split_next;
+static int vt3_cut_in_world(void)
+{
+    const int v = world_mode_cutaway_view();
+    return world_mode_immersive() && (v == LG_VIEW_WORLD || v == LG_VIEW_CAMERA);
+}
 static void h_vt3_init_winlose(CPU *c)
 {
     extern unsigned g_frame;
     g_vt3_split_next = 1;                   /* the next random number is the camera's pick */
     push32(c, 0xDEADBEEFu);
     g_vt3_init_winlose(c);
+    if (g_vt3_split_next == 2 && g_vt3_log) fprintf(stderr, "[vt3] frame %u: point over, split-screen camera forced\n", g_frame);
+    if (g_vt3_split_next == 3) fprintf(stderr, "[vt3] frame %u: point over, split-screen close-up left out (cutaway in the world)\n", g_frame);
     g_vt3_split_next = 0;
-    if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: point over, split-screen camera forced\n", g_frame);
 }
 static void h_vt3_rand(CPU *c)
 {
-    if (g_vt3_split_next) { g_vt3_split_next = 0; RET(0); return; }
+    if (g_vt3_split_next == 1) {
+        if (vt3_cut_in_world()) {
+            push32(c, 0xDEADBEEFu); g_vt3_rand(c);
+            g_vt3_split_next = c->eax % 10u == 0 || g_vt3_split ? 3 : 4;
+            if (c->eax % 10u == 0) c->eax += 1;
+            return;
+        }
+        if (g_vt3_split) { g_vt3_split_next = 2; RET(0); return; }
+        g_vt3_split_next = 4;
+    }
     push32(c, 0xDEADBEEFu);
     g_vt3_rand(c);
 }
@@ -1018,28 +1042,41 @@ static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 
  * the frame before - read straight from the game thread, the draws of the
  * last frame before a cut were taken apart with the new camera (a turned,
  * distorted in-between frame at every cut in Immersive). */
-typedef struct { float p[16], v[12]; int feeding; } Vt3Cam;
+/* ...with the camera's mode (camera+0x38; ~0u for one built here) and
+ * whether the replay rewound since the last (replay::reverseFrame: a new shot
+ * of the same moment), for the replays and close-ups drawn in the world
+ * (stereo.c stereo_vt3_view) */
+typedef struct { float p[16], v[12]; int feeding; unsigned mode; int cut; } Vt3Cam;
 static void vt3_cam_job(void *arg)
 {
     Vt3Cam *k = (Vt3Cam *)arg;
-    extern void arb_note_projection(const float *proj, const float *view); extern int g_vt3_feeding;
+    extern int arb_note_projection(const float *proj, const float *view); extern int g_vt3_feeding;
+    extern void stereo_vt3_view(unsigned mode, const float *view, int cut);
     int was = g_vt3_feeding; g_vt3_feeding = k->feeding;
-    arb_note_projection(k->p, k->v);
+    int took = arb_note_projection(k->p, k->v);
     g_vt3_feeding = was;
+    if (took == 1 && !k->feeding) stereo_vt3_view(k->mode, k->v, k->cut);
     free(k);
 }
-static void vt3_note_projection(const float *p, const float *v, int feeding)
+static void vt3_note_projection(const float *p, const float *v, int feeding, unsigned mode, int cut)
 {
     extern int glq_active(void); extern uint32_t glq_job(void (*job)(void *), void *arg);
     static int queued = -1;
     if (queued < 0) { const char *e = getenv("LINDBERGH_VT3_CAM_QUEUE"); queued = !(e && *e == '0'); }
     Vt3Cam *k = (Vt3Cam *)malloc(sizeof *k);
     if (!k) return;
-    memcpy(k->p, p, sizeof k->p); memcpy(k->v, v, sizeof k->v); k->feeding = feeding;
+    memcpy(k->p, p, sizeof k->p); memcpy(k->v, v, sizeof k->v); k->feeding = feeding; k->mode = mode; k->cut = cut;
     if (queued && glq_active()) glq_job(vt3_cam_job, k); else vt3_cam_job(k);
 }
 static void (*g_vt3_proj_cam)(CPU *);
 static uint32_t g_vt3_camera;   /* the camera object (camera::gameRoutine's / initUva's this): its mode at +0x38 */
+/* replay::reverseFrame (a two-pass replay shot's rewind): runs inside the
+ * camera's routine, on one of the game's worker threads - only counted here,
+ * handed on by the main thread's next camera (h_vt3_proj_cam) */
+static _Atomic unsigned g_vt3_rewinds;
+static unsigned g_vt3_rewinds_told;
+static void (*g_vt3_reverse)(CPU *);
+static void h_vt3_reverse(CPU *c) { atomic_fetch_add(&g_vt3_rewinds, 1u); push32(c, 0xDEADBEEFu); g_vt3_reverse(c); }
 static void h_vt3_proj_cam(CPU *c)
 {
     push32(c, 0xDEADBEEFu);
@@ -1061,7 +1098,20 @@ static void h_vt3_proj_cam(CPU *c)
     float p[16], v[12];
     for (int i = 0; i < 16; i++) { uint32_t b = rd32(sm + 0x5c + 4u * (uint32_t)i); memcpy(&p[i], &b, 4); }
     for (int i = 0; i < 12; i++) { uint32_t b = rd32(sm + 0x2c + 4u * (uint32_t)i); memcpy(&v[i], &b, 4); }
-    vt3_note_projection(p, v, 0);
+    {
+        const unsigned rw = atomic_load(&g_vt3_rewinds);
+        const unsigned m = g_vt3_camera ? rd32(g_vt3_camera + 0x38) : ~0u;
+        const int cut = rw != g_vt3_rewinds_told && m == 6;
+        g_vt3_rewinds_told = rw;
+        static int lg = -1;     /* LINDBERGH_VT3_CAMMODE_LOG=2: each replay / close-up frame's camera too */
+        if (lg < 0) { const char *e = getenv("LINDBERGH_VT3_CAMMODE_LOG"); lg = e && *e == '2'; }
+        if (lg && (m == 6 || m == 7) && g_vt3_camera) {
+            extern unsigned g_frame; float fov; uint32_t b = rd32(g_vt3_camera + 0x5c); memcpy(&fov, &b, 4);
+            fprintf(stderr, "[cammode] frame %u: mode %u replay type %d shot %d fov %.1f lens %.2f%s\n", g_frame, m,
+                    (int)rd32(g_vt3_camera + 0x1f0), (int)rd32(g_vt3_camera + 0x1f4), fov, p[0], cut ? " (rewound)" : "");
+        }
+        vt3_note_projection(p, v, 0, m, cut);
+    }
     /* a world camera (not the pixel camera, near 800): its mode and lens to the
      * stereo path, in order with the draws, for flat or world at a cut */
     if (p[0] > 0 && p[10] != 1.0f && p[11] / (p[10] - 1.0f) < 10.0f && g_vt3_camera) {
@@ -1220,10 +1270,9 @@ static void h_vt3_game_routine(CPU *c)
                     for (int row = 0; row < 3; row++)
                         view[row * 4 + 3] = -(view[row * 4] * e[0] + view[row * 4 + 1] * e[1] + view[row * 4 + 2] * e[2]);
                     static const float proj[16] = { 3.20261f, 0, 0, 0, 0, 5.67128f, 0, 0, 0, 0, -1.00067f, -2.00067f, 0, 0, -1, 0 };
-                    extern void arb_note_projection(const float *proj, const float *view);
                     static unsigned told;
                     if (g_vt3_log && g_frame - told > 60) { told = g_frame; fprintf(stderr, "[vt3] frame %u: world camera built from the camera routine (eye %.0f %.0f %.0f)\n", g_frame, e[0], e[1], e[2]); }
-                    vt3_note_projection(proj, view, 1);
+                    vt3_note_projection(proj, view, 1, ~0u, 0);
                 }
             }
         }
@@ -1458,9 +1507,11 @@ static void h_vt3_is_heatup(CPU *c)
 {
     uint32_t from = rd32(c->esp - 4u);
     push32(c, 0xDEADBEEFu); g_vt3_is_heatup(c);
-    if (!g_cutaways && (c->eax & 0xff) && (from == 0x080856D3u || from == 0x08085775u || from == 0x08085AB2u)) {
+    /* ...nor with the cutaways in the world (it adds nothing from your seat) */
+    if ((!g_cutaways || vt3_cut_in_world()) && (c->eax & 0xff) && (from == 0x080856D3u || from == 0x08085775u || from == 0x08085AB2u)) {
         extern unsigned g_frame; static unsigned told = ~0u;
-        if (g_vt3_flowlog && g_frame - told > 30) fprintf(stderr, "[flow] frame %u: big-point serve close-up left out (Point cutaways off)\n", g_frame);
+        if (g_vt3_flowlog && g_frame - told > 30) fprintf(stderr, "[flow] frame %u: big-point serve close-up left out (Point cutaways %s)\n", g_frame,
+                                                          g_cutaways ? "in the world" : "off");
         told = g_frame;
         c->eax &= ~0xffu;
     }
@@ -1761,9 +1812,15 @@ static void vt3_jumps(void)
             fprintf(stderr, "[sega] Virtua Tennis 3: 1P wins every point\n");
         const char *sp = getenv("LINDBERGH_VT3_SPLIT");
         g_vt3_split = sp && *sp == '1';
-        if (g_vt3_split && vt3_wrap("_ZN6camera11initWinloseEv", &g_vt3_init_winlose, h_vt3_init_winlose) &&
+        /* the close-up's pick: forced split (test), or no split while the cutaways
+         * are in the world (Immersive: installed always, gated per call - live) */
+        if ((g_vt3_split || world_mode_immersive()) && vt3_wrap("_ZN6camera11initWinloseEv", &g_vt3_init_winlose, h_vt3_init_winlose) &&
             vt3_wrap("_ZN8_sRandom13getRandMT_U32Ev", &g_vt3_rand, h_vt3_rand))
-            fprintf(stderr, "[sega] Virtua Tennis 3: every point ends on the split-screen camera\n");
+            fprintf(stderr, "[sega] Virtua Tennis 3: %s\n", g_vt3_split ? "every point ends on the split-screen camera (none with the cutaways in the world)"
+                                                                    : "the close-up's split screen left out while the cutaways are in the world");
+        /* a replay shot's rewind (replay::reverseFrame): a new shot for the Camera view */
+        if (world_mode_immersive() && !vt3_wrap("_ZN6replay12reverseFrameEl", &g_vt3_reverse, h_vt3_reverse))
+            fprintf(stderr, "[sega] Virtua Tennis 3: replay::reverseFrame not wrapped - a replay's rewind is found by the camera's jump alone\n");
     }
     if ((g_vt3_pts[0] >= 0 || g_vt3_log) &&
         vt3_wrap("_ZN5match4initEv", &g_vt3_match_init, h_vt3_match_init) &

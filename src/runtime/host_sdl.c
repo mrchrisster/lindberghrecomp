@@ -992,7 +992,8 @@ int host_gl_context(void)
 void host_pump(void) { pump(); }
 
 /* LINDBERGH_SHOT=file.ppm writes the frame numbered LINDBERGH_SHOT_FRAME (or
- * every LINDBERGH_SHOT_EVERY frames, numbered); LINDBERGH_EXIT_AFTER=N exits
+ * every LINDBERGH_SHOT_EVERY frames, numbered, from LINDBERGH_SHOT_FROM to
+ * LINDBERGH_SHOT_UNTIL); LINDBERGH_EXIT_AFTER=N exits
  * cleanly after N frames. Both exist to check a run without watching it. */
 /* LINDBERGH_PEEK=addr,len[,every]: hex dump of guest memory each `every`
  * frames (default 30), with the cabinet's buttons - for finding where the
@@ -1025,6 +1026,7 @@ static void maybe_screenshot(void)
     char name[512];
     if (every > 0) {
         if (g_frame == 0 || g_frame % (unsigned)every || g_frame < (unsigned)env_int("LINDBERGH_SHOT_FROM", 0)) return;
+        if (env_int("LINDBERGH_SHOT_UNTIL", 0) > 0 && g_frame > (unsigned)env_int("LINDBERGH_SHOT_UNTIL", 0)) return;   /* (the last frame shot) */
         snprintf(name, sizeof name, "%s.%05u.ppm", path, g_frame);
     } else {
         if (g_frame != (unsigned)at) return;

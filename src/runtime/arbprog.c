@@ -3327,8 +3327,10 @@ int arb_vp_matrix(float m[16])
     return 1;
 }
 extern volatile float g_game_up_eye[3];
-void arb_note_projection(const float *proj, const float *view)
+/* returns 1 when taken as the world camera, 2 as the pixel camera, 0 neither */
+int arb_note_projection(const float *proj, const float *view)
 {
+    int took = 0;
     {
         static long dump = -2; extern unsigned g_frame;
         if (dump == -2) { const char *v = getenv("LINDBERGH_MVP_DUMP"); dump = v && *v ? atol(v) : -1; }
@@ -3351,6 +3353,7 @@ void arb_note_projection(const float *proj, const float *view)
             for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) g_game_pixel_P[c * 4 + r] = proj[r * 4 + c];
             for (int i = 0; i < 12; i++) g_game_pixel_view[i] = view[i];
             g_game_pixel_ok = 1;
+            took = 2;
         } else {
             float P[16] = { 0 };
             for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) P[c * 4 + r] = proj[r * 4 + c];
@@ -3359,9 +3362,10 @@ void arb_note_projection(const float *proj, const float *view)
             for (int i = 0; i < 12; i++) g_game_view[i] = view[i];
             g_game_world_ok = 1;
             { extern unsigned g_frame; if (!g_vt3_feeding) g_game_world_real_frame = g_frame; }
+            took = 1;
         }
     }
-    for (int i = 0; i < g_noted_n; i++) if (!memcmp(g_noted_proj[i], proj, 64)) return;
+    for (int i = 0; i < g_noted_n; i++) if (!memcmp(g_noted_proj[i], proj, 64)) return took;
     memcpy(g_noted_proj[g_noted_next], proj, 64);
     g_noted_next = (g_noted_next + 1) % 4; if (g_noted_n < 4) g_noted_n++;
     static int told;
@@ -3372,4 +3376,5 @@ void arb_note_projection(const float *proj, const float *view)
         for (int i = 0; i < 12; i++) fprintf(stderr, " %g", view[i]);
         fprintf(stderr, "\n");
     }
+    return took;
 }

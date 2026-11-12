@@ -76,8 +76,8 @@ int main(void) {
             for k,v in self.MODE_KEYS.items():self.assertEqual(saved[k],v,k)
 
     def test_mode_keys_round_trip(self):
-        cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"on",
-             "immersive.overlays":"on","immersive.cutaways":"on","immersive.dolly":"250",
+        cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"world",
+             "immersive.overlays":"on","immersive.cutaways":"camera","immersive.dolly":"250",
              "immersive.back":"70","immersive.sky":"painted","immersive.shadow":"1024",
              "immersive.height":"-10"}
         with tempfile.TemporaryDirectory() as d:
@@ -87,6 +87,17 @@ int main(void) {
             for k,v in cfg.items():self.assertEqual(saved[k],v,k)
             self.run_settings(d)
             self.assertEqual((Path(d)/"vr.cfg").read_text(),first)
+
+    def test_old_on_reads_as_flat_screen(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("immersive.replays on\nimmersive.cutaways off\n")
+            self.run_settings(d)
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"off")
+            (Path(d)/"vr.cfg").write_text("immersive.replays flat\nimmersive.cutaways bogus\n")
+            self.run_settings(d)
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"off")
 
     def test_unknown_keys_ignored_and_bad_values_defaulted(self):
         with tempfile.TemporaryDirectory() as d:

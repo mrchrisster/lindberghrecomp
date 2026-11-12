@@ -56,6 +56,17 @@ int main(void) {
     /* the non-running mode's page: saved, not live */
     fx = xw_choose(&w, &c, XW_REPLAYS);
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
+    /* Immersive's Replays / Point cutaways: Off > Flat screen > In the world > Camera view > Off */
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen"));
+    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_WORLD);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "In the world"));
+    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_CAMERA);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Camera view"));
+    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.replays == 1);
+    xw_choose(&w, &c, XW_CUTAWAYS); xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_WORLD);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_CUTAWAYS].value, "In the world") && !strcmp(it[XW_CUTAWAYS].label, "Point cutaways"));
+    xw_choose(&w, &c, XW_CUTAWAYS); xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_OFF);
+    xw_choose(&w, &c, XW_REPLAYS);
     /* cycles */
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_PAINTED);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SKY].value, "Painted"));
@@ -96,6 +107,11 @@ int main(void) {
     assert(xw_choose(&w, &c, XW_REPLAYS) == 0 && c.replays == 1);
     w.page = XW_PAGE_IMMERSIVE;                          /* the pin is the running (Classic) mode's only */
     xw_items(&w, &c, it); assert(!strstr(it[XW_REPLAYS].value, "env"));
+    /* Immersive running, its view pinned (LINDBERGH_VT3_REPLAY_VIEW): the run's view */
+    w.running = 1; w.eff.replays = 1; w.eff.replay_view = LG_VIEW_WORLD;
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "In the world (env.txt)"));
+    assert(xw_choose(&w, &c, XW_REPLAYS) == 0);
+    w.running = 0; w.eff.replays = 0;
     /* shadow on restart, on the running mode's page */
     w.page = XW_PAGE_CLASSIC; w.eff.shadow = 1024; c.classic_shadow = 2048;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SHADOW].value, "High 2048 (on restart)"));

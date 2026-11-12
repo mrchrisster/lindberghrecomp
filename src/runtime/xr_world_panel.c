@@ -4,9 +4,11 @@
  * Main page: Mode (Classic / Immersive, applies on the next start), Restart
  * now (only while the saved mode is not the running one), Advanced settings
  * (the saved mode's page), then the shared rows. Classic advanced: replays,
- * point cutaways, arcade overlays, shadow quality. Immersive advanced: camera
+ * point cutaways, arcade overlays, shadow quality (replays and cutaways On /
+ * Off). Immersive advanced: camera
  * closer, step back (5 / 6 / 7 / 8 m), camera height (2 m lower .. 2 m higher),
- * the same three, sky (Stadium / Painted / Off), shadow quality. Replays,
+ * the same three (replays and cutaways Off / Flat screen / In the world /
+ * Camera view), sky (Stadium / Painted / Off), shadow quality. Replays,
  * cutaways, overlays, closer, step back, camera height and sky are live for
  * the running mode; shadow quality and the mode apply on restart. A row whose
  * env variable is set shows "(env.txt)" with the run's value and ignores clicks.
@@ -83,6 +85,12 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
 }
 
 static const char *on_off(int v) { return v ? "On" : "Off"; }
+/* Immersive's Replays / Point cutaways: LG_VIEW_ */
+static const char *view_label(int v)
+{
+    return v == LG_VIEW_FLAT ? "Flat screen" : v == LG_VIEW_WORLD ? "In the world" : v == LG_VIEW_CAMERA ? "Camera view" : "Off";
+}
+static int view_next(int v) { return v >= LG_VIEW_CAMERA || v < LG_VIEW_OFF ? LG_VIEW_OFF : v + 1; }   /* Off > Flat > World > Camera > Off */
 static void metres(char *s, float units) { if (fabsf(units - roundf(units / 10) * 10) < 0.01f) snprintf(s, 40, "%.0f m", units / 10); else snprintf(s, 40, "%.1f m", units / 10); }
 static const char *sky_label(int v) { return v == LG_SKY_OFF ? "Off" : v == LG_SKY_PAINTED ? "Painted" : "Stadium"; }
 static void shadow(char *s, int size)
@@ -117,16 +125,16 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     int replays = im ? cfg->imm_replays : cfg->replays, cut = im ? cfg->imm_cutaways : cfg->classic_cutaways;
     int over = im ? cfg->imm_overlays : cfg->arcade_overlays, sh = im ? cfg->imm_shadow : cfg->classic_shadow;
     float dl = (float)cfg->imm_dolly, bk = (float)cfg->imm_back, ht = (float)cfg->imm_height; int sky = cfg->imm_sky;
-    if (pinned(w, XW_REPLAYS)) replays = e->replays;
-    if (pinned(w, XW_CUTAWAYS)) cut = e->cutaways;
+    if (pinned(w, XW_REPLAYS)) replays = !e->replays ? LG_VIEW_OFF : im ? e->replay_view : LG_VIEW_FLAT;
+    if (pinned(w, XW_CUTAWAYS)) cut = !e->cutaways ? LG_VIEW_OFF : im ? e->cutaway_view : LG_VIEW_FLAT;
     if (pinned(w, XW_OVERLAYS)) over = e->overlays;
     if (pinned(w, XW_SHADOW)) sh = e->shadow;
     if (pinned(w, XW_DOLLY)) dl = e->dolly;
     if (pinned(w, XW_STEPBACK)) bk = e->back;
     if (pinned(w, XW_HEIGHT)) ht = e->height;
     if (pinned(w, XW_SKY)) sky = e->sky;
-    snprintf(it[XW_REPLAYS].value, 40, "%s", on_off(replays));
-    snprintf(it[XW_CUTAWAYS].value, 40, "%s", on_off(cut));
+    snprintf(it[XW_REPLAYS].value, 40, "%s", im ? view_label(replays) : on_off(replays));
+    snprintf(it[XW_CUTAWAYS].value, 40, "%s", im ? view_label(cut) : on_off(cut));
     snprintf(it[XW_OVERLAYS].value, 40, "%s", over ? "Shown" : "Hidden");
     snprintf(it[XW_SKY].value, 40, "%s", sky_label(sky));
     metres(it[XW_DOLLY].value, dl);
@@ -173,8 +181,8 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_RESTART: return XP_RESTART;
     case XW_ADVANCED: w->page = c->world_mode ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; return XW_PAGE_CHANGED;
     case XW_BACK: w->page = XW_PAGE_MAIN; return XW_PAGE_CHANGED;
-    case XW_REPLAYS: if (im) c->imm_replays = !c->imm_replays; else c->replays = !c->replays; fx |= live; break;
-    case XW_CUTAWAYS: if (im) c->imm_cutaways = !c->imm_cutaways; else c->classic_cutaways = !c->classic_cutaways; fx |= live; break;
+    case XW_REPLAYS: if (im) c->imm_replays = view_next(c->imm_replays); else c->replays = !c->replays; fx |= live; break;
+    case XW_CUTAWAYS: if (im) c->imm_cutaways = view_next(c->imm_cutaways); else c->classic_cutaways = !c->classic_cutaways; fx |= live; break;
     case XW_OVERLAYS: if (im) c->imm_overlays = !c->imm_overlays; else c->arcade_overlays = !c->arcade_overlays; fx |= live; break;
     case XW_SKY:        /* Stadium -> Painted -> Off -> Stadium */
         if (!im) return 0;

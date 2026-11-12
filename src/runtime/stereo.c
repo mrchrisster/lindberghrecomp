@@ -334,6 +334,229 @@ float stereo_eye_x(int view)
     return -ss_lens(p) * ss_eye_e(view);
 }
 
+/* ---- Virtua Tennis 3 Immersive: replays and point cutaways in the world ----
+ * A replay (camera mode 6) and the winner's close-up after a point (mode 7)
+ * are drawn through the game's long-lens TV cameras; today they go flat.
+ * With the view World or Camera (world_mode_replay_view / _cutaway_view: the
+ * panel's Replays / Point cutaways, LINDBERGH_VT3_REPLAY_VIEW / _CUTAWAY_VIEW)
+ * the frames stay world frames, and every world draw - whose matrix is
+ * P_r V_r M - is put in another space before the eyes' matrices:
+ *   World ("in the world", option A): C = V_anchor inv(V_r), the anchor the
+ *     last court-camera view (mode 1/2) before; the court and stadium stay
+ *     where they were in the rally, the players and the ball replay in front
+ *     of you. The dolly / step back / height as in the rally, along the
+ *     anchor's up.
+ *   Camera ("camera view", option B): you stand where the game's camera is,
+ *     seeing 1:1 (the eyes' own lens): C = L inv(V_r), L a level view at the
+ *     camera's eye looking along the shot's heading - taken at the shot's
+ *     first frame, horizon level, no turn forced on you (your head turns the
+ *     view). LINDBERGH_VT3_REPLAY_PAN=1: the heading follows the camera's
+ *     every frame (still level); =2: the camera's own view, pitch and all.
+ *     No dolly / step back / height. A dip to black and back at the start,
+ *     at each cut (a new shot: the camera jumps, or the replay's 30-frame
+ *     rewind) and at the end (LINDBERGH_VT3_REPLAY_FADE=<frames to clear>,
+ *     0 none; default 12, after 3 black).
+ * Fed on the GL thread, in order with the draws (hle_sega.c vt3_cam_job ->
+ * stereo_vt3_view), like the game's camera itself. */
+static struct {
+    float anchor[16], anchor_up[3]; int anchor_ok;
+    int active;             /* LG_VIEW_WORLD / _CAMERA: the current camera's draws are corrected; 0 none */
+    float C[16];            /* the draws' camera space -> the space the eyes are put in */
+    float up[3];            /* the world's up in that space */
+    int notrans;            /* no dolly / step back / height (Camera) */
+    unsigned mode;
+    float last_pos[3], last_fwd[3]; int have_last;
+    float heading[3];       /* Camera: the shot's level heading, world */
+    unsigned fade_at; int fading;
+    unsigned shots;
+    unsigned shot_frame;
+    unsigned mode_seen, mode_frame;   /* the mode last noted, the frame it began: the game's first
+                                       * frame in a new mode still has the old camera's view */
+} g_rv;
+static int mat_invert(const float *m, float *out);
+static int g_proj_dirty;                /* (defined below) */
+static int rv_log(void) { static int l = -1; if (l < 0) { const char *v = getenv("LINDBERGH_VT3_CAMMODE_LOG"); l = v && *v == '2'; } return l; }
+static int rv_kind(unsigned mode)
+{
+    if (!world_mode_immersive()) return 0;
+    int k = mode == 6 ? (world_mode_replays() ? world_mode_replay_view() : 0)
+          : mode == 7 ? (world_mode_cutaways() ? world_mode_cutaway_view() : 0) : 0;
+    {   /* LINDBERGH_VT3_VIEW_AT=<frame>:<replay view>,<cutaway view> (test only; flat|world|follow):
+         * both views from that frame on, e.g. two combinations in one run */
+        static long at = -2; static int rv_at, cv_at;
+        if (at == -2) { const char *v = getenv("LINDBERGH_VT3_VIEW_AT"); char a[16] = "", b[16] = ""; at = -1;
+                        if (v && sscanf(v, "%ld:%15[a-z],%15[a-z]", &at, a, b) == 3) { rv_at = world_mode_view_value(a); cv_at = world_mode_view_value(b); }
+                        else at = -1; }
+        if (at >= 0 && (long)g_frame >= at) {
+            if (mode == 6 && world_mode_replays() && rv_at > 0) k = rv_at;
+            if (mode == 7 && world_mode_cutaways() && cv_at > 0) k = cv_at;
+        }
+    }
+    return k == LG_VIEW_WORLD || k == LG_VIEW_CAMERA ? k : 0;
+}
+static void rv_fade_start(const char *why)
+{
+    static int frames = -2;
+    if (frames == -2) { const char *v = getenv("LINDBERGH_VT3_REPLAY_FADE"); frames = v && *v ? atoi(v) : 12; }
+    if (frames <= 0) return;
+    g_rv.fade_at = g_frame; g_rv.fading = 1;
+    if (rv_log()) fprintf(stderr, "[rview] frame %u: dip to black (%s)\n", g_frame, why);
+}
+/* 0..1: the black over this frame (3 frames black, then clearing) */
+static float rv_fade_alpha(void)
+{
+    static int frames = -2;
+    if (frames == -2) { const char *v = getenv("LINDBERGH_VT3_REPLAY_FADE"); frames = v && *v ? atoi(v) : 12; }
+    if (!g_rv.fading || frames <= 0) return 0;
+    int d = (int)(g_frame - g_rv.fade_at);
+    if (d < 0) d = 0;
+    if (d < 3) return 1;
+    float a = 1.0f - (float)(d - 2) / (float)(frames + 1);
+    if (a <= 0) { g_rv.fading = 0; return 0; }
+    return a;
+}
+/* a level world -> eye view at pos looking along the level heading h */
+static void rv_level_view(const float pos[3], const float h[3], float L[16])
+{
+    const float R[3][3] = { { -h[2], 0, h[0] }, { 0, 1, 0 }, { -h[0], 0, -h[2] } };   /* rows: right, up, back */
+    mat_identity(L);
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++) L[c * 4 + r] = R[r][c];
+        L[12 + r] = -(R[r][0] * pos[0] + R[r][1] * pos[1] + R[r][2] * pos[2]);
+    }
+}
+void stereo_vt3_view(unsigned mode, const float *view, int cut)
+{
+    float V[16];
+    memset(V, 0, sizeof V);
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) V[c * 4 + r] = view[r * 4 + c];
+    V[15] = 1;
+    float pos[3], fwd[3];
+    for (int i = 0; i < 3; i++) {
+        pos[i] = -(V[i * 4] * V[12] + V[i * 4 + 1] * V[13] + V[i * 4 + 2] * V[14]);
+        fwd[i] = -V[i * 4 + 2];
+    }
+    if (mode != g_rv.mode_seen) { g_rv.mode_seen = mode; g_rv.mode_frame = g_frame; }
+    const int stale = g_frame == g_rv.mode_frame;     /* (measured: one frame) */
+    if ((mode == 1 || mode == 2) && !stale) {   /* the court camera: the anchor, until a replay or close-up */
+        memcpy(g_rv.anchor, V, sizeof V);
+        g_rv.anchor_up[0] = view[1]; g_rv.anchor_up[1] = view[5]; g_rv.anchor_up[2] = view[9];
+        g_rv.anchor_ok = 1;
+    }
+    int k = rv_kind(mode), was = g_rv.active;
+    if (k == LG_VIEW_WORLD && !g_rv.anchor_ok) {
+        static int told; if (!told++) fprintf(stderr, "[rview] frame %u: no court view seen yet - camera mode %u shown as before\n", g_frame, mode);
+        k = 0;
+    }
+    float inv[16];
+    if (k && !mat_invert(V, inv)) k = 0;
+    if (k == LG_VIEW_WORLD) {
+        mat_mul(g_rv.C, g_rv.anchor, inv);
+        memcpy(g_rv.up, g_rv.anchor_up, sizeof g_rv.up);
+        g_rv.notrans = 0;
+        if (was != k || mode != g_rv.mode) {
+            fprintf(stderr, "[rview] frame %u: camera mode %u drawn in the world from the court view (camera at %.0f %.0f %.0f)\n",
+                    g_frame, mode, pos[0], pos[1], pos[2]);
+        }
+    } else if (k == LG_VIEW_CAMERA) {
+        static int pan = -1;
+        if (pan < 0) { const char *v = getenv("LINDBERGH_VT3_REPLAY_PAN"); pan = v && *v ? atoi(v) : 0; }
+        const int start = was != k || mode != g_rv.mode;
+        int shot = start || cut || !g_rv.have_last || (g_frame - g_rv.mode_frame == 1 && g_rv.shot_frame != g_frame);
+        if (!shot) {
+            float d2 = 0, dt = 0;
+            for (int i = 0; i < 3; i++) { d2 += (pos[i] - g_rv.last_pos[i]) * (pos[i] - g_rv.last_pos[i]); dt += fwd[i] * g_rv.last_fwd[i]; }
+            shot = d2 > 100.0f * 100.0f || dt < 0.94f;   /* 10 m or 20 degrees in a frame: a cut */
+        }
+        float hl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+        if ((shot || pan >= 1) && hl > 0.05f) { g_rv.heading[0] = fwd[0] / hl; g_rv.heading[1] = 0; g_rv.heading[2] = fwd[2] / hl; }
+        else if (shot && hl <= 0.05f) { g_rv.heading[0] = 0; g_rv.heading[1] = 0; g_rv.heading[2] = -1; }
+        if (shot && stale) {
+            if (start) rv_fade_start("start");      /* black while the old view is still drawn */
+        } else if (shot) {
+            /* a new shot within 2 frames of a dip (the first real frame of a new
+             * camera mode; the camera's move a frame after the replay's rewind):
+             * taken inside that dip, not another */
+            const int settle = g_rv.fading && g_frame - g_rv.fade_at <= 2;
+            g_rv.shots++; g_rv.shot_frame = g_frame;
+            fprintf(stderr, "[rview] frame %u: camera mode %u from the camera's place, shot %u at %.0f %.0f %.0f heading %.2f %.2f%s\n",
+                    g_frame, mode, g_rv.shots, pos[0], pos[1], pos[2], g_rv.heading[0], g_rv.heading[2],
+                    cut ? " (rewind)" : settle ? " (settled in the dip)" : start ? " (start)" : " (cut)");
+            if (!settle) rv_fade_start(start ? "start" : cut ? "rewind" : "cut");
+        }
+        if (pan == 2) { mat_identity(g_rv.C); g_rv.up[0] = view[1]; g_rv.up[1] = view[5]; g_rv.up[2] = view[9]; }
+        else {
+            float L[16];
+            rv_level_view(pos, g_rv.heading, L);
+            mat_mul(g_rv.C, L, inv);
+            g_rv.up[0] = 0; g_rv.up[1] = 1; g_rv.up[2] = 0;
+        }
+        g_rv.notrans = 1;
+    }
+    if (was == LG_VIEW_CAMERA && k != LG_VIEW_CAMERA) rv_fade_start("end");
+    if (was && !k) fprintf(stderr, "[rview] frame %u: camera mode %u: the view back as it was\n", g_frame, mode);
+    if (rv_log() && (mode == 6 || mode == 7))
+        fprintf(stderr, "[rview] frame %u: mode %u view %d eye %.0f %.0f %.0f fwd %.2f %.2f %.2f\n",
+                g_frame, mode, k, pos[0], pos[1], pos[2], fwd[0], fwd[1], fwd[2]);
+    g_rv.active = k; g_rv.mode = mode;
+    memcpy(g_rv.last_pos, pos, sizeof pos); memcpy(g_rv.last_fwd, fwd, sizeof fwd); g_rv.have_last = 1;
+    g_proj_dirty = 1;
+}
+/* the dip to black (Camera view), over everything drawn into the eye, at the
+ * frame's end: eye 0 or 1 (the second eye replayed), or both (multiview) */
+static void rv_fade_draw(int eye)
+{
+    float a = rv_fade_alpha();
+    if (a <= 0 || g_flat) return;
+    static GLuint prog; static GLint u_a = -1; static int failed;
+    if (failed) return;
+    if (!prog) {
+        static const char vs_mv[] = "#version 120\nuniform mat4 u_reproj[2];\nvoid main() { gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0); gl4es_mvPre = gl_Position; }\n";
+        static const char vs_1[] = "#version 120\nvoid main() { gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0); }\n";
+        static const char fs[] = "#version 120\n#ifdef GL_ES\nprecision mediump float;\n#endif\nuniform float u_fade;\nvoid main() { gl_FragColor = vec4(0.0, 0.0, 0.0, u_fade); }\n";
+        GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
+        const char *a1 = g_mv ? vs_mv : vs_1, *b1 = fs; GLint ok = 0;
+        glShaderSource(v, 1, &a1, NULL); glCompileShader(v);
+        glShaderSource(f, 1, &b1, NULL); glCompileShader(f);
+        prog = glCreateProgram(); glAttachShader(prog, v); glAttachShader(prog, f);
+        glBindAttribLocation(prog, 0, "gl_Vertex");
+        glLinkProgram(prog); glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+        if (!ok) { char log[1024] = ""; glGetProgramInfoLog(prog, sizeof log, NULL, log);
+                   fprintf(stderr, "[rview] the fade program did not link: %s\n", log); failed = 1; return; }
+        u_a = glGetUniformLocation(prog, "u_fade");
+    }
+    GLint pr = 0, ab = 0, dm = 0, fb = 0, vp[4], sf = 0, df = 0; GLboolean cm[4];
+    glGetIntegerv(GL_CURRENT_PROGRAM, &pr); glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &ab);
+    glGetIntegerv(GL_DEPTH_WRITEMASK, &dm); glGetBooleanv(GL_COLOR_WRITEMASK, cm);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fb); glGetIntegerv(GL_VIEWPORT, vp);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &sf); glGetIntegerv(GL_BLEND_DST_RGB, &df);
+    GLboolean dt = glIsEnabled(GL_DEPTH_TEST), bl = glIsEnabled(GL_BLEND), cf = glIsEnabled(GL_CULL_FACE),
+              st = glIsEnabled(GL_STENCIL_TEST), at = glIsEnabled(GL_ALPHA_TEST), sc = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean vp_on = glIsEnabled(GL_VERTEX_PROGRAM_ARB), fp_on = glIsEnabled(GL_FRAGMENT_PROGRAM_ARB);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_eye_fbo[eye]);
+    glViewport(0, 0, g_ew, g_eh);
+    glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_CULL_FACE); glDisable(GL_STENCIL_TEST);
+    glDisable(GL_ALPHA_TEST); glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_VERTEX_PROGRAM_ARB); glDisable(GL_FRAGMENT_PROGRAM_ARB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(prog);
+    glUniform1f(u_a, a);
+    glBegin(GL_TRIANGLE_STRIP);
+    glVertex2f(-1, -1); glVertex2f(1, -1); glVertex2f(-1, 1); glVertex2f(1, 1);
+    glEnd();
+    glUseProgram((GLuint)pr);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)ab);
+    glBlendFunc((GLenum)sf, (GLenum)df);
+    glDepthMask((GLboolean)dm); glColorMask(cm[0], cm[1], cm[2], cm[3]);
+    if (dt) glEnable(GL_DEPTH_TEST); if (!bl) glDisable(GL_BLEND); if (cf) glEnable(GL_CULL_FACE);
+    if (st) glEnable(GL_STENCIL_TEST); if (at) glEnable(GL_ALPHA_TEST); if (sc) glEnable(GL_SCISSOR_TEST);
+    if (vp_on) glEnable(GL_VERTEX_PROGRAM_ARB); if (fp_on) glEnable(GL_FRAGMENT_PROGRAM_ARB);
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fb);
+}
+
 /* effective_projection's world part for a given eye: the head's pose, the
  * eyes' lens, and in immersive mode the dolly and step back. Writes no
  * state, so it can be asked from the game's thread too (stereo_vt3_hud_anchor). */
@@ -380,6 +603,8 @@ static void eye_projection(const float *p, int hud, int which, float *out)
              * the HUD sprites and the logo screen behind a near plane that far
              * out - they vanished. Those keep the old 0.05. */
             float n2 = (n > 10.0f ? 0.05f : nk) * n, f2 = 4.0f * f;
+            /* a replay / close-up in the world (stereo_vt3_view): not the pixel camera's draws */
+            const int rv = g_rv.active && n <= 10.0f;
             q[10] = -(f2 + n2) / (f2 - n2); q[14] = -2.0f * f2 * n2 / (f2 - n2);
             lg_stereo_eye_projection(q,hud,&eye,out);
             {   /* LINDBERGH_VT3_VIEW_TURN=<yaw>[,<pitch>] degrees (test only): the eyes
@@ -400,6 +625,7 @@ static void eye_projection(const float *p, int hud, int which, float *out)
                 if (ns && at != g_frame) { at = g_frame; for (int i = 0; i < ns; i++) if ((long)g_frame >= sf[i]) { ty = sy[i]; tp = sp[i]; } }
                 extern volatile float g_game_up_eye[3];
                 float u[3] = { g_game_up_eye[0], g_game_up_eye[1], g_game_up_eye[2] };
+                if (rv) memcpy(u, g_rv.up, sizeof u);
                 float ul = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
                 if ((ty != 0 || tp != 0) && ul > 0.5f) {
                     float R[16], A[16], B[16], o2[16];
@@ -429,10 +655,11 @@ static void eye_projection(const float *p, int hud, int which, float *out)
              * (from the game's view, arb_note_projection) taken out. */
             const float back = world_mode_back();     /* live: the panel's Step back */
             extern volatile float g_game_up_eye[3]; extern volatile int g_game_world_ok;
-            float t[3] = { 0, 0, dolly };
+            float t[3] = { 0, 0, rv && g_rv.notrans ? 0 : dolly };
             float u[3] = { g_game_up_eye[0], g_game_up_eye[1], g_game_up_eye[2] };
+            if (rv) memcpy(u, g_rv.up, sizeof u);
             float ul = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
-            if (g_game_world_ok && ul > 0.5f) {
+            if (g_game_world_ok && ul > 0.5f && !(rv && g_rv.notrans)) {
                 float h[3] = { u[2] / ul * (u[0] / ul), u[2] / ul * (u[1] / ul), -1 + (u[2] / ul) * (u[2] / ul) };   /* (0,0,-1) less its up part */
                 float hl = sqrtf(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]);
                 if (hl > 0.1f) for (int i = 0; i < 3; i++) t[i] += back * h[i] / hl;
@@ -443,6 +670,7 @@ static void eye_projection(const float *p, int hud, int which, float *out)
                 for (int i = 0; i < 3; i++) t[i] -= lift * u[i] / ul;
             }
             for (int r = 0; r < 4; r++) out[12 + r] += t[0] * out[r] + t[1] * out[4 + r] + t[2] * out[8 + r];
+            if (rv) { float o2[16]; mat_mul(o2, out, g_rv.C); memcpy(out, o2, 64); }
             return;
         }
     }
@@ -1951,7 +2179,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
          * one, world - before anything else went into the eyes. */
         if (g_vt3_cut_until && (int)(g_vt3_cut_until - g_frame) >= 0 && (int)(g_frame - g_vt3_cut_from) >= 0 && persp && g_mv && g_game_fb == 0 && !g_side &&
             !g_replaying && g_eye_draws <= 1 && !menu_state() && (is_draw(k) || k == K_BEGIN)) {
-            int lng = g_proj[g_proj_top][0] > zoom_limit();
+            int lng = g_proj[g_proj_top][0] > zoom_limit() && !g_rv.active;   /* a replay / close-up in the world stays world */
             if (lng != g_flat) {
                 g_flat = lng; g_zoom_frames = lng ? 6 : 0;
                 if (g_flat) { g_screen_lens[0] = 1.732f; g_screen_lens[1] = 1.732f * GAME_W / GAME_H; }
@@ -1993,7 +2221,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
         /* A long lens - the sniper scope, a cutscene's close-up - is a
          * magnified view the eye's own frustum would undo: it goes on the
          * screen too, framed by the scope the game draws there. */
-        int zoom = persp && g_proj[g_proj_top][0] > zoom_limit() && g_zoom_frames >= 6;
+        int zoom = persp && g_proj[g_proj_top][0] > zoom_limit() && g_zoom_frames >= 6 && !g_rv.active;
         if (persp && !g_replaying) { if (zoom) g_zoom_draws++; if (g_game_fb == g_hud_fb) g_hudfb_draws++; }
         LgStereoDrawFacts facts={0};
         facts.perspective=persp;facts.hud_target=g_game_fb==g_hud_fb;
@@ -3748,7 +3976,8 @@ void stereo_frame_end(void)
     g_leaves = 0;
     g_flat_shown = g_flat;
     dump_targets();
-    if (!g_mv && !g_wide) replay(1);
+    rv_fade_draw(0);                        /* the Camera view's dip to black (both eyes with multiview) */
+    if (!g_mv && !g_wide) { replay(1); rv_fade_draw(1); }
     if (g_overflow) { fprintf(stderr, "[stereo] frame %u: recording overflowed %u times\n", g_frame, g_overflow); g_overflow = 0; }
 }
 
@@ -3811,14 +4040,15 @@ void stereo_frame_begin(void)
         g_weapon_frame_draws = g_weapon_draws;
         g_weapon_draws = 0;
     }
-    if (!g_flat && g_scene_draws > 0 && is_perspective(g_world_persp) && g_world_persp[0] > 0.3f && g_world_persp[0] < zoom_limit()) {
+    /* (not a replay's / close-up's lens drawn in the world: the HUD's screen keeps the court camera's size) */
+    if (!g_flat && !g_rv.active && g_scene_draws > 0 && is_perspective(g_world_persp) && g_world_persp[0] > 0.3f && g_world_persp[0] < zoom_limit()) {
         g_screen_lens[0] = g_world_persp[0];
         g_screen_lens[1] = g_world_persp[5];
     }
     g_hud2d = g_pass2d = 0;
     g_zoom_draws = g_hudfb_draws = 0;
     /* a scope is held; a lens passing through on a camera move is not one */
-    g_zoom_frames = g_lens_seen > zoom_limit() ? g_zoom_frames + 1 : 0;
+    g_zoom_frames = g_lens_seen > zoom_limit() && !g_rv.active ? g_zoom_frames + 1 : 0;
     g_lens_seen = 0;
     g_near_seen = 0;
     g_scene_draws = 0;
@@ -3901,7 +4131,7 @@ void stereo_vt3_camera(unsigned mode, float lens)
         if (g_vt3_cam_mode != ~0u) { g_vt3_cut_from = g_frame + 1; g_vt3_cut_until = g_frame + 2; }
         g_vt3_cam_mode = mode;
     }
-    int lng = lens > zoom_limit();
+    int lng = lens > zoom_limit() && !g_rv.active;    /* a replay / close-up drawn in the world (stereo_vt3_view): world */
     if (lng == g_vt3_cam_long) return;
     g_vt3_cam_long = lng;
     g_vt3_flat_next = lng;

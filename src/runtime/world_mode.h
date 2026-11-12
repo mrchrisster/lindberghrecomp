@@ -24,6 +24,11 @@ enum { WM_SRC_DEFAULT, WM_SRC_FILE, WM_SRC_ENV };
 typedef struct {
     int immersive;              /* the running mode: 0 Classic, 1 Immersive */
     int replays, overlays, cutaways;
+    /* how a replay / point cutaway is shown while on: LG_VIEW_FLAT (the flat
+     * picture; always in Classic), _WORLD (in the world from where you are),
+     * _CAMERA (from the game camera's place, 1:1) - Immersive's
+     * immersive.replays / .cutaways, LINDBERGH_VT3_REPLAY_VIEW / _CUTAWAY_VIEW */
+    int replay_view, cutaway_view;
     int sky;                    /* LG_SKY_OFF / _STADIUM (the stadium's own dome) / _PAINTED (stereo.c's) */
     int shadow;                 /* shadow map size: 1024 (the game's own), 2048, 4096 */
     float shadow_scale;         /* what stereo.c scales shadow maps by: 0 = as the game makes them */
@@ -33,7 +38,8 @@ typedef struct {
 
 /* the env variable that pins a value for a run (LINDBERGH_REPLAYS, ...) */
 const char *world_mode_env_name(int key);
-/* whether that variable is set (non-empty): the menu shows "(env.txt)" */
+/* whether that variable is set (non-empty): the menu shows "(env.txt)" -
+ * for replays / cutaways also their view's (LINDBERGH_VT3_REPLAY_VIEW, _CUTAWAY_VIEW) */
 int world_mode_pinned(int key);
 /* Resolves every value: env > stored (vr.cfg, or the defaults) for the mode.
  * mode < 0: the mode is resolved too (env, then stored->mode; only when
@@ -85,6 +91,12 @@ int world_mode_frame(unsigned frame);
 int world_mode_replays(void);
 int world_mode_overlays(void);
 int world_mode_cutaways(void);
+/* LG_VIEW_FLAT / _WORLD / _CAMERA (live) */
+int world_mode_replay_view(void);
+int world_mode_cutaway_view(void);
+/* parses LINDBERGH_VT3_REPLAY_VIEW / _CUTAWAY_VIEW: flat|world|follow|camera
+ * (follow = camera); -1 for anything else */
+int world_mode_view_value(const char *v);
 /* Immersive's sky: LG_SKY_OFF, LG_SKY_STADIUM, LG_SKY_PAINTED (LINDBERGH_VT3_SKY
  * 0|off, 1|on|stadium, 2|painted; vr.cfg immersive.sky) */
 int world_mode_sky(void);

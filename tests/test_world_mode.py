@@ -9,7 +9,7 @@ import unittest
 ENV_KEYS = ["LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OVERLAYS", "LINDBERGH_VT3_CUTAWAYS",
             "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK",
             "LINDBERGH_VT3_SKY", "LINDBERGH_VT3_HEIGHT", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE", "LINDBERGH_VT3_LIVE_SWITCH",
-            "LINDBERGH_VT3_MODE_AT"]
+            "LINDBERGH_VT3_MODE_AT", "LINDBERGH_VT3_REPLAY_VIEW", "LINDBERGH_VT3_CUTAWAY_VIEW"]
 
 
 class WorldModeTests(unittest.TestCase):
@@ -33,6 +33,11 @@ int main(int argc, char **argv) {
     const WmValues *v = world_mode_values();
     printf("%d %d %d %d %d %.0f %.0f %d %.1f", v->immersive, v->replays, v->overlays, v->cutaways,
            v->shadow, v->dolly, v->back, v->sky, v->shadow_scale);
+    if (argc > 2 && !strcmp(argv[2], "views")) {    /* replays / cutaways: on, view; and the pins */
+        printf(" | %d %d %d %d %d %d\n", v->replays, v->replay_view, v->cutaways, v->cutaway_view,
+               world_mode_pinned(WM_REPLAYS), world_mode_pinned(WM_CUTAWAYS));
+        return 0;
+    }
     if (argc > 2 && !strcmp(argv[2], "latch")) {    /* the panel's Mode flipped, then two frames */
         LgXrSettings s = LG_XR_SETTINGS_DEFAULT; xr_settings_load(&s);
         s.world_mode = !world_mode_immersive();
@@ -82,6 +87,26 @@ int main(int argc, char **argv) {
             e.update(env or {})
             p = subprocess.run([str(binary or self.bin), *args], cwd=d, env=e, text=True, capture_output=True, check=True)
             return p.stdout.strip(), p.stderr
+
+    def views(self, cfg=None, env=None):
+        return self.run_wm(cfg, env, args=("1", "views"))[0].split(" | ")[1]
+
+    def test_replay_and_cutaway_views(self):
+        imm = "mode immersive\n"
+        self.assertEqual(self.views(imm), "0 1 0 1 0 0")                                          # off, flat
+        self.assertEqual(self.views(imm + "immersive.replays on\nimmersive.cutaways flat\n"), "1 1 1 1 0 0")
+        self.assertEqual(self.views(imm + "immersive.replays world\nimmersive.cutaways camera\n"), "1 2 1 3 0 0")
+        # an on/off pin alone: flat, whatever vr.cfg says (a test does not depend on it)
+        self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "1"}), "1 1 0 1 1 0")
+        self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "0"}), "0 1 0 1 1 0")
+        # a view variable alone turns it on; follow = camera; with on/off 0 it stays off
+        self.assertEqual(self.views(imm, {"LINDBERGH_VT3_REPLAY_VIEW": "world", "LINDBERGH_VT3_CUTAWAY_VIEW": "follow"}), "1 2 1 3 1 1")
+        self.assertEqual(self.views(imm, {"LINDBERGH_VT3_REPLAY_VIEW": "camera", "LINDBERGH_REPLAYS": "0"}), "0 3 0 1 1 0")
+        self.assertEqual(self.views(imm, {"LINDBERGH_VT3_REPLAY_VIEW": "flat", "LINDBERGH_REPLAYS": "1"}), "1 1 0 1 1 0")
+        # Classic: on/off only, always flat; its view variables do nothing
+        self.assertEqual(self.views("replays on\n", {"LINDBERGH_VT3_REPLAY_VIEW": "world"}), "1 1 1 1 1 0")
+        _, log = self.run_wm(imm + "immersive.replays world\n")
+        self.assertIn("replays world (vr.cfg)", log); self.assertIn("cutaways off (default)", log)
 
     def test_defaults_are_classic(self):
         out, log = self.run_wm()

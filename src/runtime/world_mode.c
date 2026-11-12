@@ -39,7 +39,43 @@ const char *world_mode_key(int key, int immersive)
     return immersive ? KEY_IMMERSIVE[key] : KEY_CLASSIC[key];
 }
 static const char *env(int key) { const char *v = getenv(ENV_NAME[key]); return v && *v ? v : NULL; }
-int world_mode_pinned(int key) { return key >= 0 && key < WM_COUNT && env(key) != NULL; }
+/* Immersive's views of replays / cutaways for a run: LINDBERGH_VT3_REPLAY_VIEW, _CUTAWAY_VIEW */
+static const char *view_env(int key)
+{
+    const char *v = key == WM_REPLAYS ? getenv("LINDBERGH_VT3_REPLAY_VIEW") : key == WM_CUTAWAYS ? getenv("LINDBERGH_VT3_CUTAWAY_VIEW") : NULL;
+    return v && *v ? v : NULL;
+}
+int world_mode_pinned(int key) { return key >= 0 && key < WM_COUNT && (env(key) != NULL || view_env(key) != NULL); }
+int world_mode_view_value(const char *v)
+{
+    if (!v) return -1;
+    if (!strcmp(v, "flat")) return LG_VIEW_FLAT;
+    if (!strcmp(v, "world")) return LG_VIEW_WORLD;
+    if (!strcmp(v, "follow") || !strcmp(v, "camera")) return LG_VIEW_CAMERA;
+    return -1;
+}
+static const char *view_label(int on, int view, int im)
+{
+    if (!on) return "off";
+    if (!im) return "on";
+    return view == LG_VIEW_WORLD ? "world" : view == LG_VIEW_CAMERA ? "camera" : "flat";
+}
+/* a replays / cutaways value and its view: stored, then env (on/off pins the
+ * view to flat unless its view variable is set too, so a test's run does not
+ * depend on vr.cfg; a view variable alone turns it on, unless on/off says 0) */
+static void resolve_view(int key, int im, int stored, int *on, int *view, int *src)
+{
+    *on = stored != 0;
+    *view = im && stored >= LG_VIEW_FLAT && stored <= LG_VIEW_CAMERA ? stored : LG_VIEW_FLAT;
+    const char *v = env(key), *w = im ? view_env(key) : NULL;
+    if (v) { *on = *v != '0'; *view = LG_VIEW_FLAT; *src = WM_SRC_ENV; }
+    if (w) {
+        int k = world_mode_view_value(w);
+        if (k < 0) fprintf(stderr, "[world] %s: cannot read \"%s\" (flat|world|follow)\n",
+                           key == WM_REPLAYS ? "LINDBERGH_VT3_REPLAY_VIEW" : "LINDBERGH_VT3_CUTAWAY_VIEW", w);
+        else { *view = k; if (!v) *on = 1; *src = WM_SRC_ENV; }
+    }
+}
 
 int world_mode_sky_value(const char *v)
 {
@@ -65,16 +101,14 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
         if (!capable && !env(WM_MODE)) k[WM_MODE] = WM_SRC_DEFAULT;
     } else o->immersive = mode != 0;
     const int im = o->immersive;
-    o->replays = im ? s->imm_replays : s->replays;
     o->overlays = im ? s->imm_overlays : s->arcade_overlays;
-    o->cutaways = im ? s->imm_cutaways : s->classic_cutaways;
     o->shadow = im ? s->imm_shadow : s->classic_shadow;
     o->shadow_scale = scale_of(o->shadow);
     o->dolly = (float)s->imm_dolly; o->back = (float)s->imm_back; o->sky = s->imm_sky;
     o->height = (float)s->imm_height;
-    if ((v = env(WM_REPLAYS))) { o->replays = *v != '0'; k[WM_REPLAYS] = WM_SRC_ENV; }
+    resolve_view(WM_REPLAYS, im, im ? s->imm_replays : s->replays, &o->replays, &o->replay_view, &k[WM_REPLAYS]);
+    resolve_view(WM_CUTAWAYS, im, im ? s->imm_cutaways : s->classic_cutaways, &o->cutaways, &o->cutaway_view, &k[WM_CUTAWAYS]);
     if ((v = env(WM_OVERLAYS))) { o->overlays = *v != '0'; k[WM_OVERLAYS] = WM_SRC_ENV; }
-    if ((v = env(WM_CUTAWAYS))) { o->cutaways = *v != '0'; k[WM_CUTAWAYS] = WM_SRC_ENV; }
     if ((v = env(WM_SHADOW))) {
         o->shadow_scale = (float)atof(v); k[WM_SHADOW] = WM_SRC_ENV;
         o->shadow = o->shadow_scale > 0 ? (int)(1024 * o->shadow_scale + 0.5f) : 1024;
@@ -141,8 +175,8 @@ void world_mode_init(int capable)
             g_wm.immersive ? "immersive" : "classic", SRC[src[WM_MODE]],
             g_wm.dolly, SRC[src[WM_DOLLY]], g_wm.back, SRC[src[WM_BACK]], g_wm.height, SRC[src[WM_HEIGHT]],
             sky_name(g_wm.sky), SRC[src[WM_SKY]], g_wm.shadow, SRC[src[WM_SHADOW]],
-            g_wm.replays ? "on" : "off", SRC[src[WM_REPLAYS]], g_wm.overlays ? "on" : "off", SRC[src[WM_OVERLAYS]],
-            g_wm.cutaways ? "on" : "off", SRC[src[WM_CUTAWAYS]], capable ? "" : " - this game has no world mode");
+            view_label(g_wm.replays, g_wm.replay_view, g_wm.immersive), SRC[src[WM_REPLAYS]], g_wm.overlays ? "on" : "off", SRC[src[WM_OVERLAYS]],
+            view_label(g_wm.cutaways, g_wm.cutaway_view, g_wm.immersive), SRC[src[WM_CUTAWAYS]], capable ? "" : " - this game has no world mode");
     g_start = g_game = g_panel_req = g_wm.immersive;
     atomic_store(&g_target, g_start);
     atomic_store(&g_gl, g_start);
@@ -235,6 +269,8 @@ void world_mode_gl_latch(int immersive) { atomic_store(&g_gl, immersive != 0); }
 int world_mode_replays(void) { return wm()->replays; }
 int world_mode_overlays(void) { return wm()->overlays; }
 int world_mode_cutaways(void) { return wm()->cutaways; }
+int world_mode_replay_view(void) { return wm()->replay_view; }
+int world_mode_cutaway_view(void) { return wm()->cutaway_view; }
 int world_mode_sky(void) { return wm()->sky; }
 float world_mode_shadow_scale(void) { return wm()->shadow_scale; }
 float world_mode_dolly(void) { return wm()->dolly; }
