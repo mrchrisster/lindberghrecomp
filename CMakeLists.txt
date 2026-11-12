@@ -132,6 +132,7 @@ function(lindbergh_runtime target generated_dir)
             "${LINDBERGH_RUNTIME_DIR}/xr_settings.c"
             "${LINDBERGH_RUNTIME_DIR}/xr_controls.c"
             "${LINDBERGH_RUNTIME_DIR}/xr_panel.c"
+            "${LINDBERGH_RUNTIME_DIR}/splash_logo.c"
             "${LINDBERGH_RUNTIME_DIR}/host_settings.c"
             "${LINDBERGH_RUNTIME_DIR}/game_profile.c"
             "${LINDBERGH_RUNTIME_DIR}/hle_gl_posix.c"

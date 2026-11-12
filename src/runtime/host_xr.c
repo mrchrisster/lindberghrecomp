@@ -1253,7 +1253,9 @@ static void anchor_head(XrViewLocateInfo *vl)
  * frames at all) a thread of its own submits them; after it, xr_frame_end
  * adds them over the game's frames while those stay dark (~20 s of the
  * board's own boot on black). The picture is the game's (games/<game>/src/
- * splash_art.c, from quest/tools/<game>_splash.py); a game without one, or
+ * splash_art.c, from quest/tools/<game>_splash.py; our own art only - the
+ * game's title logo is read from the player's files here, splash_logo.c);
+ * a game without one, or
  * LINDBERGH_SPLASH=0, has none. The countdown is the last start's measured
  * time, kept in startup_seconds beside the game. */
 #ifdef __ANDROID__
@@ -1265,6 +1267,14 @@ extern const int lg_splash_cell[2] __attribute__((weak)), lg_splash_digits[3] __
                  lg_splash_bar[4] __attribute__((weak));
 extern const size_t lg_splash_zlen __attribute__((weak));
 extern const unsigned char lg_splash_z[] __attribute__((weak));
+/* the title's place (splash_logo.c): the game's logo from the player's files,
+ * or our own title - a picture without these (older art) is shown as it is */
+extern const int lg_splash_logo_at[4] __attribute__((weak)), lg_splash_vr[4] __attribute__((weak)),
+                 lg_splash_vr_at[2] __attribute__((weak)), lg_splash_title[4] __attribute__((weak)),
+                 lg_splash_title_at[2] __attribute__((weak));
+extern const char lg_splash_logo_file[] __attribute__((weak));
+extern const int lg_splash_ball[4] __attribute__((weak));     /* the progress line's ball (atlas x, y, w, h) */
+#include "splash_logo.h"
 
 static XrSwapchain sp_chain;
 static int sp_on;                      /* shown: from the session's start until the game is seen */
@@ -1288,6 +1298,10 @@ static int splash_init(void)
     uLongf n = (uLongf)w * h * 4;
     if (!px || uncompress(px, &n, lg_splash_z, (uLong)lg_splash_zlen) != Z_OK || n != (uLongf)w * h * 4) {
         fprintf(stderr, "[xr] splash: the picture does not unpack\n"); free(px); return 0;
+    }
+    if (&lg_splash_logo_at && &lg_splash_vr && &lg_splash_vr_at && &lg_splash_title && &lg_splash_title_at && &lg_splash_logo_file) {
+        const LgSplashPlaces pl = { lg_splash_logo_at, lg_splash_vr, lg_splash_vr_at, lg_splash_title, lg_splash_title_at, lg_splash_logo_file };
+        lg_splash_compose(px, w, h, &pl);
     }
     XrSwapchainCreateInfo ci = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
     ci.createFlags = XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT;
@@ -1342,7 +1356,8 @@ static XrCompositionLayerQuad sp_quad(int x, int y, int w, int h, float px, floa
     return q;
 }
 
-/* the layers for now: the panel, the countdown's digits, the bar */
+/* the layers for now: the panel, the countdown's digits (if the picture has
+ * them), the progress line and its ball (if it has one) - 4 at most */
 static int sp_layers(XrCompositionLayerQuad q[4])
 {
     double t = sp_now() - sp_t0, left = sp_expect - t;
@@ -1351,12 +1366,18 @@ static int sp_layers(XrCompositionLayerQuad q[4])
     const int cw = lg_splash_cell[0], ch = lg_splash_cell[1];
     float dh = (float)lg_splash_digits[2], dw = dh * cw / ch;
     int dig[2] = { secs / 10, secs % 10 };
-    for (int i = secs < 10 ? 1 : 0; i < 2; i++)
-        q[n++] = sp_quad(dig[i] * cw, lg_splash_panel_h, cw, ch, lg_splash_digits[0] + i * dw, (float)lg_splash_digits[1], dw, dh, 1);
+    if (lg_splash_digits[2] > 0)       /* a picture without digits (height 0): the line alone */
+        for (int i = secs < 10 ? 1 : 0; i < 2; i++)
+            q[n++] = sp_quad(dig[i] * cw, lg_splash_panel_h, cw, ch, lg_splash_digits[0] + i * dw, (float)lg_splash_digits[1], dw, dh, 1);
     double p = t / sp_expect; if (p > 0.97) p = 0.97;
     float bx = (float)lg_splash_bar[0], by = (float)lg_splash_bar[1], bw = (float)(lg_splash_bar[2] - lg_splash_bar[0]) * (float)p,
           bh = (float)(lg_splash_bar[3] - lg_splash_bar[1]);
     if (bw >= 1) q[n++] = sp_quad(10 * cw + 16, lg_splash_panel_h + 16, cw - 32, ch - 32, bx, by, bw, bh, 0);
+    if (&lg_splash_ball && n < 4) {    /* a ball riding on the line's end */
+        const float bs = (float)lg_splash_ball[3];
+        q[n++] = sp_quad(lg_splash_ball[0], lg_splash_ball[1], lg_splash_ball[2], lg_splash_ball[3],
+                         bx + bw - bs / 2, by + bh / 2 - bs / 2, (float)lg_splash_ball[2], bs, 1);
+    }
     for (int i = 1; i < n; i++) q[i].pose.position.z += 0.002f;   /* just in front of the panel */
     return n;
 }
