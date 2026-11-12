@@ -18,7 +18,8 @@ extern "C" {
 #endif
 
 /* the values, for their env variables, sources and pins */
-enum { WM_MODE, WM_REPLAYS, WM_OVERLAYS, WM_CUTAWAYS, WM_SHADOW, WM_DOLLY, WM_BACK, WM_SKY, WM_HEIGHT, WM_COUNT };
+enum { WM_MODE, WM_REPLAYS, WM_OVERLAYS, WM_CUTAWAYS, WM_SHADOW, WM_DOLLY, WM_BACK, WM_SKY, WM_HEIGHT,
+       WM_CARD, WM_LANGUAGE, WM_COUNT };
 enum { WM_SRC_DEFAULT, WM_SRC_FILE, WM_SRC_ENV };
 
 typedef struct {
@@ -34,6 +35,9 @@ typedef struct {
     float shadow_scale;         /* what stereo.c scales shadow maps by: 0 = as the game makes them */
     float dolly, back;          /* viewpoint forward / back in game units (immersive) */
     float height;               /* viewpoint raised (+) / lowered (-) in game units (immersive) */
+    int card_notice;            /* the card reader's notice and boot wait (Classic's classic.card_notice;
+                                 * VR: 0); LINDBERGH_VT3_CARD_RW=1|0; at registration, so on restart */
+    int language;               /* 1 English, 0 Japanese (vr.cfg language, LINDBERGH_VT3_LANGUAGE); on restart */
 } WmValues;
 
 /* the env variable that pins a value for a run (LINDBERGH_REPLAYS, ...) */
@@ -91,6 +95,8 @@ int world_mode_frame(unsigned frame);
 int world_mode_replays(void);
 int world_mode_overlays(void);
 int world_mode_cutaways(void);
+int world_mode_card_notice(void);
+int world_mode_language(void);
 /* LG_VIEW_FLAT / _WORLD / _CAMERA (live) */
 int world_mode_replay_view(void);
 int world_mode_cutaway_view(void);

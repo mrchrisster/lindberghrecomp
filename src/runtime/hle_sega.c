@@ -620,10 +620,12 @@ static void h_dipsw_get(CPU *c)
     RET(0);
 }
 
+static int g_vt3_region = -1;    /* Virtua Tennis 3: its Language setting's region (vt3_jumps) */
 static int region_value(void)
 {
     const char *v = getenv("LINDBERGH_REGION");
     if (v && *v) return atoi(v);
+    if (g_vt3_region >= 0) return g_vt3_region;
     return g_country ? 1 : 0;
 }
 static void h_region(CPU *c) { RET(region_value()); }
@@ -1026,7 +1028,47 @@ static void h_vt3_card_init(CPU *c)
     g_vt3_card_shown = -1;
     vt3_card_apply();
 }
-static void h_vt3_credit_draw(CPU *c) { vt3_card_apply(); if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_credit_draw(c); }
+/* Overlays turned Hidden during a session: the card reader's windows the
+ * game already opened (it opens them once at boot and never closes them) are
+ * closed with the game's own close-everything, CCardSlotWindowManager::init()
+ * (what it does between screens), on the game thread. Shown again: they come
+ * back when the game next opens them. LINDBERGH_VT3_OVERLAYS_AT=<frame>:<0|1>
+ * (test only): the switch flipped at that frame, as a panel click would. */
+static void vt3_slot_close_all(CPU *c)
+{
+    uint32_t t = rd32(0x085061A4u), cm = t ? rd32(t + 0x70) : 0, sw = cm ? rd32(cm + 0xB4) : 0;
+    static uint32_t init_fn;
+    if (!init_fn) init_fn = guest_symbol("_ZN22CCardSlotWindowManager4initEv");
+    if (sw && init_fn && rd8(sw + 0x2C) == 1) {
+        uint32_t a[1] = { sw };
+        guest_call(c, init_fn, a, 1);
+        extern unsigned g_frame;
+        fprintf(stderr, "[vt3] frame %u: arcade overlays hidden - the card reader's windows closed\n", g_frame);
+    }
+}
+static void h_vt3_credit_draw(CPU *c)
+{
+    static int last = -1, at_mode = -1; static long at = -2;
+    if (at == -2) { const char *v = getenv("LINDBERGH_VT3_OVERLAYS_AT"); at = -1;
+                    if (v && sscanf(v, "%ld:%d", &at, &at_mode) != 2) at = -1; }
+    extern unsigned g_frame;
+    if (at >= 0 && (long)g_frame >= at) { g_arcade_overlays = at_mode != 0; at = -1;
+                                         fprintf(stderr, "[vt3] frame %u: arcade overlays %s (LINDBERGH_VT3_OVERLAYS_AT)\n", g_frame, at_mode ? "shown" : "hidden"); }
+    if (last == 1 && !g_arcade_overlays) vt3_slot_close_all(c);
+    last = g_arcade_overlays;
+    vt3_card_apply();
+    if (!g_arcade_overlays) return;
+    push32(c, 0xDEADBEEFu); g_vt3_credit_draw(c);
+}
+/* Virtua Tennis 3's card reader/writer, per side (backup::getCard_rw_1p_use /
+ * _2p_use): 0 on, -2 out of service, -1 off. The port has no card reader
+ * (every /dev open is refused), so the game is told the cabinet has its
+ * readers switched off - the setting a card-less cabinet uses: no "1P/2P
+ * cannot use a card" bar at the top, no 11 s CARD R/W INITIALIZING screen at
+ * boot, no card prompt at character select; the King / boss level comes from
+ * the cabinet's backup instead of cards. LINDBERGH_VT3_CARD_RW=1 keeps the
+ * game's own setting (ai_docs/research/card-reader-top-bar.md). */
+static void h_vt3_card_rw_off(CPU *c) { RET(0xFFFFFFFFu); }
 static void h_vt3_slot_open(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot_open(c); }
 static void h_vt3_slot(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot(c); }
 static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot_card(c); }
@@ -1807,6 +1849,11 @@ static void vt3_jumps(void)
     g_replays = world_mode_replays();
     g_arcade_overlays = world_mode_overlays();
     g_cutaways = world_mode_cutaways();
+    /* the Language row (vr.cfg language, LINDBERGH_VT3_LANGUAGE): the cabinet's
+     * region byte in the EEPROM's system data (games/vt3 profile .sysdata_region):
+     * English = 2 (export: English without the USA's rating screen and MPH),
+     * Japanese = 0. LINDBERGH_REGION=<n> wins. Read at the first EEPROM access. */
+    if (g_world_capable) g_vt3_region = world_mode_language() ? 2 : 0;
     const char *r = getenv("LINDBERGH_VT3_ROUND"), *p = getenv("LINDBERGH_VT3_POINTS"), *l = getenv("LINDBERGH_VT3_LOG");
     g_vt3_log = l && *l == '1';
     if (r && *r) g_vt3_round = atoi(r);
@@ -1824,6 +1871,13 @@ static void vt3_jumps(void)
             nh += vt3_wrap("_ZN22CCardSlotWindowManager19window_slot_usecardElb", &g_vt3_slot_card, h_vt3_slot_card);
             nh += vt3_wrap("_ZN12ab_card_info4initEv", &g_vt3_card_init, h_vt3_card_init);
         }
+        {   /* Classic's Card reader notice row (classic.card_notice; VR: always off), LINDBERGH_VT3_CARD_RW=1|0 */
+            if (!world_mode_card_notice() && guest_symbol("_ZN6backup17getCard_rw_1p_useEv")) {     /* Virtua Tennis 3 only */
+                if (guest_override("_ZN6backup17getCard_rw_1p_useEv", h_vt3_card_rw_off) &&
+                    guest_override("_ZN6backup17getCard_rw_2p_useEv", h_vt3_card_rw_off))
+                    fprintf(stderr, "[sega] Virtua Tennis 3: card readers off (no card bar, no CARD R/W wait; LINDBERGH_VT3_CARD_RW=1 keeps the game's setting)\n");
+                else fprintf(stderr, "[sega] Virtua Tennis 3: WARNING card reader setting not overridden\n");
+            } }
         if (nh) { g_arcade_overlay_hooks = 1; fprintf(stderr, "[sega] Virtua Tennis 3: arcade overlays %s (%d draws hooked)\n", g_arcade_overlays ? "shown" : "hidden", nh); }
         const char *pt = getenv("LINDBERGH_VT3_PRIZE_TRACE");
         if (pt && *pt) {

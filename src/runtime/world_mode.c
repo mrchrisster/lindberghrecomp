@@ -25,12 +25,12 @@
 static const char *const ENV_NAME[WM_COUNT] = {
     "LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OVERLAYS", "LINDBERGH_VT3_CUTAWAYS",
     "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK", "LINDBERGH_VT3_SKY",
-    "LINDBERGH_VT3_HEIGHT" };
+    "LINDBERGH_VT3_HEIGHT", "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE" };
 static const char *const KEY_CLASSIC[WM_COUNT] = {
-    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL };
+    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, "classic.card_notice", "language" };
 static const char *const KEY_IMMERSIVE[WM_COUNT] = {
     "mode", "immersive.replays", "immersive.overlays", "immersive.cutaways", "immersive.shadow",
-    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height" };
+    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height", NULL, "language" };
 
 const char *world_mode_env_name(int key) { return key >= 0 && key < WM_COUNT ? ENV_NAME[key] : NULL; }
 const char *world_mode_key(int key, int immersive)
@@ -118,6 +118,11 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     if (k[WM_DOLLY] == WM_SRC_FILE) k[WM_DOLLY] = WM_SRC_DEFAULT;   /* (no longer read from vr.cfg) */
     if (k[WM_BACK] == WM_SRC_FILE) k[WM_BACK] = WM_SRC_DEFAULT;
     if ((v = env(WM_HEIGHT))) { o->height = (float)atof(v); k[WM_HEIGHT] = WM_SRC_ENV; }
+    o->card_notice = im ? 0 : s->classic_card_notice;        /* VR: always off */
+    if (im) k[WM_CARD] = WM_SRC_DEFAULT;
+    if ((v = env(WM_CARD))) { o->card_notice = *v == '1'; k[WM_CARD] = WM_SRC_ENV; }
+    o->language = s->language;
+    if ((v = env(WM_LANGUAGE))) { o->language = !(*v == '0' || !strcmp(v, "japanese")); k[WM_LANGUAGE] = WM_SRC_ENV; }
     if ((v = env(WM_SKY))) { o->sky = world_mode_sky_value(v); k[WM_SKY] = WM_SRC_ENV; }
     if (src) memcpy(src, k, sizeof k);
 }
@@ -173,12 +178,13 @@ void world_mode_init(int capable)
     world_mode_resolve(&s, -1, capable, present, &g_wm, src);
     static const char *const SRC[] = { "default", "vr.cfg", "env" };
     fprintf(stderr, "[world] mode %s (%s) dolly %.0f (%s) back %.0f (%s) height %.0f (%s) sky %s (%s) shadow %d (%s) "
-                    "replays %s (%s) overlays %s (%s) cutaways %s (%s)%s\n",
+                    "replays %s (%s) overlays %s (%s) cutaways %s (%s) card notice %s (%s) language %s (%s)%s\n",
             g_wm.immersive ? "immersive" : "classic", SRC[src[WM_MODE]],
             g_wm.dolly, SRC[src[WM_DOLLY]], g_wm.back, SRC[src[WM_BACK]], g_wm.height, SRC[src[WM_HEIGHT]],
             sky_name(g_wm.sky), SRC[src[WM_SKY]], g_wm.shadow, SRC[src[WM_SHADOW]],
             view_label(g_wm.replays, g_wm.replay_view, g_wm.immersive), SRC[src[WM_REPLAYS]], g_wm.overlays ? "on" : "off", SRC[src[WM_OVERLAYS]],
-            view_label(g_wm.cutaways, g_wm.cutaway_view, g_wm.immersive), SRC[src[WM_CUTAWAYS]], capable ? "" : " - this game has no world mode");
+            view_label(g_wm.cutaways, g_wm.cutaway_view, g_wm.immersive), SRC[src[WM_CUTAWAYS]],
+            g_wm.card_notice ? "on" : "off", SRC[src[WM_CARD]], g_wm.language ? "english" : "japanese", SRC[src[WM_LANGUAGE]], capable ? "" : " - this game has no world mode");
     g_start = g_game = g_panel_req = g_wm.immersive;
     atomic_store(&g_target, g_start);
     atomic_store(&g_gl, g_start);
@@ -271,6 +277,8 @@ void world_mode_gl_latch(int immersive) { atomic_store(&g_gl, immersive != 0); }
 int world_mode_replays(void) { return wm()->replays; }
 int world_mode_overlays(void) { return wm()->overlays; }
 int world_mode_cutaways(void) { return wm()->cutaways; }
+int world_mode_card_notice(void) { return wm()->card_notice; }
+int world_mode_language(void) { return wm()->language; }
 int world_mode_replay_view(void) { return wm()->replay_view; }
 int world_mode_cutaway_view(void) { return wm()->cutaway_view; }
 int world_mode_sky(void) { return wm()->sky; }

@@ -827,6 +827,22 @@ int host_window_open(const char *title)
         fprintf(stderr, "[window] audio keeps playing while the Activity is paused (test)\n");
     }
 #endif
+    /* LINDBERGH_HEADLESS=1 (unattended runs; scripts/vt3-repro.sh sets it on
+     * macOS): never seen, never in the way of whoever works on the machine -
+     * no Dock icon and no activation (a background app), the window hidden
+     * (LINDBERGH_HIDDEN), no sound to the speakers (SDL's dummy audio driver:
+     * the mix still runs; LINDBERGH_HEADLESS_AUDIO=1 keeps the real one), no
+     * menu, no grab. LINDBERGH_SHOT still captures the frames. */
+    const char *hl = getenv("LINDBERGH_HEADLESS");
+    const int headless = hl && *hl == '1';
+#if !defined(__ANDROID__)
+    if (headless) {
+        SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
+        const char *ha = getenv("LINDBERGH_HEADLESS_AUDIO");
+        if (!(ha && *ha == '1')) SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
+        fprintf(stderr, "[window] headless: hidden window, background app, no sound out (LINDBERGH_HEADLESS)\n");
+    }
+#endif
 #if defined(LINDBERGH_OPENXR)
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
 #else
@@ -879,7 +895,7 @@ int host_window_open(const char *title)
     /* LINDBERGH_HIDDEN=1: a test run that never shows its window or takes
      * focus; LINDBERGH_SHOT still captures the frames */
     const char *hv = getenv("LINDBERGH_HIDDEN");
-    int hidden = hv && *hv && *hv != '0';
+    int hidden = (hv && *hv && *hv != '0') || headless;
     g_win.win = SDL_CreateWindow(title && *title ? title : "lindberghrecomp",
                                  SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                  dw, dh,

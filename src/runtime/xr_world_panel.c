@@ -44,6 +44,8 @@ static int wm_key(int item)
     case XW_DOLLY: return WM_DOLLY;
     case XW_STEPBACK: return WM_BACK;
     case XW_HEIGHT: return WM_HEIGHT;
+    case XW_CARD: return WM_CARD;
+    case XW_LANGUAGE: return WM_LANGUAGE;
     case XW_SKY: return WM_SKY;
     default: return -1;
     }
@@ -58,7 +60,7 @@ static int pinned(const XwState *w, int item)
 {
     const int k = wm_key(item);
     if (k < 0 || !(w->pins >> k & 1)) return 0;
-    return k == WM_MODE || page_mode(w) == w->running;
+    return k == WM_MODE || k == WM_LANGUAGE || page_mode(w) == w->running;
 }
 
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
@@ -69,7 +71,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS),
-                                 XW_ROW(XW_SHADOW), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
+                                 XW_ROW(XW_CARD), XW_ROW(XW_SHADOW), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
@@ -81,6 +83,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     default:
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
+        rows[n++] = XW_ROW(XW_LANGUAGE);
         for (int i = 0; i < XP_COUNT; i++)
             if (i != XP_STATS && i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
         break;
@@ -132,6 +135,17 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_OVERLAYS].label = "Arcade overlays";
     it[XW_SKY].label = "Sky";
     it[XW_SHADOW].label = "Shadow quality";
+    it[XW_CARD].label = "Card reader notice";
+    it[XW_LANGUAGE].label = "Language";
+    {   /* both apply on the next start: "(on restart)" while the stored one is not the running one */
+        int card = cfg->classic_card_notice, lang = cfg->language;
+        if (pinned(w, XW_CARD)) card = w->eff.card_notice;
+        if (pinned(w, XW_LANGUAGE)) lang = w->eff.language;
+        snprintf(it[XW_CARD].value, 40, "%s%s", on_off(card),
+                 !pinned(w, XW_CARD) && w->running == 0 && card != w->eff.card_notice ? " (on restart)" : "");
+        snprintf(it[XW_LANGUAGE].value, 40, "%s%s", lang ? "English" : "Japanese",
+                 !pinned(w, XW_LANGUAGE) && lang != w->eff.language ? " (on restart)" : "");
+    }
     it[XW_RESTORE].label = im ? "Restore VR defaults" : "Restore Classic defaults";
     /* the page's stored values; a pinned row the run's own */
     const WmValues *e = &w->eff;
@@ -158,7 +172,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     shadow(it[XW_SHADOW].value, sh);
     for (int i = 0; i < XW_COUNT; i++) {
         size_t l = strlen(it[i].value);
-        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && pinned(w, i)) snprintf(it[i].value + l, 40 - l, " (env.txt)");
+        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && (i != XW_CARD || page_mode(w) == 0) && pinned(w, i)) snprintf(it[i].value + l, 40 - l, " (env.txt)");
     }
     if (!pinned(w, XW_SHADOW) && page_mode(w) == w->running && sh != e->shadow) {
         size_t l = strlen(it[XW_SHADOW].value);
@@ -175,7 +189,7 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
         c->imm_height = d.imm_height;
         c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow;
     } else {
-        c->replays = d.replays; c->arcade_overlays = d.arcade_overlays;
+        c->replays = d.replays; c->arcade_overlays = d.arcade_overlays; c->classic_card_notice = d.classic_card_notice;
         c->classic_cutaways = d.classic_cutaways; c->classic_shadow = d.classic_shadow;
     }
 }
@@ -208,6 +222,8 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
         c->imm_sky = c->imm_sky == LG_SKY_STADIUM ? LG_SKY_PAINTED : c->imm_sky == LG_SKY_PAINTED ? LG_SKY_OFF : LG_SKY_STADIUM;
         fx |= live; break;
     case XW_HEIGHT: if (!im) return 0; c->imm_height = next_step(c->imm_height, LG_XR_HEIGHT_STEPS, LG_XR_HEIGHT_NSTEPS); fx |= live; break;
+    case XW_CARD: if (im || page_mode(w) < 0) return 0; c->classic_card_notice = !c->classic_card_notice; break;   /* on restart */
+    case XW_LANGUAGE: c->language = !c->language; break;                                                     /* on restart */
     case XW_SHADOW: {
         int *s = im ? &c->imm_shadow : &c->classic_shadow, k = 0;
         while (k < 3 && SHADOWS[k] <= *s) k++;

@@ -9,7 +9,8 @@ import unittest
 ENV_KEYS = ["LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OVERLAYS", "LINDBERGH_VT3_CUTAWAYS",
             "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK",
             "LINDBERGH_VT3_SKY", "LINDBERGH_VT3_HEIGHT", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE", "LINDBERGH_VT3_LIVE_SWITCH",
-            "LINDBERGH_VT3_MODE_AT", "LINDBERGH_VT3_REPLAY_VIEW", "LINDBERGH_VT3_CUTAWAY_VIEW"]
+            "LINDBERGH_VT3_MODE_AT", "LINDBERGH_VT3_REPLAY_VIEW", "LINDBERGH_VT3_CUTAWAY_VIEW",
+            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION"]
 
 
 class WorldModeTests(unittest.TestCase):
@@ -33,6 +34,10 @@ int main(int argc, char **argv) {
     const WmValues *v = world_mode_values();
     printf("%d %d %d %d %d %.0f %.0f %d %.1f", v->immersive, v->replays, v->overlays, v->cutaways,
            v->shadow, v->dolly, v->back, v->sky, v->shadow_scale);
+    if (argc > 2 && !strcmp(argv[2], "card")) {     /* card notice, language */
+        printf(" | %d %d\n", v->card_notice, v->language);
+        return 0;
+    }
     if (argc > 2 && !strcmp(argv[2], "views")) {    /* replays / cutaways: on, view; and the pins */
         printf(" | %d %d %d %d %d %d\n", v->replays, v->replay_view, v->cutaways, v->cutaway_view,
                world_mode_pinned(WM_REPLAYS), world_mode_pinned(WM_CUTAWAYS));
@@ -107,6 +112,16 @@ int main(int argc, char **argv) {
         self.assertEqual(self.views("replays on\n", {"LINDBERGH_VT3_REPLAY_VIEW": "world"}), "1 1 1 1 1 0")
         _, log = self.run_wm(imm + "immersive.replays world\n")
         self.assertIn("replays camera (vr.cfg)", log); self.assertIn("cutaways off (default)", log)
+
+    def test_card_notice_and_language(self):
+        c = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "card"))[0].split(" | ")[1]
+        self.assertEqual(c(), "0 1")                                                     # off, English
+        self.assertEqual(c("classic.card_notice on\nlanguage japanese\n"), "1 0")
+        self.assertEqual(c("mode immersive\nclassic.card_notice on\n"), "0 1")         # VR: always off
+        self.assertEqual(c("mode immersive\n", {"LINDBERGH_VT3_CARD_RW": "1"}), "1 1")  # env for tests
+        self.assertEqual(c(None, {"LINDBERGH_VT3_LANGUAGE": "japanese"}), "0 0")
+        _, log = self.run_wm("language japanese\n")
+        self.assertIn("card notice off (default) language japanese (vr.cfg)", log)
 
     def test_defaults_are_classic(self):
         out, log = self.run_wm()

@@ -100,7 +100,7 @@ int main(void) {
     c.world_mode = 0; w.page = XW_PAGE_CLASSIC;
     fx = xw_choose(&w, &c, XW_CUTAWAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 10 && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 11 && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -112,6 +112,15 @@ int main(void) {
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "In the world (env.txt)"));
     assert(xw_choose(&w, &c, XW_REPLAYS) == 0);
     w.running = 0; w.eff.replays = 0;
+    /* Classic's Card reader notice: Off by default, on restart */
+    w.page = XW_PAGE_CLASSIC;
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_CARD].label, "Card reader notice") && !strncmp(it[XW_CARD].value, "Off", 3));
+    { int pins = w.pins; w.pins = 0; w.eff.card_notice = 0;
+      fx = xw_choose(&w, &c, XW_CARD); assert(fx == XP_SAVE && c.classic_card_notice == 1);
+      xw_items(&w, &c, it); assert(!strcmp(it[XW_CARD].value, "On (on restart)"));
+      xw_choose(&w, &c, XW_CARD); assert(c.classic_card_notice == 0);
+      w.page = XW_PAGE_IMMERSIVE; assert(xw_choose(&w, &c, XW_CARD) == 0); w.page = XW_PAGE_CLASSIC;   /* not VR's */
+      w.pins = pins; }
     /* shadow on restart, on the running mode's page */
     w.page = XW_PAGE_CLASSIC; w.eff.shadow = 1024; c.classic_shadow = 2048;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SHADOW].value, "High 2048 (on restart)"));
@@ -119,6 +128,17 @@ int main(void) {
     w.page = XW_PAGE_MAIN; w.pins = 1u << WM_MODE; w.running = 1; c.world_mode = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_MODE_VR].value, "selected") && !strcmp(xw_mode_note(&w, &c), "VR runs (set by env.txt)"));
     assert(find(&w, &c, XW_ROW(XW_RESTART)) < 0 && xw_choose(&w, &c, XW_MODE_CLASSIC) == 0 && c.world_mode == 0);
+    /* Language on the main page (both modes), English by default, on restart */
+    { XwState lw; memset(&lw, 0, sizeof lw); LgXrSettings lc = LG_XR_SETTINGS_DEFAULT;
+      world_mode_resolve(&lc, 1, 1, 0, &lw.eff, NULL); lw.running = 1;
+      int lr[XW_ROWS_MAX], ln = xw_page_rows(&lw, &lc, lr);
+      assert(has(lr, ln, XW_ROW(XW_LANGUAGE)) && lc.language == 1 && lw.eff.language == 1);
+      xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English"));
+      assert(xw_choose(&lw, &lc, XW_LANGUAGE) == XP_SAVE && lc.language == 0);
+      xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "Japanese (on restart)"));
+      lw.pins = 1u << WM_LANGUAGE; lw.eff.language = 1;
+      xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English (env.txt)"));
+      assert(xw_choose(&lw, &lc, XW_LANGUAGE) == 0); }
     /* a mode button on an Advanced page: that mode's page */
     w.pins = 0; w.running = 0; w.page = XW_PAGE_CLASSIC; c.world_mode = 0;
     fx = xw_choose(&w, &c, XW_MODE_VR); assert((fx & XP_SAVE) && c.world_mode == 1 && w.page == XW_PAGE_IMMERSIVE);
@@ -147,7 +167,7 @@ int main(void) {
     }
     /* every value fits beside its label: 42 characters across the panel */
     for (int p = 0; p < XW_PAGES; p++) {
-        w.page = p; w.pins = 0x1ff; c.imm_shadow = 4096; c.classic_shadow = 4096; w.eff.shadow = 1024;
+        w.page = p; w.pins = 0x7ff; c.imm_shadow = 4096; c.classic_shadow = 4096; w.eff.shadow = 1024;
         xw_items(&w, &c, it);
         for (int i = 0; i < XW_COUNT; i++) assert(strlen(it[i].label) + strlen(it[i].value) + (it[i].value[0] ? 1 : 0) <= 41);
         assert(strlen(xw_hint(&w)) <= 42);
@@ -179,8 +199,8 @@ int main(void) {
                 rows[m++] = id < XP_COUNT ? all[id] : wall[id - XP_COUNT];
             }
             const char *page = getenv("LINDBERGH_TEST_PANEL_PAGE");
-            if (page && *page == '2') {      /* the VR page instead */
-                pw.page = XW_PAGE_IMMERSIVE; pn = xw_page_rows(&pw, &pc, pr); m = 0; xw_items(&pw, &pc, wall);
+            if (page && (*page == '2' || *page == '1')) {      /* the VR (2) or Classic (1) page instead */
+                pw.page = *page == '2' ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; if (*page == '1') pc.world_mode = 0; pn = xw_page_rows(&pw, &pc, pr); m = 0; xw_items(&pw, &pc, wall);
                 for (int i = 0; i < pn; i++) rows[m++] = pr[i] < XP_COUNT ? all[pr[i]] : wall[pr[i] - XP_COUNT];
             }
             xm_paint_modes(img, xw_title(&pw) ? xw_title(&pw) : "Virtua Tennis 3 - settings", rows, m, 1, xw_mode_note(&pw, &pc), xw_hint(&pw));

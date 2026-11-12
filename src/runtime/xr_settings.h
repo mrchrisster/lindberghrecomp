@@ -34,6 +34,10 @@ typedef struct {
     int imm_shadow;             /* "immersive.shadow" */
     int imm_height;             /* "immersive.height": the viewpoint raised from the camera's own, game
                                  * units (0.1 m): 0 / 10 / 20 = Low / Medium / High (an older negative = Low) */
+    int classic_card_notice;    /* "classic.card_notice off|on": the card reader's "cannot use a card" bar and
+                                 * boot wait (Virtua Tennis 3; VR: always off); applies on the next start */
+    int language;               /* "language english|japanese": 1 English (the cabinet's region export), 0
+                                 * Japanese; applies on the next start (Virtua Tennis 3) */
 } LgXrSettings;
 /* Each eye's image by default: the headset's own panel, pixel for pixel.
  * OpenXR reports only a runtime-scaled recommendation, so the panel is the
@@ -55,7 +59,7 @@ typedef struct {
  * 2048, Camera height Medium (+1 m; T13). (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1}
 /* Immersive's (VR's) Camera height choices (immersive.height), game units
  * (0.1 m): Low / Medium / High; a stored value off the list is read as the
  * nearest (xr_settings_nearest; the first of two equally near) - an older
