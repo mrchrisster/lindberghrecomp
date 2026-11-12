@@ -1435,6 +1435,66 @@ static int sp_on, sp_thread_on;
 static void splash_thread_stop(void) {}
 #endif
 
+/* the eyes from views[] (located, or held by LINDBERGH_XR_FIXED_HEAD) */
+static void set_eyes(void)
+{
+    for (int i = 0; i < 2; i++) {
+        /* A symmetric frustum covering the eye's own: the same pixel then
+         * looks the same way in both eyes, as the game's 2D assumes. */
+        float tx = symmetric(views[i].fov.angleLeft, views[i].fov.angleRight);
+        float ty = symmetric(views[i].fov.angleDown, views[i].fov.angleUp);
+        fov[i].angleLeft = -atanf(tx); fov[i].angleRight = atanf(tx);
+        fov[i].angleDown = -atanf(ty); fov[i].angleUp = atanf(ty);
+        float m[16];
+        view_matrix(views[i].pose, m);
+        stereo_set_eye(i, m, tx, tx, ty, ty);
+        /* the same eye seen from the head (between the eyes, facing as
+         * they do): a HUD that follows the head is placed through it */
+        XrQuaternionf q = views[0].pose.orientation, iq = { -q.x, -q.y, -q.z, q.w };
+        float off[3] = { views[i].pose.position.x - 0.5f * (views[0].pose.position.x + views[1].pose.position.x),
+                         views[i].pose.position.y - 0.5f * (views[0].pose.position.y + views[1].pose.position.y),
+                         views[i].pose.position.z - 0.5f * (views[0].pose.position.z + views[1].pose.position.z) }, rel[3];
+        qrot(iq, off, rel);
+        XrPosef hp = { { 0, 0, 0, 1 }, { rel[0], rel[1], rel[2] } };
+        view_matrix(hp, m);
+        stereo_set_eye_head(i, m);
+    }
+    head_pose.orientation = views[0].pose.orientation;
+    head_pose.position.x = 0.5f * (views[0].pose.position.x + views[1].pose.position.x);
+    head_pose.position.y = 0.5f * (views[0].pose.position.y + views[1].pose.position.y);
+    head_pose.position.z = 0.5f * (views[0].pose.position.z + views[1].pose.position.z);
+    head_ok = 1;
+}
+
+/* LINDBERGH_XR_FIXED_HEAD=1 (tests): the head held level, looking straight
+ * ahead, at the anchor (where the game camera is put) - every unattended run
+ * then shows the same picture whatever way the headset lies on the desk
+ * (with LINDBERGH_VT3_VIEW_TURN for other directions). Also while the
+ * session is not running (the unworn headset's stops a few seconds in, and
+ * the eyes would keep whatever pose they last had): the views' last field of
+ * view, or the Quest 3's (about 97 x 92 degrees) if none was ever located.
+ * Returns 1 when the views were set here without a located frame. */
+static int fixed_head(void)
+{
+    static int on = -1; static float half = 0.032f; static int have, said;
+    if (on < 0) { const char *v = getenv("LINDBERGH_XR_FIXED_HEAD"); on = v && *v == '1'; }
+    if (!on) return 0;
+    if (views_ok && !have) {
+        XrVector3f a = views[0].pose.position, b = views[1].pose.position;
+        half = sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)) / 2;
+        have = 1;
+    }
+    if (!views_ok && !have)
+        for (int i = 0; i < 2; i++) views[i].fov = (XrFovf){ -0.85f, 0.85f, 0.80f, -0.80f };
+    if (!said++) fprintf(stderr, "[xr] head held fixed at the anchor, level, facing ahead, eyes %.1f mm apart (LINDBERGH_XR_FIXED_HEAD; %s)\n",
+                         half * 2000, views_ok ? "located" : "session not running");
+    for (int i = 0; i < 2; i++) {
+        views[i].pose.orientation = (XrQuaternionf){ 0, 0, 0, 1 };
+        views[i].pose.position = (XrVector3f){ i ? half : -half, 0, 0 };     /* the anchored head (anchor_head: the game camera's place) */
+    }
+    return !views_ok;
+}
+
 void xr_frame_begin(void)
 {
 #ifdef __ANDROID__
@@ -1454,7 +1514,7 @@ void xr_frame_begin(void)
 #endif
     menu_test_frame();
     poll_events();
-    if (!running) { views_ok = 0; return; }
+    if (!running) { views_ok = 0; if (fixed_head()) set_eyes(); return; }
     XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
     frame = (XrFrameState){ XR_TYPE_FRAME_STATE };
     if (XR_FAILED(xrWaitFrame(session, &wi, &frame))) return;
@@ -1493,26 +1553,7 @@ void xr_frame_begin(void)
             }
         }
     }
-    {   /* LINDBERGH_XR_FIXED_HEAD=1 (tests): the head held level, looking straight
-         * ahead, at the anchor (where the game camera is put) - every unattended run
-         * then shows the same picture whatever way the headset lies on the desk
-         * (with LINDBERGH_VT3_VIEW_TURN for other directions) */
-        static int on = -1; static XrVector3f c0; static float half; static int have;
-        if (on < 0) { const char *v = getenv("LINDBERGH_XR_FIXED_HEAD"); on = v && *v == '1'; }
-        if (on && views_ok) {
-            if (!have) {
-                XrVector3f a = views[0].pose.position, b = views[1].pose.position;
-                c0 = (XrVector3f){ 0, 0, 0 };       /* the anchored head (anchor_head: the game camera's place) */
-                half = sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)) / 2;
-                have = 1;
-                fprintf(stderr, "[xr] head held fixed at the anchor, level, facing ahead, eyes %.1f mm apart (LINDBERGH_XR_FIXED_HEAD)\n", half * 2000);
-            }
-            for (int i = 0; i < 2; i++) {
-                views[i].pose.orientation = (XrQuaternionf){ 0, 0, 0, 1 };
-                views[i].pose.position = (XrVector3f){ c0.x + (i ? half : -half), c0.y, c0.z };
-            }
-        }
-    }
+    fixed_head();
     {   /* The game swung its camera round (a spider on the tailgate): its new
          * view goes where the player is looking, not where the game was
          * anchored - looking off to one side, they would face the jeep's
@@ -1536,34 +1577,7 @@ void xr_frame_begin(void)
                 views[0].pose.position.x, views[0].pose.position.y, views[0].pose.position.z,
                 (long long)frame.predictedDisplayTime);
     }
-    if (views_ok) {
-        for (int i = 0; i < 2; i++) {
-            /* A symmetric frustum covering the eye's own: the same pixel then
-             * looks the same way in both eyes, as the game's 2D assumes. */
-            float tx = symmetric(views[i].fov.angleLeft, views[i].fov.angleRight);
-            float ty = symmetric(views[i].fov.angleDown, views[i].fov.angleUp);
-            fov[i].angleLeft = -atanf(tx); fov[i].angleRight = atanf(tx);
-            fov[i].angleDown = -atanf(ty); fov[i].angleUp = atanf(ty);
-            float m[16];
-            view_matrix(views[i].pose, m);
-            stereo_set_eye(i, m, tx, tx, ty, ty);
-            /* the same eye seen from the head (between the eyes, facing as
-             * they do): a HUD that follows the head is placed through it */
-            XrQuaternionf q = views[0].pose.orientation, iq = { -q.x, -q.y, -q.z, q.w };
-            float off[3] = { views[i].pose.position.x - 0.5f * (views[0].pose.position.x + views[1].pose.position.x),
-                             views[i].pose.position.y - 0.5f * (views[0].pose.position.y + views[1].pose.position.y),
-                             views[i].pose.position.z - 0.5f * (views[0].pose.position.z + views[1].pose.position.z) }, rel[3];
-            qrot(iq, off, rel);
-            XrPosef hp = { { 0, 0, 0, 1 }, { rel[0], rel[1], rel[2] } };
-            view_matrix(hp, m);
-            stereo_set_eye_head(i, m);
-        }
-        head_pose.orientation = views[0].pose.orientation;
-        head_pose.position.x = 0.5f * (views[0].pose.position.x + views[1].pose.position.x);
-        head_pose.position.y = 0.5f * (views[0].pose.position.y + views[1].pose.position.y);
-        head_pose.position.z = 0.5f * (views[0].pose.position.z + views[1].pose.position.z);
-        head_ok = 1;
-    }
+    if (views_ok) set_eyes();
     if (state == XR_SESSION_STATE_FOCUSED) input_frame(frame.predictedDisplayTime);
     else {
         host_vr_input(-100000, -100000, 0, 0); host_vr_input2(0, -100000, -100000);

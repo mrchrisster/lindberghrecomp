@@ -1147,6 +1147,33 @@ static int vt3_screen_fix(void)
                   on = v && *v == '1' && !(g && *g == '0'); }
     return on;
 }
+/* Virtua Tennis 3, Immersive: the stadium's own sky dome (GAME_NO_SKY_Polygon:
+ * a whole hemisphere of radius ~4000 game units round the court, the venue's
+ * 360-degree panorama on it, drawn by a plain position-times-matrix program).
+ * The game draws it at its far plane (3000) - on some courts with the depth
+ * row of its projection made equal to w, on others at its true depth - so the
+ * eyes, reprojected from the game's clip space, lost all of it but a cone in
+ * front (beyond their far plane, or a far-plane point no reprojection can
+ * take back past the game camera's side). Its vertices are told by their
+ * distance from the model's origin (no other model reaches 3000; the stadium
+ * ~2000): their clip depth is put back to the true one (u_sky.y/z: the
+ * game projection's depth terms) so the reprojection finds the real point,
+ * then pinned to the eye's far plane (u_sky.w), never clipped - Sega's sky
+ * all round and overhead. u_sky.w < 0: the dome left out (Sky Painted / Off).
+ * LINDBERGH_VT3_DOME=0: as before. */
+static int vt3_sky_fix(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *g = getenv("LINDBERGH_VT3_DOME"); on = world_mode_immersive() && !(g && *g == '0');
+                  if (on) fprintf(stderr, "[arbprog] the stadium's sky dome taken to the eyes' far plane, all round (LINDBERGH_VT3_DOME=0: as the game draws it)\n"); }
+    return on;
+}
+static const char k_sky_decl[] = "uniform vec4 u_sky;\n";
+static const char k_sky_pre[] =
+    "  float lg_sk = 0.0;\n"
+    "  if (u_sky.x > 0.0 && dot(gl_Vertex.xyz, gl_Vertex.xyz) > u_sky.x) { lg_sk = 1.0; gl_Position.z = u_sky.z - u_sky.y * gl_Position.w; }\n";
+static const char k_sky_post[] =
+    "  if (lg_sk > 0.5) { if (u_sky.w < 0.0) gl_Position = vec4(0.0, 0.0, 2.0, 1.0); else gl_Position.z = gl_Position.w * u_sky.w; }\n";
 static const char k_ground_decl[] = "uniform vec4 u_gnd;\nuniform mat4 u_gP, u_gPi;\n";
 /* A planar shadow is right on the game camera's screen and nowhere else (it
  * moved with the head): taken along that camera's ray to the court plane
@@ -1352,6 +1379,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
         /* multiview: one matrix per view, and render targets as two layers */
         if (!stage && !t->nmat && !t->pos_invariant) bput(&g, gl4es_mv_shaders ? "uniform mat4 u_reproj[2];\nuniform float u_eyex[2];\n" : "uniform mat4 u_reproj;\n");
         if (!stage && !t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_decl);
+        if (!stage && !t->nmat && !t->pos_invariant && vt3_sky_fix()) bput(&g, k_sky_decl);
         const char *sty[] = { "", "sampler1D s1_", "sampler2D s2_", "sampler3D s3_",
                               "samplerCube sc_", gl4es_mv_shaders ? "sampler2DArray sr_" : "sampler2D sr_",
                               "highp sampler2D ss_",   /* the compare done in the shader (shadow_compare); highp: a
@@ -1361,6 +1389,7 @@ static char *translate(int stage, const char *src_in, Tr *t)
 #else
         if (!stage && !t->nmat && !t->pos_invariant) bput(&g, "uniform mat4 u_reproj;\n");
         if (!stage && !t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_decl);
+        if (!stage && !t->nmat && !t->pos_invariant && vt3_sky_fix()) bput(&g, k_sky_decl);
         const char *sty[] = { "", "sampler1D s1_", "sampler2D s2_", "sampler3D s3_",
                               "samplerCube sc_", "sampler2DRect sr_", manual_compare() ? "sampler2D ss_" : "sampler2DShadow ss_", "sampler2D sl_" };
 #endif
@@ -1402,13 +1431,19 @@ static char *translate(int stage, const char *src_in, Tr *t)
             /* multiview: gl4es clips to the game's screen from gl4es_mvPre */
             if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
             if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders && vt3_screen_fix()) bput(&g, "  lg_eye0 = u_reproj[0] * gl_Position;\n");
-            if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders) bput(&g, "  gl4es_mvPre = gl_Position;\n  gl_Position = u_reproj[gl_ViewID_OVR] * gl_Position;\n  gl_Position.x += u_eyex[gl_ViewID_OVR];\n");
+            if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders && vt3_sky_fix()) bput(&g, k_sky_pre);
+            if (!t->nmat && !t->pos_invariant && gl4es_mv_shaders) { bput(&g, "  gl4es_mvPre = gl_Position;\n  gl_Position = u_reproj[gl_ViewID_OVR] * gl_Position;\n  gl_Position.x += u_eyex[gl_ViewID_OVR];\n");
+                                                                      if (vt3_sky_fix()) bput(&g, k_sky_post); }
             else
 #endif
 #ifndef LINDBERGH_GL4ES
             if (!t->nmat && !t->pos_invariant && vt3_ground_fix()) bput(&g, k_ground_code);
 #endif
-            if (!t->nmat && !t->pos_invariant) bput(&g, "  gl_Position = u_reproj * gl_Position;\n");
+            if (!t->nmat && !t->pos_invariant) {
+                if (vt3_sky_fix()) bput(&g, k_sky_pre);
+                bput(&g, "  gl_Position = u_reproj * gl_Position;\n");
+                if (vt3_sky_fix()) bput(&g, k_sky_post);
+            }
 #ifndef LINDBERGH_GL4ES
             if (!t->nmat && !t->pos_invariant && vt3_screen_fix()) bput(&g, "  lg_eye0 = gl_Position;\n");
 #endif
@@ -1485,7 +1520,7 @@ typedef struct {
     int    ok;
     MatRef mat[2][16]; int nmat[2];
     int    env_hi[2], local_hi[2];
-    GLint  u_env[2], u_loc[2], u_mat[2][16], u_rect, u_reproj, u_eyex, u_gen, u_gnd, u_gP, u_gPi;
+    GLint  u_env[2], u_loc[2], u_mat[2][16], u_rect, u_reproj, u_eyex, u_gen, u_gnd, u_gP, u_gPi, u_sky;
     int    nlit[2], lit_idx[2][16];         /* literals in the program's env (Tr) */
     float  lit[2][16][4];
     int    lit_loc[2][16];
@@ -1894,6 +1929,7 @@ static Linked *link_pair(GLuint vid, GLuint fid)
     l->u_eyex = glGetUniformLocation(l->prog, "u_eyex");
     l->u_gen = glGetUniformLocation(l->prog, "u_gen");
     l->u_gnd = glGetUniformLocation(l->prog, "u_gnd");
+    l->u_sky = glGetUniformLocation(l->prog, "u_sky");
     l->u_scr = glGetUniformLocation(l->prog, "u_scr");
     l->u_lodb = glGetUniformLocation(l->prog, "u_lodb");
     l->u_gP = glGetUniformLocation(l->prog, "u_gP");
@@ -2014,6 +2050,16 @@ static void upload(Linked *l)
         }
         glActiveTexture((GLenum)active);
         glUniform4fv(l->u_scr, 16, &m[0][0]);
+    }
+    if (l->u_sky >= 0) {     /* the sky dome (vt3_sky_fix): world draws only */
+        extern volatile float g_game_world_P[16]; extern volatile int g_game_world_ok;
+        extern int stereo_draw_world(void), stereo_sky_mode(void);
+        float sk[4] = { 0, 0, 0, 0 };
+        if (g_game_world_ok && stereo_draw_world()) {
+            sk[0] = 3000.0f * 3000.0f; sk[1] = g_game_world_P[10]; sk[2] = g_game_world_P[14];
+            sk[3] = stereo_sky_mode() == LG_SKY_STADIUM ? 0.99999f : -1.0f;
+        }
+        glUniform4fv(l->u_sky, 1, sk);
     }
     if (l->u_gnd >= 0) {
         /* a planar shadow's signature: stencil NOTEQUAL (each pixel darkened

@@ -386,9 +386,18 @@ static void eye_projection(const float *p, int hud, int which, float *out)
                  * turned about the viewpoint - yaw left about the world's up, then
                  * pitch up - so a game shot of the unworn headset (whose head
                  * pose does not move) shows the stand behind or the sky above */
-                static float ty = -1000, tp;
+                /* ...or a list over the run, <yaw>,<pitch>@<from frame>/...
+                 * (e.g. 0,0@0/0,70@2120/180,0@2140): several directions in one run */
+                static float ty = -1000, tp, sy[16], sp[16]; static long sf[16]; static int ns; static unsigned at = ~0u;
                 if (ty == -1000) { const char *v = getenv("LINDBERGH_VT3_VIEW_TURN"); ty = 0; tp = 0;
-                                   if (v && *v) { ty = (float)atof(v) * 0.0174533f; const char *c = strchr(v, ','); if (c) tp = (float)atof(c + 1) * 0.0174533f; } }
+                                   for (const char *q = v; q && *q && ns < 16; q = strchr(q, '/') ? strchr(q, '/') + 1 : NULL) {
+                                       const char *c = strchr(q, ','), *a = strchr(q, '@'), *e = strchr(q, '/');
+                                       sy[ns] = (float)atof(q) * 0.0174533f;
+                                       sp[ns] = c && (!e || c < e) && (!a || c < a) ? (float)atof(c + 1) * 0.0174533f : 0;
+                                       sf[ns] = a && (!e || a < e) ? atol(a + 1) : 0;
+                                       ns++;
+                                   } }
+                if (ns && at != g_frame) { at = g_frame; for (int i = 0; i < ns; i++) if ((long)g_frame >= sf[i]) { ty = sy[i]; tp = sp[i]; } }
                 extern volatile float g_game_up_eye[3];
                 float u[3] = { g_game_up_eye[0], g_game_up_eye[1], g_game_up_eye[2] };
                 float ul = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
@@ -2164,10 +2173,41 @@ static void exec(CPU *c, HleId id, HleHandler fn)
 #ifdef LINDBERGH_GL4ES
 extern int gl4es_mv_shaders;
 #endif
+/* Immersive's sky (live: the panel's Sky, env LINDBERGH_VT3_SKY wins):
+ * Stadium - the stadium model's own sky dome (GAME_NO_SKY_Polygon: a whole
+ * hemisphere round the court with the venue's 360-degree panorama on it,
+ * drawn by the game now that field::draw draws the GAME_NO group,
+ * hle_sega.c; taken to the eyes' far plane by arbprog.c vt3_sky_fix) and
+ * nothing of ours; Painted - the painted sky alone, the dome left out (in
+ * its vertex shader); Off - neither (the game's clear colour behind the
+ * stadium). LINDBERGH_VT3_SKY_FILL=1 (test): the painted sky behind the
+ * dome too, as before. */
+/* world_mode_sky(), or (test only) LINDBERGH_VT3_SKY_AT=<mode>@<from frame>/...
+ * (0 off, 1 stadium, 2 painted; e.g. 1@0/2@2200/0@2300): each Sky in one run */
+static int sky_mode(void)
+{
+    static int ns = -1, sm[8]; static long sf[8];
+    if (ns < 0) {
+        const char *v = getenv("LINDBERGH_VT3_SKY_AT"); ns = 0;
+        for (const char *q = v; q && *q && ns < 8; q = strchr(q, '/') ? strchr(q, '/') + 1 : NULL) {
+            const char *a = strchr(q, '@'), *e = strchr(q, '/');
+            sm[ns] = *q == '0' ? LG_SKY_OFF : *q == '2' ? LG_SKY_PAINTED : LG_SKY_STADIUM;
+            sf[ns] = a && (!e || a < e) ? atol(a + 1) : 0;
+            ns++;
+        }
+    }
+    int m = world_mode_sky();
+    for (int i = 0; i < ns; i++) if ((long)g_frame >= sf[i]) m = sm[i];
+    return m;
+}
 static int sky_on(void)
 {
-    return world_mode_immersive() && world_mode_sky();     /* live: the panel's Sky (env wins) */
+    static int fill = -1;
+    if (fill < 0) { const char *v = getenv("LINDBERGH_VT3_SKY_FILL"); fill = v && *v == '1'; }
+    int m = sky_mode();
+    return world_mode_immersive() && (m == LG_SKY_PAINTED || (fill && m == LG_SKY_STADIUM));
 }
+int stereo_sky_mode(void) { return sky_mode(); }
 static const char k_sky_vs[] =
     "#version 120\n"
     "uniform mat4 u_reproj[2];\n"           /* named so gl4es takes the per-view step as ours */
@@ -2213,6 +2253,9 @@ static const char k_sky_fs[] =
     "    c = smoothstep(0.52, 0.80, c) * smoothstep(0.02, 0.18, d.y);\n"
     "    col = mix(col, vec3(0.97, 0.98, 1.0), c * 0.85);\n"
     "  }\n"
+    "#ifdef SKY_DEBUG\n"
+    "  col = vec3(1.0, 0.0, 1.0);\n"                    /* LINDBERGH_VT3_SKY_DEBUG=1: where the fill shows */
+    "#endif\n"
     "  gl_FragColor = vec4(col, 1.0);\n"
     "}\n";
 
@@ -2223,9 +2266,11 @@ static void sky_draw(void)
     if (failed || !g_game_world_ok) return;
     if (!prog) {
         GLuint vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
-        const char *a = k_sky_vs, *b = k_sky_fs; GLint ok = 0;
+        const char *a = k_sky_vs, *b[2] = { k_sky_fs, "" }; GLint ok = 0;
+        {   const char *dv = getenv("LINDBERGH_VT3_SKY_DEBUG");
+            if (dv && *dv == '1') { b[0] = "#version 120\n#define SKY_DEBUG 1\n"; b[1] = k_sky_fs + strlen("#version 120\n"); } }
         glShaderSource(vs, 1, &a, NULL); glCompileShader(vs);
-        glShaderSource(fs, 1, &b, NULL); glCompileShader(fs);
+        glShaderSource(fs, 2, b, NULL); glCompileShader(fs);
         prog = glCreateProgram(); glAttachShader(prog, vs); glAttachShader(prog, fs);
         glBindAttribLocation(prog, 0, "gl_Vertex");
         glLinkProgram(prog); glGetProgramiv(prog, GL_LINK_STATUS, &ok);
@@ -2252,7 +2297,7 @@ static void sky_draw(void)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, t);
             glBindTexture(GL_TEXTURE_2D, (GLuint)was); glActiveTexture((GLenum)unit);
         }
-        fprintf(stderr, "[sky] drawing a sky behind the stadium (LINDBERGH_VT3_SKY=0: none)\n");
+        fprintf(stderr, "[sky] drawing the painted sky behind the stadium (LINDBERGH_VT3_SKY=0|1|2 off / stadium / painted)\n");
     }
     /* world -> each eye's clip: the eye's projection (head, dolly) x the game camera's view */
     float P[16], V[16], inv[32];
