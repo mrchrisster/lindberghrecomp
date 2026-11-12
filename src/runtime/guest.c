@@ -186,6 +186,9 @@ int guest_load(const char *elf_path, int argc, char **argv)
     *sp++ = 0; *sp++ = 0;      /* AT_NULL */
 
     g_stack_pointer = H2G(base);
+    /* the libraries the game dlopens: their code is lifted, their bytes are
+     * read now from the player's files beside this executable (solib.c) */
+    if (solib_prepare(elf_path) != 0) return -1;
     return 0;
 }
 

@@ -322,6 +322,10 @@ void       hle_register_alsa(void);
 void       hle_register_libc4(void);
 void       hle_register_segaapi(void);
 void       hle_register_glx_posix(void);
+/* solib.c: read, check and relocate the player's copies of the lifted libraries
+ * (guest_load calls it); -1 and a message (solib_error) when one is missing or wrong */
+int        solib_prepare(const char *elf_path);
+const char *solib_error(void);
 int        solib_dlopen(CPU *c, const char *path);
 uint32_t   solib_dlsym(const char *name);
 uint32_t   solib_export(const char *name);

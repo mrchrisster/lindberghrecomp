@@ -7,11 +7,32 @@
 #include "solib.h"
 
 static int initialized;
-static const unsigned char image[32] = { 0x78, 0x56, 0x34, 0x12 };
+/* A synthetic library file, read at "start-up" as the player's libCg.so is:
+ * one PT_LOAD (128 file bytes, 256 in memory) and a word for each relocation
+ * type at 0x60.. (solib.py's apply_reloc() gives the image hash below). */
+static const unsigned char test_so[128] = {
+    0x7f, 0x45, 0x4c, 0x46, 0x01, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x03, 0, 0x03, 0, 0x01, 0, 0, 0,
+    0, 0, 0, 0, 0x34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x34, 0, 0x20, 0, 0x01, 0, 0, 0,
+    0, 0, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0,
+    0, 0x01, 0, 0, 0x06, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x78, 0x56, 0x34, 0x12, 0x10, 0, 0, 0, 0x04, 0, 0, 0,
+};
+static const SolibReloc test_relocs[] = {
+    { 0x64, 8, 0 }, { 0x68, 1, 0xF3000000u }, { 0x6C, 2, 0xB4000000u }, { 0x70, 6, 0xB4000080u },
+};
 const SolibImage g_solib_images[] = {
-    { "test.so", 0xB4000000u, sizeof image, image, 0xB4000010u, 0, 0 }
+    { "test.so", "../lib/test.so", 0xB4000000u, 256, sizeof test_so,
+      "049c90661def8bd74ec5cceeb5c8e073febea00bc7d697a2c62910d4a762067a",
+      "5929fddb0d2a02a23a100c06ca9c17a0ac34dd127d2ed0b6e1d0104a1ea50be8",
+      test_relocs, 4, 0xB4000010u, 0, 0 }
 };
 const int g_solib_count = 1;
+
+static void write_test_so(const unsigned char *p, size_t n)
+{
+    FILE *f = fopen("test.so", "wb");
+    if (f) { fwrite(p, 1, n, f); fclose(f); }
+}
 
 void L_B4000010(CPU *c) { initialized++; c->eax = 99; c->ecx = 99; c->esp += 4; }
 void L_B4000000(CPU *c) { c->eax = rd32(c->esp + 4) + c->ecx; c->esp += 4; }
@@ -218,11 +239,27 @@ int test_runtime_abis(void)
     CHECK(rd32(list) == list && rd32(list + 4) == list);
     guest_free(GP(list));
 
+    /* the library is the player's file: missing, a different size, damaged, then right */
+    SDL_setenv("LINDBERGH_SOLIB_DIR", "./no-such-folder", 1);
+    CHECK(solib_prepare("vt3_Lindbergh_HD") == -1 && strstr(solib_error(), "./no-such-folder/test.so"));
+    SDL_setenv("LINDBERGH_SOLIB_DIR", ".", 1);
+    write_test_so(test_so, 100);
+    CHECK(solib_prepare(NULL) == -1 && strstr(solib_error(), "100 bytes"));
+    unsigned char bad[sizeof test_so];
+    memcpy(bad, test_so, sizeof bad); bad[0x60] ^= 1;
+    write_test_so(bad, sizeof bad);
+    CHECK(solib_prepare(NULL) == -1 && strstr(solib_error(), "SHA-256 is"));
+    write_test_so(test_so, sizeof test_so);
+    CHECK(solib_prepare(NULL) == 0 && !*solib_error());
+    remove("test.so");
+    SDL_setenv("LINDBERGH_SOLIB_DIR", "", 1);
+
     uint32_t sp = c.esp;
     c.ecx = 17;
     CHECK(CALL(HLE_test_solib_function, 25) == 42);
     CHECK(c.esp == sp && c.ecx == 17 && initialized == 1);
-    CHECK(rd32(0xB4000000) == 0x12345678);
+    CHECK(rd32(0xB4000060) == 0x12345678 && rd32(0xB4000064) == 0xB4000010u && rd32(0xB4000068) == 0xF3000004u);
+    CHECK(rd32(0xB400006C) == 0xFFFFFF94u && rd32(0xB4000070) == 0xB4000080u && rd32(0xB4000080) == 0);
     CHECK(CALL(HLE_test_solib_function, 1) == 18 && initialized == 1);
     CHECK(!solib_export("does_not_exist"));
 
