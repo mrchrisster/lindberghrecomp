@@ -2055,6 +2055,55 @@ static int transform_call(CPU *c, HleId id, const char *n)
                       g_tex2d_bound, persp, g_mv_ident, hud, g_proj[g_proj_top][0], g_proj[g_proj_top][5], g_vp[0], g_vp[1], g_vp[2], g_vp[3],
                       mv[12], mv[13], mv[14], g_gun_ndc[0], g_gun_ndc[1], cm_[0], cm_[1], cm_[2], cm_[3], st_, sf_, sr_, sm_, so_[0], so_[1], so_[2], sw_);
           } }
+        /* Virtua Tennis 3 world mode, the cross-fade without a camera mode
+         * change: with Point cutaways off the game goes from the end of a
+         * point (and from the match's intro) straight to the next serve, and
+         * fades from its picture of the last frame - a whole-screen 2D quad
+         * whose program reads screen copies on units other than the active
+         * one (fp 54: units 3 and 4, re-copied every frame of the fade). The
+         * check above looks at the active unit's texture, copied in an earlier
+         * frame, and missed it: the old picture hung small in the middle of
+         * the court for ~half a second before every point (the owner's
+         * "image within an image"). Any 2D draw into the eyes that would go
+         * on the HUD and reads a whole-screen copy on any unit is left out of
+         * world frames. LINDBERGH_VT3_CAPTURE=1 keeps it (as above). */
+        if ((hud == LG_STEREO_HUD || hud == LG_STEREO_FILL) && !persp && g_mv && !g_flat && g_game_fb == 0 && !g_replaying) {
+            static int keep = -1;
+            if (keep < 0) { const char *v = getenv("LINDBERGH_VT3_CAPTURE"); keep = !world_mode_immersive() || (v && *v == '1'); }
+            if (!keep && g_nscreen_copy) {
+                GLint was = GL_TEXTURE0, t = 0; int hit = -1;
+                const unsigned used = arb_fp_units();   /* only the units the draw reads: others keep stale bindings */
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &was);
+                for (int u = 0; u < 8 && hit < 0; u++) {
+                    if (used != ~0u ? !(used >> u & 1) : u > 0) continue;   /* fixed function: unit 0 */
+                    glActiveTexture(GL_TEXTURE0 + u);
+                    glGetIntegerv(GL_TEXTURE_BINDING_2D, &t);
+                    if (t && screen_copy((GLuint)t)) hit = u;
+                }
+                glActiveTexture((GLenum)was);
+                {   /* LINDBERGH_VT3_CUTLOG=1: each such HUD draw into the eyes, its program and units (first 300) */
+                    static int lg = -1, n; if (lg < 0) { const char *l = getenv("LINDBERGH_VT3_CUTLOG"); lg = l && *l == '1'; }
+                    if (lg && n < 300 && (hit >= 0 || (used != ~0u && (used & ~1u)))) {   /* multi-unit programs and fades only */
+                        n++;
+                        char b[200] = ""; size_t o = 0; GLint w2 = GL_TEXTURE0; glGetIntegerv(GL_ACTIVE_TEXTURE, &w2);
+                        for (int u = 0; u < 8; u++) {
+                            if (used != ~0u ? !(used >> u & 1) : u > 0) continue;
+                            GLint t2 = 0; glActiveTexture(GL_TEXTURE0 + u); glGetIntegerv(GL_TEXTURE_BINDING_2D, &t2);
+                            o += (size_t)snprintf(b + o, sizeof b - o, " u%d=%d%s", u, t2, screen_copy((GLuint)t2) ? "(copy)" : scaled((GLuint)t2) ? "(target)" : "");
+                        }
+                        glActiveTexture((GLenum)w2);
+                        fprintf(stderr, "[cut] frame %u: HUD 2D into the eyes: %s fp %u units %#x:%s%s\n", g_frame, hle_name(g_cur_id), arb_bound_fp(), used, b, hit >= 0 ? " - left out" : "");
+                    }
+                }
+                if (hit >= 0) {
+                    static unsigned told = ~0u;
+                    if (g_frame - told > 60) fprintf(stderr, "[stereo] frame %u: a whole-screen fade reading screen copy %d on unit %d left out of the world\n", g_frame, t, hit);
+                    told = g_frame;
+                    if (k == K_BEGIN) g_skip_begin = 1;
+                    return 1;
+                }
+            }
+        }
         g_fill_track = hud == 1 && !persp && g_mv && k == K_BEGIN;    /* glBegin: measured until glEnd */
         if (g_fill_track) { g_fill_box[0] = g_fill_box[1] = 1e9f; g_fill_box[2] = g_fill_box[3] = -1e9f; }
         /* Virtua Tennis 3's world mode: its HUD and its world share the eyes'
@@ -3773,7 +3822,16 @@ void stereo_frame_begin(void)
     g_3d_draws = 0;
     {
         static int flat_all = -1;       /* LINDBERGH_FLAT_ALL=1: everything flat, the arcade's picture - for comparing */
-        if (flat_all < 0) { const char *v = getenv("LINDBERGH_FLAT_ALL"); flat_all = v && *v == '1'; }
+        /* Virtua Tennis 3 in Classic: always the arcade's flat picture. The
+         * world was put round the head only by accident - the first frames of
+         * each match's intro fly-by, before the scoreboard's long-lens draw
+         * held the zoom count: one frame of the stadium from above, small,
+         * one wrong wide view, then six black frames (the fly-by drawn into
+         * the HUD's target, of which a world frame shows nothing). The owner's
+         * "court seen from a top-down shot for a split second". In play the
+         * picture was flat already. LINDBERGH_FLAT_ALL=0 gives back the old rule. */
+        if (flat_all < 0) { const char *v = getenv("LINDBERGH_FLAT_ALL");
+                            flat_all = v && *v ? *v == '1' : world_mode_capable() && !world_mode_immersive(); }
         /* A scope held up is a flat picture too: the arcade's own image on
          * the screen, nothing around it. Put on the screen as 3D, the game's
          * full-screen haze passes ran over the empty room and turned it a

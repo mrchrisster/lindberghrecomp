@@ -119,8 +119,12 @@ static struct {
     void (APIENTRY *GetTexLevelParameteriv)(GLenum, GLint, GLenum, GLint *);
     void (APIENTRY *Finish)(void);
     void (APIENTRY *TexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
+    void (APIENTRY *GenTextures)(GLsizei, GLuint *);
+    void (APIENTRY *TexStorage3D)(GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei);
+    void (APIENTRY *CopyTexSubImage3D)(GLenum, GLint, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei);
 } gl;
 
+void xr_hold_next_frame(void);
 static int gl_load(void)
 {
 #ifdef __ANDROID__
@@ -135,6 +139,7 @@ static int gl_load(void)
     L(BlitFramebuffer) L(GetIntegerv) L(IsEnabled) L(Enable) L(Disable) L(GetString)
     L(GenRenderbuffers) L(BindRenderbuffer) L(RenderbufferStorage) L(FramebufferRenderbuffer)
     L(FramebufferTextureLayer) L(ReadPixels) L(GetError) L(BindTexture) L(GetTexLevelParameteriv) L(Finish) L(TexSubImage2D)
+    L(GenTextures) L(TexStorage3D) L(CopyTexSubImage3D)
 #undef L
     return 1;
 }
@@ -922,6 +927,7 @@ int xr_init(void)
 {
     host_display_timing_reset();
     if (!gl_load()) { fprintf(stderr, "[xr] cannot load GLES\n"); return 0; }
+    { extern void (*g_hold_next_frame)(void); g_hold_next_frame = xr_hold_next_frame; }
     cfg_load();
     stereo_show_game_sight(cfg.crosshair && !game_profile()->joystick);   /* no sight on a lever cabinet */
 
@@ -1495,8 +1501,10 @@ static int fixed_head(void)
     return !views_ok;
 }
 
+static void hold_begin(void);
 void xr_frame_begin(void)
 {
+    hold_begin();
 #ifdef __ANDROID__
     {   /* the first call (the GL context just made, the game still to load):
          * the start-up screen's thread keeps the headset busy until the
@@ -1675,6 +1683,76 @@ static double xp_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t
 static double xp_t0, xp_game, xp_copy, xp_end; static unsigned xp_n;
 static void xp_mark(double *acc) { if (xr_prof > 0) { gl.Finish(); double t = xp_ms(); *acc += t - xp_t0; xp_t0 = t; } }
 
+
+/* Virtua Tennis 3: one frame held (both eyes show the frame before). At each
+ * match's start (usrAcEntranceLoop::init, hle_sega.c) the game's next frame
+ * draws the stadium through the camera it had in the menus (lens 1.45, from
+ * high above) before the intro's camera is set up - on the arcade that frame
+ * is not seen (macOS shows the VS screen on to the fly-by), in the headset it
+ * was a split second of the court from above (Classic and Immersive). The
+ * eyes as they ended the last frame are copied aside when that frame begins
+ * and put back before it is shown. LINDBERGH_VT3_HOLD=0 (hle_sega.c) off. */
+static volatile int hold_arm;
+static int hold_now;
+static GLuint hold_arr, hold_fb;
+static int hold_w, hold_h;
+static void hold_job(void *a) { (void)a; hold_arm = 1; }
+void xr_hold_next_frame(void)
+{
+    extern int glq_active(void); extern uint32_t glq_job(void (*job)(void *), void *arg);
+    if (glq_active()) glq_job(hold_job, NULL); else hold_job(NULL);
+}
+static int hold_blit(int save)
+{
+    unsigned arr = stereo_eye_array();
+    int w = 0, h = 0;
+    stereo_eye_dims(&w, &h);
+    if (!arr || w <= 0 || h <= 0) return 0;
+    if (save && (!hold_arr || hold_w != w || hold_h != h)) {
+        if (hold_arr) return 0;                     /* the eyes changed size: not handled, the frame is shown */
+        GLint was = 0;
+        gl.GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &was);
+        gl.GenTextures(1, &hold_arr);
+        gl.BindTexture(GL_TEXTURE_2D_ARRAY, hold_arr);
+        gl.TexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, w, h, 2);
+        gl.BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)was);
+        hold_w = w; hold_h = h;
+    }
+    if (!hold_arr) return 0;
+    if (!hold_fb) gl.GenFramebuffers(1, &hold_fb);
+    GLint rd = 0, was = 0;
+    gl.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rd);
+    gl.GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &was);
+    int sc = gl.IsEnabled(GL_SCISSOR_TEST);
+    if (sc) gl.Disable(GL_SCISSOR_TEST);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, hold_fb);
+    gl.BindTexture(GL_TEXTURE_2D_ARRAY, save ? hold_arr : arr);
+    /* each layer by glCopyTexSubImage3D: a blit into layer 1 of an array (a
+     * framebuffer layer attachment) wrote nothing on the Quest's driver -
+     * layer 0 copied, layer 1 kept what it had, no error */
+    for (int l = 0; l < 2; l++) {
+        gl.FramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, save ? arr : hold_arr, 0, l);
+        gl.CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, l, 0, 0, w, h);
+    }
+    gl.BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)was);
+    if (sc) gl.Enable(GL_SCISSOR_TEST);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)rd);
+    return 1;
+}
+static void hold_begin(void)
+{
+    if (!hold_arm) return;
+    hold_arm = 0;
+    hold_now = hold_blit(1);
+}
+static void hold_end(void)
+{
+    if (!hold_now) return;
+    hold_now = 0;
+    hold_blit(0);
+    fprintf(stderr, "[xr] frame %u: held (the eyes show the frame before: the stadium through the menus' camera at a match's start)\n", g_frame);
+}
+
 /* LINDBERGH_GAME_SHOT=<first>,<every>[,full[,last]]: the left eye as the game drew
  * it, read from the eyes' array at the frame's end - before the headset's
  * frame is even begun, so a sleeping display or a Guardian prompt does not
@@ -1849,6 +1927,7 @@ static void gpu_time(void)
 
 void xr_frame_end(void)
 {
+    hold_end();
     game_shot();
     black_log();
     gpu_time();

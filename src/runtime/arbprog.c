@@ -92,6 +92,7 @@ typedef struct {
     unsigned local_gen;
     int      failed;             /* translation failed: use the driver */
     int      pos_kind;           /* arb_env_projection: 0 not looked, 1 env[0..3], 2 passed through, 3 the matrix by rows (DP4) */
+    unsigned tex_units, tex_units_gen;   /* arb_fp_units: the texture units the source reads, for source gen+1 */
 } ArbProg;
 
 static ArbProg *g_prog[2][MAX_IDS];       /* [0] vertex, [1] fragment */
@@ -3260,6 +3261,24 @@ int arb_camera_basis(float right[3], float up[3], float fwd[3])
 /* the programs a draw now would use (0: none), for the frame map */
 unsigned arb_bound_vp(void) { return g_enabled[0] ? g_bound[0] : 0; }
 unsigned arb_bound_fp(void) { return g_enabled[1] ? g_bound[1] : 0; }
+/* the texture units the bound fragment program reads ("texture[n]" in its
+ * source), or ~0u when no program is bound (the caller asks the fixed
+ * function's enables) */
+unsigned arb_fp_units(void)
+{
+    if (!g_enabled[1] || !g_bound[1]) return ~0u;
+    ArbProg *pp = prog_get(1, g_bound[1], 0);
+    if (!pp || !pp->src) return ~0u;
+    if (pp->tex_units_gen != pp->gen + 1) {
+        unsigned m = 0;
+        for (const char *q = pp->src; (q = strstr(q, "texture[")); q += 8) {
+            int u = atoi(q + 8);
+            if (u >= 0 && u < 32) m |= 1u << u;
+        }
+        pp->tex_units = m; pp->tex_units_gen = pp->gen + 1;
+    }
+    return pp->tex_units;
+}
 
 /* set by a game's trigger (hle_sega.c, LINDBERGH_VT3_PRIZE_TRACE): LINDBERGH_TRACE_VP starts at this frame */
 long g_arb_trace_from = -1;

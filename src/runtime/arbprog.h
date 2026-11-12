@@ -21,6 +21,7 @@ void arb_rect_enable_seen(void);   /* gl4es: the game set a rectangle enable */
 
 unsigned arb_bound_vp(void);       /* the programs a draw now would use (0: none) */
 unsigned arb_bound_fp(void);
+unsigned arb_fp_units(void);   /* texture units the bound fragment program reads, ~0u none bound */
 
 char *arb_translate_text(int stage, const char *src); /* runtime self-check */
 int arb_env_projection(float P[16]);   /* the projection in program.env[0..3], for stereo.c */

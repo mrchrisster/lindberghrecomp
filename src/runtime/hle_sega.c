@@ -1110,8 +1110,27 @@ static void vt3_camlog_install(void)
     X(ChangeendLoop, "_ZN18usrAcChangeendLoop4initEv") \
     X(GamesetmatchLoop, "_ZN21usrAcGamesetmatchLoop4initEv") \
     X(TobecontinuedLoop, "_ZN22usrAcTobecontinuedLoop4initEv")
+/* Virtua Tennis 3, each match's start (usrAcEntranceLoop::init): the game's
+ * next frame draws the stadium through the menus' camera (from high above,
+ * lens 1.45) before the intro's camera is set - not seen on the arcade, a
+ * split second of the court from above in the headset. That frame is held
+ * (host_xr.c: the eyes show the frame before). LINDBERGH_VT3_HOLD=0 off. */
+void (*g_hold_next_frame)(void);      /* host_xr.c sets it (xr_hold_next_frame); none on the desktop */
+static int vt3_hold_on(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_HOLD"); on = !(v && *v == '0'); }
+    return on;
+}
+static void vt3_entrance_note(void)
+{
+    if (vt3_hold_on() && g_hold_next_frame) g_hold_next_frame();
+}
+static void (*g_vt3_entrance)(CPU *);
+static void h_vt3_entrance(CPU *c) { vt3_entrance_note(); push32(c, 0xDEADBEEFu); g_vt3_entrance(c); }
 #define FLOW_DEF(n, sym) static void (*g_flow_##n)(CPU *); \
     static void h_flow_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[flow] frame %u: %s\n", g_frame, #n); \
+                                     if (!strcmp(#n, "EntranceLoop")) vt3_entrance_note(); \
                                      push32(c, 0xDEADBEEFu); g_flow_##n(c); }
 FLOW_STATES(FLOW_DEF)
 static int g_vt3_flowlog;
@@ -1697,6 +1716,9 @@ static void vt3_jumps(void)
              * node is visible, as House of the Dead 4's culling is widened. */
             vt3_camlog_install();
             vt3_flowlog_install();
+            if (!g_vt3_flowlog && g_world_capable && vt3_hold_on() &&
+                vt3_wrap("_ZN17usrAcEntranceLoop4initEv", &g_vt3_entrance, h_vt3_entrance))
+                fprintf(stderr, "[sega] Virtua Tennis 3: the frame after each match's intro starts held (LINDBERGH_VT3_HOLD=0 off)\n");
             vt3_hud_anchor_install();
             vt3_routines_install();
             { const char *u = getenv("LINDBERGH_VT3_ATTACHLOG");
