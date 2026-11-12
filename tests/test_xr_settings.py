@@ -58,7 +58,7 @@ int main(void) {
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
-               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0"}
+               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0","save":"off"}
 
     @staticmethod
     def parse(text):
@@ -77,7 +77,7 @@ int main(void) {
     def test_mode_keys_round_trip(self):
         cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"camera",
              "immersive.overlays":"on","immersive.cutaways":"camera","immersive.sky":"painted","immersive.shadow":"1024",
-             "immersive.height":"10","classic.card_notice":"on","language":"japanese","msaa":"4"}
+             "immersive.height":"10","classic.card_notice":"on","language":"japanese","msaa":"4","save":"on"}
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("".join(f"{k} {v}\n" for k,v in cfg.items()))
             self.run_settings(d)

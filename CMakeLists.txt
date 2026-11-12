@@ -195,6 +195,7 @@ function(lindbergh_runtime target generated_dir)
         "${LINDBERGH_RUNTIME_DIR}/nn_culling.c"
         "${LINDBERGH_RUNTIME_DIR}/hle_sega.c"
         "${LINDBERGH_RUNTIME_DIR}/world_mode.c"
+        "${LINDBERGH_RUNTIME_DIR}/vt3_save.c"
         "${LINDBERGH_RUNTIME_DIR}/hle_rideboard.c"
         "${LINDBERGH_RUNTIME_DIR}/hle_glut.c"
         "${LINDBERGH_RUNTIME_DIR}/hle_zlib.c"

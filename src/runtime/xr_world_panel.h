@@ -17,7 +17,9 @@ extern "C" {
  * XW_MODE (a toggle), XW_DOLLY and XW_STEPBACK are no rows any more (T12). */
 enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPLAYS, XW_CUTAWAYS,
        XW_OVERLAYS, XW_SKY, XW_SHADOW, XW_RESTORE, XW_HEIGHT, XW_MODE_CLASSIC, XW_MODE_VR,
-       XW_CARD, XW_LANGUAGE, XW_MSAA, XW_COUNT };   /* + the main page's Anti-aliasing (on restart) */    /* Classic's Card reader notice; the main page's Language (both on restart) */
+       XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_COUNT };
+/* Classic's Card reader notice; the main page's Language and Anti-aliasing; both
+ * Advanced pages' Save progress (one value for both modes) - all on restart */
 enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGES };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */

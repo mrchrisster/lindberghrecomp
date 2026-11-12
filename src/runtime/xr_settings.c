@@ -22,7 +22,7 @@ static int render(const LgXrSettings *c, char *b, size_t n)
                "sight %s\ncrosshair %s\ngun %s\nhud_pitch %d\ndual %s\nstats %s\nfoveation %s\noverlays %s\nreplays %s\n"
                "mode %s\nclassic.shadow %d\nclassic.cutaways %s\nimmersive.replays %s\nimmersive.overlays %s\n"
                "immersive.cutaways %s\nimmersive.sky %s\nimmersive.shadow %d\n"
-               "immersive.height %d\nclassic.card_notice %s\nlanguage %s\nmsaa %d\n",
+               "immersive.height %d\nclassic.card_notice %s\nlanguage %s\nmsaa %d\nsave %s\n",
             c->scale, c->screen, c->aim, c->resolution, c->width, c->refresh, c->left_handed ? "left" : "right",
             LASER_NAME[c->laser], c->auto_coins ? "auto" : "manual",
             SIGHT_NAME[c->sight], c->crosshair ? "on" : "off", c->show_gun ? "on" : "off", c->hud_pitch, c->dual ? "on" : "off", c->show_stats ? "on" : "off",
@@ -30,7 +30,7 @@ static int render(const LgXrSettings *c, char *b, size_t n)
             c->world_mode ? "immersive" : "classic", c->classic_shadow, c->classic_cutaways ? "on" : "off",
             view_name(c->imm_replays), c->imm_overlays ? "on" : "off", view_name(c->imm_cutaways),
             c->imm_sky == LG_SKY_OFF ? "off" : c->imm_sky == LG_SKY_PAINTED ? "painted" : "stadium", c->imm_shadow,
-            c->imm_height, c->classic_card_notice ? "on" : "off", c->language ? "english" : "japanese", c->msaa);
+            c->imm_height, c->classic_card_notice ? "on" : "off", c->language ? "english" : "japanese", c->msaa, c->save ? "on" : "off");
 }
 
 /* LINDBERGH_XR_SET's keys are for its run only: the save writes those keys as
@@ -137,6 +137,7 @@ void xr_settings_set(LgXrSettings *c,const char *key,const char *val)
         else if (!strcmp(key, "classic.card_notice")) c->classic_card_notice = !strcmp(val, "on");
         else if (!strcmp(key, "language")) c->language = strcmp(val, "japanese") != 0;
         else if (!strcmp(key, "msaa")) c->msaa = atoi(val);
+        else if (!strcmp(key, "save")) c->save = !strcmp(val, "on");
         else if (!strcmp(key, "foveation")) {
             for (int i = 0; i < 4; i++) if (!strcmp(val, FOVEATION_NAME[i])) c->foveation = i;
         }

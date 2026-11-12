@@ -29,6 +29,7 @@
 #ifndef _WIN32
 #include "stereo.h"
 #include "world_mode.h"
+#include "vt3_save.h"
 #endif
 #endif
 
@@ -1069,6 +1070,117 @@ static void h_vt3_credit_draw(CPU *c)
  * the cabinet's backup instead of cards. LINDBERGH_VT3_CARD_RW=1 keeps the
  * game's own setting (ai_docs/research/card-reader-top-bar.md). */
 static void h_vt3_card_rw_off(CPU *c) { RET(0xFFFFFFFFu); }
+
+/* Save progress (T16; ai_docs/research/ic-card-save-emulation.md option C):
+ * the IC card as a save game, 1P only, one record per character, card
+ * reader kept OFF (no card screen ever). What a read card leaves behind is
+ * done by hand at character select; the record is taken back after each
+ * match's result and at the end of the session. Nothing in cardManager,
+ * the serial layer, the card cipher or the dongle is called or hooked.
+ *   load: player::reset_card_data() as called from usrMenuCharLoop::
+ *     exec_no_card's decision (return 0x0812A8DD; before decide_chartype and
+ *     setPlayerData, as a card's record would be in place), 1P's side
+ *     (player+0x958 == 0): the saved record into player+0x490 and the use-card
+ *     bit set (usrMenuCharLoop::setRealCardData + setReal_ulFlag do no more),
+ *     or, the first time for that character, the game's blank record (name
+ *     "noname", ranking 999) + character + player::setUse_card() (the
+ *     new-card branch's call); side 1P's card object (tennis+0x18[0]) given
+ *     the record as its current row, so the *_card getters ("before" values)
+ *     read it.
+ *   save: after playerManager::calcCard_data (each judge) and before
+ *     playerManager::resetUse_card (stats, session end), when that player
+ *     still has the use-card bit. */
+#define VT3_CARD_DATA 0x490u
+#define VT3_CARD_FLAGS 0x6F0u
+#define VT3_FROM_NO_CARD_DECIDE 0x0812A8DDu
+static void (*g_vt3_reset_card)(CPU *), (*g_vt3_calc_card)(CPU *), (*g_vt3_reset_use)(CPU *);
+static uint32_t g_save_player;          /* 1P's player with a loaded record, this session */
+static uint8_t g_save_before[VT3_SAVE_REC];
+static void vt3_save_describe(const char *what, uint32_t p)
+{
+    extern unsigned g_frame;
+    const uint32_t r = p + VT3_CARD_DATA;
+    char name[33]; memcpy(name, GP(r + 4), 32); name[32] = 0;
+    for (char *q = name; *q; q++) if ((unsigned char)*q < 32 || (unsigned char)*q > 126) *q = '?';
+    fprintf(stderr, "[save] frame %u: %s - player %#x side %u character %u name \"%s\" ranking %d/%d versus %u won %u lost %u "
+                    "straight %u last play %u flags %#x\n", g_frame, what, p, rd32(p + 0x958), rd8(p + 0x14), name,
+            (int)rd32(r + 0x24), (int)rd32(r + 0x28), rd32(r + 0x100), rd32(r + 0x104), rd32(r + 0x108), rd32(r + 0x5C),
+            rd32(r + 0x258), rd32(r + 0x260));
+}
+static void vt3_save_card_row(uint32_t p)
+{
+    uint32_t t = rd32(VT3_G_PTENNIS), tab = t ? rd32(t + 0x18) : 0, card = tab ? rd32(tab) : 0;
+    if (!card) return;
+    memcpy(GP(card + 0x264), GP(p + VT3_CARD_DATA), VT3_SAVE_REC);     /* row 0 = the record */
+    wr32(card + 0x1638, 1); wr32(card + 0x163C, 0);                    /* row ids: row 0 current */
+    wr32(card + 0x164C, 1); wr32(card + 0x1648, 1); wr32(card + 0x1640, 1);
+    wr32(card + 0x72C, 199); wr8(card + 0x736, 0);                     /* plays left, not a new card */
+}
+static void h_vt3_reset_card(CPU *c)
+{
+    const uint32_t p = A32(0), from = rd32(c->esp - 4u);
+    push32(c, 0xDEADBEEFu);
+    g_vt3_reset_card(c);
+    if (from != VT3_FROM_NO_CARD_DECIDE || !p || rd32(p + 0x958) != 0) return;
+    const int ch = rd8(p + 0x14);
+    const uint8_t *rec = vt3_save_find(ch);
+    if (rec) {
+        memcpy(GP(p + VT3_CARD_DATA), rec, VT3_SAVE_REC);
+        wr32(p + VT3_CARD_FLAGS, (rd32(p + VT3_CARD_FLAGS) & ~0x70u) | 1u);    /* use card; last match's "new" marks off */
+        vt3_save_describe("record loaded", p);
+    } else {
+        wr32(p + VT3_CARD_DATA, (uint32_t)ch);
+        static uint32_t set_use;
+        if (!set_use) set_use = guest_symbol("_ZN6player11setUse_cardEv");
+        uint32_t a[1] = { p };
+        if (set_use) guest_call(c, set_use, a, 1); else wr32(p + VT3_CARD_FLAGS, rd32(p + VT3_CARD_FLAGS) | 1u);
+        vt3_save_describe("fresh record (first time for this character)", p);
+    }
+    vt3_save_card_row(p);
+    {   /* the name the game shows for a card player (result slate: "(null)" without it):
+         * usrMenuCharLoop::setRealPlayerName(side 0, plno) - copies the record's name
+         * into the side's font variant; reads only its two arguments and the card row */
+        static uint32_t set_name;
+        if (!set_name) set_name = guest_symbol("_ZN15usrMenuCharLoop17setRealPlayerNameEmm");
+        uint32_t t = rd32(VT3_G_PTENNIS), tab = t ? rd32(t + 0x4) : 0, plno = 0;
+        while (tab && plno < 4 && rd32(tab + 4 * plno) != p) plno++;
+        uint32_t a[3] = { 0, 0, plno };
+        if (set_name && plno < 4) guest_call(c, set_name, a, 3);
+    }
+    memcpy(g_save_before, GP(p + VT3_CARD_DATA), VT3_SAVE_REC);
+    g_save_player = p;
+}
+static void vt3_save_take(const char *when)
+{
+    const uint32_t p = g_save_player;
+    if (!p || !(rd32(p + VT3_CARD_FLAGS) & 1u)) return;
+    const uint8_t *r = GP(p + VT3_CARD_DATA);
+    int changed = 0, first = -1, last = -1;
+    for (int i = 0; i < VT3_SAVE_REC; i++) if (r[i] != g_save_before[i]) { changed++; if (first < 0) first = i; last = i; }
+    vt3_save_describe(when, p);
+    const int ch = rd8(p + 0x14);
+    const int ok = vt3_save_store(ch, r) == 0;
+    fprintf(stderr, "[save] %d byte(s) changed since loaded (+%#x..+%#x) - %s %s\n", changed, first < 0 ? 0 : first, last < 0 ? 0 : last,
+            ok ? "written to" : "NOT written to", vt3_save_path());
+    if (getenv("LINDBERGH_VT3_SAVE_DIFF")) {        /* each changed byte, for the docs */
+        for (int i = 0; i < VT3_SAVE_REC; i++)
+            if (r[i] != g_save_before[i]) fprintf(stderr, "[save]   +%#05x: %02x -> %02x\n", i, g_save_before[i], r[i]);
+    }
+}
+static void h_vt3_calc_card(CPU *c)
+{
+    push32(c, 0xDEADBEEFu);
+    g_vt3_calc_card(c);
+    vt3_save_take("after the match's result (calcCard_data)");
+}
+static void h_vt3_reset_use(CPU *c)
+{
+    vt3_save_take("end of session (resetUse_card)");
+    if (g_save_player) vt3_save_card_row(g_save_player);
+    g_save_player = 0;
+    push32(c, 0xDEADBEEFu);
+    g_vt3_reset_use(c);
+}
 static void h_vt3_slot_open(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot_open(c); }
 static void h_vt3_slot(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot(c); }
 static void h_vt3_slot_card(CPU *c) { if (!g_arcade_overlays) return; push32(c, 0xDEADBEEFu); g_vt3_slot_card(c); }
@@ -1871,12 +1983,23 @@ static void vt3_jumps(void)
             nh += vt3_wrap("_ZN22CCardSlotWindowManager19window_slot_usecardElb", &g_vt3_slot_card, h_vt3_slot_card);
             nh += vt3_wrap("_ZN12ab_card_info4initEv", &g_vt3_card_init, h_vt3_card_init);
         }
-        {   /* Classic's Card reader notice row (classic.card_notice; VR: always off), LINDBERGH_VT3_CARD_RW=1|0 */
-            if (!world_mode_card_notice() && guest_symbol("_ZN6backup17getCard_rw_1p_useEv")) {     /* Virtua Tennis 3 only */
+        {   /* Classic's Card reader notice row (classic.card_notice; VR: always off), LINDBERGH_VT3_CARD_RW=1|0;
+             * Save progress keeps the reader off whatever the notice row says */
+            if (world_mode_save() && world_mode_card_notice() && guest_symbol("_ZN6backup17getCard_rw_1p_useEv"))
+                fprintf(stderr, "[sega] Virtua Tennis 3: Save progress on - card readers kept off (the Card reader notice row is ignored)\n");
+            if ((!world_mode_card_notice() || world_mode_save()) && guest_symbol("_ZN6backup17getCard_rw_1p_useEv")) {     /* Virtua Tennis 3 only */
                 if (guest_override("_ZN6backup17getCard_rw_1p_useEv", h_vt3_card_rw_off) &&
                     guest_override("_ZN6backup17getCard_rw_2p_useEv", h_vt3_card_rw_off))
                     fprintf(stderr, "[sega] Virtua Tennis 3: card readers off (no card bar, no CARD R/W wait; LINDBERGH_VT3_CARD_RW=1 keeps the game's setting)\n");
                 else fprintf(stderr, "[sega] Virtua Tennis 3: WARNING card reader setting not overridden\n");
+            }
+            if (world_mode_save() && guest_symbol("_ZN6player15reset_card_dataEv")) {      /* Save progress (T16) */
+                vt3_save_open(NULL);
+                if (vt3_wrap("_ZN6player15reset_card_dataEv", &g_vt3_reset_card, h_vt3_reset_card) &&
+                    vt3_wrap("_ZN13playerManager13calcCard_dataEv", &g_vt3_calc_card, h_vt3_calc_card) &&
+                    vt3_wrap("_ZN13playerManager13resetUse_cardEv", &g_vt3_reset_use, h_vt3_reset_use))
+                    fprintf(stderr, "[sega] Virtua Tennis 3: Save progress on - 1P's card record kept in %s\n", vt3_save_path());
+                else fprintf(stderr, "[sega] Virtua Tennis 3: WARNING Save progress hooks not installed\n");
             } }
         if (nh) { g_arcade_overlay_hooks = 1; fprintf(stderr, "[sega] Virtua Tennis 3: arcade overlays %s (%d draws hooked)\n", g_arcade_overlays ? "shown" : "hidden", nh); }
         const char *pt = getenv("LINDBERGH_VT3_PRIZE_TRACE");

@@ -52,7 +52,7 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 12 && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 13 && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
     assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
@@ -100,7 +100,7 @@ int main(void) {
     c.world_mode = 0; w.page = XW_PAGE_CLASSIC;
     fx = xw_choose(&w, &c, XW_CUTAWAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 11 && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 12 && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -158,6 +158,21 @@ int main(void) {
       aw.pins = 1u << WM_MSAA; aw.eff.msaa = 2;
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (env.txt)"));
       assert(xw_choose(&aw, &ac, XW_MSAA) == 0 && ac.msaa == 0); }
+    /* Save progress on both Advanced pages (one value), Off by default, on restart; not on the main page (T16) */
+    { XwState sw; memset(&sw, 0, sizeof sw); LgXrSettings sc = LG_XR_SETTINGS_DEFAULT;
+      world_mode_resolve(&sc, 0, 1, 0, &sw.eff, NULL);
+      int sr[XW_ROWS_MAX], sn = xw_page_rows(&sw, &sc, sr);
+      assert(!has(sr, sn, XW_ROW(XW_SAVE)) && sc.save == 0 && sw.eff.save == 0);
+      sw.page = XW_PAGE_CLASSIC; sn = xw_page_rows(&sw, &sc, sr); assert(has(sr, sn, XW_ROW(XW_SAVE)));
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].label, "Save progress") && !strcmp(it[XW_SAVE].value, "Off"));
+      assert(xw_choose(&sw, &sc, XW_SAVE) == XP_SAVE && sc.save == 1);
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "On (on restart)"));
+      sw.page = XW_PAGE_IMMERSIVE; sn = xw_page_rows(&sw, &sc, sr); assert(has(sr, sn, XW_ROW(XW_SAVE)));
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "On (on restart)"));          /* the same value on VR's page */
+      xw_restore_defaults(&sc, 1); xw_restore_defaults(&sc, 0); assert(sc.save == 1);             /* Restore defaults keeps it */
+      sw.pins = 1u << WM_SAVE; sw.eff.save = 0;
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "Off (env.txt)"));
+      assert(xw_choose(&sw, &sc, XW_SAVE) == 0 && sc.save == 1); }
     /* a mode button on an Advanced page: that mode's page */
     w.pins = 0; w.running = 0; w.page = XW_PAGE_CLASSIC; c.world_mode = 0;
     fx = xw_choose(&w, &c, XW_MODE_VR); assert((fx & XP_SAVE) && c.world_mode == 1 && w.page == XW_PAGE_IMMERSIVE);
@@ -236,7 +251,7 @@ int main(void) {
             b = Path(temp) / "wp"
             subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(rt), str(src), str(rt / "xr_world_panel.c"),
                             str(rt / "world_mode.c"), str(rt / "xr_menu.c"), str(rt / "xr_panel.c"), str(rt / "stereo_projection.c"), str(rt / "xr_settings.c"), "-pthread", "-lm", "-o", str(b)], check=True)
-            self.assertEqual(subprocess.run([str(b)], check=True, capture_output=True, text=True).stdout.strip(), "ok")
+            r = subprocess.run([str(b)], capture_output=True, text=True); self.assertEqual(r.stdout.strip(), "ok", r.stderr)
 
 
 if __name__ == "__main__": unittest.main()

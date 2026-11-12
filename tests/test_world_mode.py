@@ -10,7 +10,7 @@ ENV_KEYS = ["LINDBERGH_VT3_IMMERSIVE", "LINDBERGH_REPLAYS", "LINDBERGH_ARCADE_OV
             "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK",
             "LINDBERGH_VT3_SKY", "LINDBERGH_VT3_HEIGHT", "LINDBERGH_XR_SET", "LINDBERGH_XR_SCALE", "LINDBERGH_VT3_LIVE_SWITCH",
             "LINDBERGH_VT3_MODE_AT", "LINDBERGH_VT3_REPLAY_VIEW", "LINDBERGH_VT3_CUTAWAY_VIEW",
-            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION", "LINDBERGH_MSAA"]
+            "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_REGION", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE"]
 
 
 class WorldModeTests(unittest.TestCase):
@@ -39,7 +39,8 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc > 2 && !strcmp(argv[2], "msaa")) {     /* anti-aliasing samples, its pin, the getter */
-        printf(" | %d %d %d\n", v->msaa, world_mode_pinned(WM_MSAA), world_mode_msaa());
+        printf(" | %d %d %d | %d %d %d\n", v->msaa, world_mode_pinned(WM_MSAA), world_mode_msaa(),
+               v->save, world_mode_pinned(WM_SAVE), world_mode_save());
         return 0;
     }
     if (argc > 2 && !strcmp(argv[2], "views")) {    /* replays / cutaways: on, view; and the pins */
@@ -129,6 +130,13 @@ int main(int argc, char **argv) {
 
     def test_antialiasing(self):
         m = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "msaa"))[0].split(" | ")[1]
+        sv = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "msaa"))[0].split(" | ")[2]
+        self.assertEqual(sv(), "0 0 0")                                                  # Save progress off by default (T16)
+        self.assertEqual(sv("save on\n"), "1 0 1")
+        self.assertEqual(sv("mode immersive\nsave on\n"), "1 0 1")                       # one value for both modes
+        self.assertEqual(sv("save on\n", {"LINDBERGH_VT3_SAVE": "0"}), "0 1 0")
+        self.assertEqual(sv(None, {"LINDBERGH_VT3_SAVE": "1"}), "1 1 1")
+        self.assertIn("save on (vr.cfg)", self.run_wm("save on\n")[1])
         self.assertEqual(m(), "0 0 0")                                                   # Off by default (T17)
         self.assertEqual(m("msaa 4\n"), "4 0 4")
         self.assertEqual(m("mode immersive\nmsaa 2\n"), "2 0 2")                         # one value for both modes

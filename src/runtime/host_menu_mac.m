@@ -1,5 +1,5 @@
 /*
- * host_menu_mac.m - the macOS menu bar: Controls, Aim, Sound, Language.
+ * host_menu_mac.m - the macOS menu bar: Controls, Aim, Sound, Language, Game.
  *
  * Added beside the application and Window menus SDL already made. Every item
  * reads and writes the player's settings (host_settings.c); remapping and aim
@@ -15,6 +15,8 @@
 #include <SDL_syswm.h>
 
 #include "host_settings.h"
+#include "xr_settings.h"
+#include "world_mode.h"
 
 void host_audio_toggle_mute(void);
 
@@ -22,7 +24,7 @@ void host_audio_toggle_mute(void);
 @end
 
 static LindberghMenu *g_target;
-static NSMenu *g_controls, *g_aim, *g_sound, *g_lang;
+static NSMenu *g_controls, *g_aim, *g_sound, *g_lang, *g_game;
 
 static NSMenuItem *item(NSMenu *m, NSString *title, SEL sel, NSInteger tag)
 {
@@ -73,6 +75,17 @@ static NSString *binding_title(HostAction a)
         item(menu, @"Japanese", @selector(setLanguage:), 0).state = st->country ? NSControlStateValueOff : NSControlStateValueOn;
         [menu addItem:[NSMenuItem separatorItem]];
         item(menu, @"Takes effect when the game next starts", nil, 0).enabled = NO;
+    } else if (menu == g_game) {
+        /* the game's own settings in vr.cfg (the headset panel's): Virtua Tennis 3's Save progress */
+        LgXrSettings s = LG_XR_SETTINGS_DEFAULT;
+        xr_settings_load(&s);
+        if (world_mode_capable()) {
+            item(menu, @"Save Progress (1P's card record in vt3_save.bin)", @selector(toggleSave:), 0).state =
+                s.save ? NSControlStateValueOn : NSControlStateValueOff;
+            if (world_mode_pinned(WM_SAVE)) item(menu, @"This run: set by LINDBERGH_VT3_SAVE", nil, 0).enabled = NO;
+            [menu addItem:[NSMenuItem separatorItem]];
+            item(menu, @"Takes effect when the game next starts", nil, 0).enabled = NO;
+        } else item(menu, @"(no game settings)", nil, 0).enabled = NO;
     }
 }
 
@@ -86,6 +99,7 @@ static NSString *binding_title(HostAction a)
 - (void)toggleMute:(id)s             { host_audio_toggle_mute(); }
 - (void)setVolume:(NSMenuItem *)i    { settings()->volume = (int)i.tag; settings_save(); }
 - (void)setLanguage:(NSMenuItem *)i  { settings()->country = (int)i.tag; settings_save(); }
+- (void)toggleSave:(id)s             { LgXrSettings c = LG_XR_SETTINGS_DEFAULT; xr_settings_load(&c); c.save = !c.save; xr_settings_save(&c); }
 
 @end
 
@@ -127,6 +141,7 @@ void host_menu_install(void)
         g_aim      = add_menu(@"Aim");
         g_sound    = add_menu(@"Sound");
         g_lang     = add_menu(@"Language");
+        g_game     = add_menu(@"Game");
         NSMutableArray *names = [NSMutableArray array];
         for (NSMenuItem *i in NSApp.mainMenu.itemArray) [names addObject:i.title.length ? i.title : @"(app)"];
         fprintf(stderr, "[menu] menu bar: %s\n", [[names componentsJoinedByString:@", "] UTF8String]);
