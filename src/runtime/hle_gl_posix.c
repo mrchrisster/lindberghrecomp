@@ -831,8 +831,8 @@ static void aniso_after(GLenum target, GLenum pname, GLint param)
         if (stereo_texture_is_target((unsigned)bound)) { g_aniso_skipped++; return; }
     }
     glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */, mip ? g_aniso : 1.0f);
-    if (mip) g_aniso_sets++; else g_aniso_resets++;
-    if ((mip ? g_aniso_sets : g_aniso_resets) == 1 || g_aniso_sets % 5000 == 1)
+    const unsigned n = mip ? ++g_aniso_sets : ++g_aniso_resets;
+    if (n == 1 || n % 5000 == 0)    /* the first of each kind, then every 5000th (was: every plain set while one mip set had been seen) */
         fprintf(stderr, "[gl] texture filtering: %u mipmapped filter sets given %.0fx, %u plain set back to 1, %u render targets skipped\n",
                 g_aniso_sets, g_aniso, g_aniso_resets, g_aniso_skipped);
 }

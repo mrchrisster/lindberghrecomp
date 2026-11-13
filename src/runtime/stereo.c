@@ -1871,9 +1871,11 @@ static void side_pass(int on)
     if (on && !g_side_fbo) {
         glGenTextures(2, g_side_tex);
         glBindTexture(GL_TEXTURE_RECTANGLE_ARB, g_side_tex[0]);
-        glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_RGBA, SIDE_W, SIDE_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        /* at least the game's screen (Virtua Tennis 3's split-screen prelude, below, is 1360x768) */
+        const int sw = GAME_W > SIDE_W ? GAME_W : SIDE_W, sh = GAME_H > SIDE_H ? GAME_H : SIDE_H;
+        glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         glBindTexture(GL_TEXTURE_RECTANGLE_ARB, g_side_tex[1]);
-        glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_DEPTH_COMPONENT, SIDE_W, SIDE_H, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+        glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_DEPTH_COMPONENT, sw, sh, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
         glBindTexture(GL_TEXTURE_RECTANGLE_ARB, g_unit0_rect);
         glGenFramebuffers(1, &g_side_fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, g_side_fbo);
@@ -1900,6 +1902,72 @@ static void side_pass(int on)
 #else
     (void)on;
 #endif
+}
+
+/* ---- a split screen's next pane: its prelude in a side pass ----
+ * Virtua Tennis 3's two-pane camera (the reaction cam after some points,
+ * the end of a game) draws each pane as a frame of its own: a colour +
+ * stencil clear of the WHOLE screen (no scissor), the pane's planar shadows
+ * over the WHOLE viewport, a whole-screen copy - the pane's ground shadow
+ * mask - then a depth-only clear of its half (0,0 / 680,0 680x768, scissor
+ * on) and the pane, whose ground reads the mask at its own pane-local place
+ * (0..1 across the pane = across the whole copy). The second pane's colour
+ * clear would wipe the first pane from the eyes (the game brings it back
+ * from a screen copy, a composite left out here), so the flat-frame rule
+ * drops it - and the second pane's mask then held the first pane in its left
+ * half: the right pane's ground and walls showed the left pane squeezed 2x
+ * into the right pane's left half, dark and see-through (owner, 2026-11-13;
+ * with anti-aliasing on or off - a bright left pane hides it). Now that
+ * prelude - from that dropped clear to the next depth-only clear - goes into
+ * the side target at the game's resolution (side_pass): the clear is done
+ * there in full, the shadows drawn there, the copy taken from there (1:1),
+ * and the eyes keep the first pane untouched. Only while the panes drawn so
+ * far leave part of the screen (another pane is coming). Not tied to
+ * anti-aliasing. Virtua Tennis 3 only; LINDBERGH_PANE_PRELUDE=0: as before. */
+static unsigned g_pane_frame = ~0u;
+static int      g_pane[4];              /* this frame's panes so far, one box: x0, y0, x1, y1 (game pixels) */
+static int      g_pane_side;            /* inside a pane's prelude (a side pass) */
+static int pane_prelude_on(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_PANE_PRELUDE"); on = v && *v ? *v != '0' : world_mode_capable(); }   /* Virtua Tennis 3 */
+    return on;
+}
+static void pane_note(void)             /* a depth-only clear of part of the eyes: a pane */
+{
+    const int x0 = g_vp[0], y0 = g_vp[1], x1 = g_vp[0] + g_vp[2], y1 = g_vp[1] + g_vp[3];
+    if (g_vp[2] <= 0 || g_vp[3] <= 0 || (x0 <= 0 && y0 <= 0 && x1 >= GAME_W && y1 >= GAME_H)) return;
+    if (g_pane_frame != g_frame) { g_pane_frame = g_frame; g_pane[0] = x0; g_pane[1] = y0; g_pane[2] = x1; g_pane[3] = y1; return; }
+    if (x0 < g_pane[0]) g_pane[0] = x0;
+    if (y0 < g_pane[1]) g_pane[1] = y0;
+    if (x1 > g_pane[2]) g_pane[2] = x1;
+    if (y1 > g_pane[3]) g_pane[3] = y1;
+}
+static int pane_prelude_begin(void)     /* a dropped colour clear: 1 if it starts a pane's prelude */
+{
+#ifdef LINDBERGH_GL4ES
+    if (!pane_prelude_on() || g_pane_frame != g_frame || g_side || !g_flat) return 0;
+    if (g_pane[0] <= 0 && g_pane[1] <= 0 && g_pane[2] >= GAME_W && g_pane[3] >= GAME_H) return 0;   /* every pane drawn */
+    side_pass(1);
+    g_pane_side = 1;
+    const int sc = glIsEnabled(GL_SCISSOR_TEST);
+    if (sc) glDisable(GL_SCISSOR_TEST);
+    glClear(GL_DEPTH_BUFFER_BIT);       /* the target's depth as the clear value (the game's own clear has none) */
+    if (sc) glEnable(GL_SCISSOR_TEST);
+    static unsigned told; static int n;
+    if (n < 3 || g_frame - told > 600) { n++; told = g_frame;
+        fprintf(stderr, "[stereo] frame %u: split screen: the next pane's clear, shadows and mask copy drawn apart (panes so far %d,%d-%d,%d)\n",
+                g_frame, g_pane[0], g_pane[1], g_pane[2], g_pane[3]); }
+    return 1;
+#else
+    return 0;
+#endif
+}
+static void pane_prelude_end(void)
+{
+    if (!g_pane_side) return;
+    g_pane_side = 0;
+    side_pass(0);
 }
 
 /* Virtua Tennis 3, Immersive: the ground shadow mask per eye at the eye's
@@ -2228,6 +2296,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
         return 1;
     }
     if (k == K_BINDFB) {
+        pane_prelude_end();
         bind_framebuffer(A32(0), A32(1));
         return 1;
     }
@@ -2258,8 +2327,11 @@ static int transform_call(CPU *c, HleId id, const char *n)
          * for a composite that is left out here: once anything is drawn in a
          * flat frame, a colour clear of the screen would leave only the HUD on
          * black - it goes. */
+        if (g_pane_side && (mask & GL_DEPTH_BUFFER_BIT) && !(mask & GL_COLOR_BUFFER_BIT)) pane_prelude_end();   /* the pane itself: the eyes */
+        if (g_on && g_mv && !g_side && g_game_fb == 0 && mask == GL_DEPTH_BUFFER_BIT) pane_note();
         if (g_on && g_mv && !g_side && g_game_fb == 0 && (mask & GL_COLOR_BUFFER_BIT) &&
             ((g_scene_draws && g_eyes_copied_frame == g_frame) || (g_flat && g_eye_draws))) {
+            if (pane_prelude_begin()) return 0;     /* the clear as the game made it, into the side target */
             mask &= ~(GLbitfield)GL_COLOR_BUFFER_BIT;
             if (!mask) return 1;
             wr32(c->esp, mask);
@@ -2268,7 +2340,8 @@ static int transform_call(CPU *c, HleId id, const char *n)
             static long dl = -2, dl1;
             if (dl == -2) { const char *v = getenv("LINDBERGH_DRAW_LOG"); dl = v ? atol(v) : -1; dl1 = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : dl; }
             if ((long)g_frame == g_cap_frame || (long)g_frame + 1 == g_cap_frame || (long)g_frame == g_draw_log_frame || (dl >= 0 && (long)g_frame >= dl && (long)g_frame <= dl1))
-                fprintf(stderr, "[units] frame %u clear %#x fb %u vp %d,%d %dx%d side %d\n", g_frame, mask, (unsigned)g_game_fb, g_vp[0], g_vp[1], g_vp[2], g_vp[3], g_side);
+                fprintf(stderr, "[units] frame %u clear %#x fb %u vp %d,%d %dx%d side %d scissor %d %d,%d %dx%d\n", g_frame, mask, (unsigned)g_game_fb, g_vp[0], g_vp[1], g_vp[2], g_vp[3], g_side,
+                        g_scissor_on, g_game_scissor[0], g_game_scissor[1], g_game_scissor[2], g_game_scissor[3]);
         }
         if (g_mv && g_pbuffers && (g_game_fb == 0 || g_side)) {
             /* Only a clear with colour starts a side pass: the passes above
@@ -4482,6 +4555,7 @@ void stereo_frame_begin(void)
     g_eye = 0;
     /* The game's state carries over from the end of the frame; only the
      * framebuffer and projection depend on the eye. */
+    pane_prelude_end();                        /* a prelude never ended: the eyes again (bound below) */
     eye_targets();
     glBindFramebuffer(GL_FRAMEBUFFER, g_game_fb ? g_game_fb : g_eye_fbo[0]);
     GLenum mode = g_mode;
