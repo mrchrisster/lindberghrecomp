@@ -39,13 +39,13 @@ typedef struct {
     int language;               /* "language english|japanese": 1 English (the cabinet's region export), 0
                                  * Japanese; applies on the next start (Virtua Tennis 3) */
     int msaa;                   /* "msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer (VR and
-                                 * Classic on the headset; 0 off, today's); applies on the next start */
+                                 * Classic on the headset; 0 off; default 2x since 2026-11-12); applies on the next start */
     int save;                   /* "save on|off": Save progress - 1P's card record kept in vt3_save.bin
                                  * (Virtua Tennis 3, both modes; default on since T21 - absent = on, an
                                  * explicit "save off" stays off); applies on the next start */
     int aniso;                  /* "aniso 0|2|4|8|16": anisotropic filtering of the game's mipmapped world
                                  * textures (Texture filtering Standard / Sharp 4x / Sharp 8x; 0 = the
-                                 * game's own filtering); applies on the next start */
+                                 * game's own filtering; default 4 since 2026-11-12); applies on the next start */
     char save_name[16];         /* "save_name PLAYER": the name a Save progress record carries (shown on the
                                  * result slate; up to 10 of A-Z 0-9 - xr_settings_save_name); no panel row */
 } LgXrSettings;
@@ -66,10 +66,11 @@ typedef struct {
 /* ... dual off, stats panel on (vr.cfg "stats off" hides it), medium foveation, arcade overlays shown, replays on;
  * Classic mode, shadows 1024, cutaways on; Immersive: replays, overlays and cutaways off,
  * 200 units closer and 50 back (fixed: no rows since T12), the stadium's own sky, shadows
- * 2048, Camera height Medium (+1 m; T13). (The stands' stretch,
+ * 4096, Camera height Medium (+1 m; T13); Anti-aliasing 2x, Texture filtering Sharp 4x
+ * (both modes; the owner's worn choice, 2026-11-12 - VR shadows 4096 too). (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,4096,10,0,1,2,1,4,LG_XR_SAVE_NAME_DEFAULT}
 /* Save progress's record name (save_name): Virtua Tennis 3's name entry
  * takes up to 10 characters; letters and digits only (the font's, and one
  * vr.cfg token) */

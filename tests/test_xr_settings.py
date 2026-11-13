@@ -57,9 +57,9 @@ int main(void) {
             self.assertEqual(self.run_settings(d,{"LINDBERGH_XR_SET":"width=-1,resolution=1,screen=0,scale=-2"}),NATIVE+" 120 1.000 3.000 0 0 0")
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
-               "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
-               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0","save":"on",
-               "aniso":"0","save_name":"PLAYER"}
+               "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"4096",
+               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"2","save":"on",
+               "aniso":"4","save_name":"PLAYER"}
 
     @staticmethod
     def parse(text):
@@ -136,7 +136,7 @@ int main(void) {
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             self.assertNotIn("bogus",saved);self.assertNotIn("future.key",saved)
-            self.assertEqual(saved["mode"],"immersive");self.assertEqual(saved["immersive.shadow"],"2048")
+            self.assertEqual(saved["mode"],"immersive");self.assertEqual(saved["immersive.shadow"],"4096")
             self.assertNotIn("immersive.stand_y",saved);self.assertNotIn("immersive.dolly",saved)
 
     def test_step_back_gone_and_height_low_medium_high(self):

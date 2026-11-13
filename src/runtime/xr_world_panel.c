@@ -213,9 +213,11 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
         c->imm_replays = d.imm_replays; c->imm_overlays = d.imm_overlays; c->imm_cutaways = d.imm_cutaways;
         c->imm_height = d.imm_height;
         c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow;
+        c->aniso = d.aniso;     /* Texture filtering: a row on both advanced pages (one value) */
     } else {
         c->replays = d.replays; c->arcade_overlays = d.arcade_overlays; c->classic_card_notice = d.classic_card_notice;
         c->classic_cutaways = d.classic_cutaways; c->classic_shadow = d.classic_shadow;
+        c->aniso = d.aniso;
     }
 }
 

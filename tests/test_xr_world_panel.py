@@ -58,7 +58,7 @@ int main(void) {
     assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
     assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Medium"));   /* default Medium (T13) */
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
-    assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
+    assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "Very high 4096"));   /* default 4096 (2026-11-12) */
     assert(!strcmp(it[XW_SKY].label, "Sky"));
     assert(!strcmp(xw_hint(&w), "Applies when VR mode runs."));
     /* the non-running mode's page: saved, not live */
@@ -87,13 +87,13 @@ int main(void) {
     xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "Low"));
     xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);
     c.imm_height = -20; xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);   /* an old -2 m: from Low */
-    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 4096);
-    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);
+    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);    /* from the default 4096 */
+    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 2048);
     /* restore: two pulls */
     fx = xw_choose(&w, &c, XW_RESTORE); assert(w.restore_armed && !(fx & XP_SAVE));
     xw_items(&w, &c, it); assert(!strcmp(it[XW_RESTORE].value, "Pull again to restore"));
     fx = xw_choose(&w, &c, XW_RESTORE); assert((fx & XP_SAVE) && !w.restore_armed);
-    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 10 && c.imm_shadow == 2048 && c.imm_replays == 0);
+    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 10 && c.imm_shadow == 4096 && c.imm_replays == 0);
     xw_choose(&w, &c, XW_RESTORE); xw_choose(&w, &c, XW_SKY); assert(!w.restore_armed);    /* another row disarms */
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_MAIN);
     /* the running mode's page: live; a pinned row shows the run's value and ignores clicks */
@@ -139,11 +139,13 @@ int main(void) {
       lw.pins = 1u << WM_LANGUAGE; lw.eff.language = 1;
       xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English (env.txt)"));
       assert(xw_choose(&lw, &lc, XW_LANGUAGE) == 0); }
-    /* Anti-aliasing on the main page (both modes), Off by default, Off > 2x > 4x > Off, on restart (T17) */
+    /* Anti-aliasing on the main page (both modes), 2x by default (2026-11-12), Off > 2x > 4x > Off, on restart (T17) */
     { XwState aw; memset(&aw, 0, sizeof aw); LgXrSettings ac = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&ac, 0, 1, 0, &aw.eff, NULL);
       int ar[XW_ROWS_MAX], an = xw_page_rows(&aw, &ac, ar);
-      assert(has(ar, an, XW_ROW(XW_MSAA)) && ac.msaa == 0 && aw.eff.msaa == 0);
+      assert(has(ar, an, XW_ROW(XW_MSAA)) && ac.msaa == 2 && aw.eff.msaa == 2);
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x"));
+      ac.msaa = 0; aw.eff.msaa = 0;          /* from Off, through the cycle */
       aw.page = XW_PAGE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
       aw.page = XW_PAGE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
       aw.page = XW_PAGE_MAIN;
@@ -197,11 +199,12 @@ int main(void) {
           rw.reset_save_armed = 0;
       }
       rw.page = XW_PAGE_MAIN; assert(xw_choose(&rw, &rc, XW_RESET_SAVE) == 0); }
-    /* Texture filtering on both Advanced pages (one value), Standard by default, Standard > Sharp 4x > Sharp 8x, on restart */
+    /* Texture filtering on both Advanced pages (one value), Sharp 4x by default (2026-11-12), Standard > Sharp 4x > Sharp 8x, on restart */
     { XwState tw; memset(&tw, 0, sizeof tw); LgXrSettings tc = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&tc, 0, 1, 0, &tw.eff, NULL);
       int tr[XW_ROWS_MAX], tn = xw_page_rows(&tw, &tc, tr);
-      assert(!has(tr, tn, XW_ROW(XW_ANISO)) && tc.aniso == 0 && tw.eff.aniso == 0);
+      assert(!has(tr, tn, XW_ROW(XW_ANISO)) && tc.aniso == 4 && tw.eff.aniso == 4);
+      tc.aniso = 0; tw.eff.aniso = 0;        /* from Standard, through the cycle */
       tw.page = XW_PAGE_CLASSIC; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].label, "Texture filtering") && !strcmp(it[XW_ANISO].value, "Standard"));
       assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
@@ -213,7 +216,8 @@ int main(void) {
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Standard (on restart)"));
       tc.aniso = 16; assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 0);        /* 16 (env / hand edit) -> 8 nearest -> Standard */
       tc.aniso = 2; assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
-      xw_restore_defaults(&tc, 1); assert(tc.aniso == 4);                                      /* Restore defaults keeps it */
+      tc.aniso = 8; xw_restore_defaults(&tc, 1); assert(tc.aniso == 4);                        /* Restore defaults: back to Sharp 4x */
+      tc.aniso = 0; xw_restore_defaults(&tc, 0); assert(tc.aniso == 4);                        /* (either page) */
       tw.pins = 1u << WM_ANISO; tw.eff.aniso = 16;
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 16x (env.txt)"));
       assert(xw_choose(&tw, &tc, XW_ANISO) == 0 && tc.aniso == 4); }
