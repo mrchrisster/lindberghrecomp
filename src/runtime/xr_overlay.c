@@ -74,7 +74,17 @@ static GLuint prog_gun, prog_beam, vao_gun, vbo_gun, vao_beam, vbo_beam;
 static GLuint prog_depth, smp_depth;    /* the world's depth, copied for the headset */
 static GLint  u_depth_d, u_depth_layer, u_depth_size;
 static GLuint prog_screen[2], vao_screen, vbo_screen, smp_screen;   /* [0] a 2D texture, [1] a layer of an array */
-static GLint u_screen_mvp[2], u_screen_tex[2], u_screen_layer[2];
+static GLint u_screen_mvp[2], u_screen_tex[2], u_screen_layer[2], u_screen_taps[2];
+#define XO_SCREEN_BOX \
+    "void main() {\n" \
+    "  vec2 s = tsize(), dx = dFdx(t) * s, dy = dFdy(t) * s;\n" \
+    "  vec2 f = max(abs(dx) + abs(dy), vec2(1.0));           /* the pixel's footprint, texels */\n" \
+    "  vec2 n = clamp(ceil(f), vec2(1.0), vec2(taps));\n" \
+    "  vec2 st = f / n / s; vec3 c = vec3(0.0);\n" \
+    "  for (int j = 0; j < 4; j++) { if (float(j) >= n.y) break;\n" \
+    "    for (int i = 0; i < 4; i++) { if (float(i) >= n.x) break;\n" \
+    "      c += tap(t + (vec2(float(i), float(j)) - 0.5 * (n - 1.0)) * st); } }\n" \
+    "  o = vec4(c / (n.x * n.y), 1.0); }\n"
 static GLuint prog_panel;
 static GLint u_panel_mvp, u_panel_tex;
 static GLint u_gun_mvp, u_gun_model, u_beam_mvp, u_beam_color, u_beam_shape;
@@ -161,14 +171,24 @@ int xo_init(void)
         prog_screen[a] = program(
             XO_GLSL "layout(location=0) in vec2 p; uniform mat4 mvp; out vec2 t;\n"
             "void main() { t = p * 0.5 + 0.5; gl_Position = mvp * vec4(p, 0.0, 1.0); }\n",
-            a ? XO_GLSL "precision highp float; precision highp sampler2DArray; in vec2 t; uniform sampler2DArray tex; uniform float layer; out vec4 o;\n"
-                "void main() { o = vec4(texture(tex, vec3(t, layer)).rgb, 1.0); }\n"
-              : XO_GLSL "precision highp float; in vec2 t; uniform sampler2D tex; out vec4 o;\n"
-                "void main() { o = vec4(texture(tex, t).rgb, 1.0); }\n",
+            /* The picture is shrunk onto the screen (Classic's eye-sized picture
+             * ~2 x 4 texels an eye pixel; 1.5 x 1.5 with the picture-sized one):
+             * one bilinear tap then skips texels, and thin lines and fine
+             * detail sparkle as the head moves. A box over the pixel's
+             * footprint instead: up to 4 x 4 bilinear taps spread across it
+             * (1 tap where the picture is not shrunk). taps = 1: one tap, as
+             * before (LINDBERGH_SCREEN_FILTER=0). */
+            a ? XO_GLSL "precision highp float; precision highp sampler2DArray; in vec2 t; uniform sampler2DArray tex; uniform float layer; uniform float taps; out vec4 o;\n"
+                "vec3 tap(vec2 u) { return texture(tex, vec3(u, layer)).rgb; }\n"
+                "vec2 tsize() { return vec2(textureSize(tex, 0).xy); }\n" XO_SCREEN_BOX
+              : XO_GLSL "precision highp float; in vec2 t; uniform sampler2D tex; uniform float layer; uniform float taps; out vec4 o;\n"
+                "vec3 tap(vec2 u) { return texture(tex, u).rgb; }\n"
+                "vec2 tsize() { return vec2(textureSize(tex, 0)); }\n" XO_SCREEN_BOX,
             "p", NULL, NULL);
         u_screen_mvp[a] = gl.GetUniformLocation(prog_screen[a], "mvp");
         u_screen_tex[a] = gl.GetUniformLocation(prog_screen[a], "tex");
         u_screen_layer[a] = gl.GetUniformLocation(prog_screen[a], "layer");
+        u_screen_taps[a] = gl.GetUniformLocation(prog_screen[a], "taps");
     }
     prog_panel = program(   /* the panel's picture: row 0 at the top */
         XO_GLSL "layout(location=0) in vec2 p; uniform mat4 mvp; out vec2 t;\n"
@@ -441,6 +461,9 @@ void xo_draw_screen(const float mvp[16], unsigned tex, int array_layer0, int lay
     gl.UniformMatrix4fv(u_screen_mvp[a], 1, GL_FALSE, mvp);
     gl.Uniform1i(u_screen_tex[a], 0);
     if (u_screen_layer[a] >= 0) gl.Uniform1f(u_screen_layer[a], (float)layer);
+    static float taps = -1;     /* LINDBERGH_SCREEN_FILTER=0: one bilinear tap (before 2026-11-13) */
+    if (taps < 0) { const char *v = getenv("LINDBERGH_SCREEN_FILTER"); taps = v && *v == '0' ? 1.0f : 4.0f; }
+    if (u_screen_taps[a] >= 0) gl.Uniform1f(u_screen_taps[a], taps);
     gl.BindTexture(target, tex);
     gl.BindSampler(0, smp_screen);
     gl.BindVertexArray(vao_screen);

@@ -2022,18 +2022,31 @@ void xr_frame_end(void)
                 proj[11] = -1; proj[14] = -2 * clip_far * n / (clip_far - n);
                 mat4_mul(m, view, place);
                 mat4_mul(m, proj, m);
+                {   /* once per screen size: how many eye pixels the screen covers, against the picture drawn */
+                    static float told_hw;
+                    if (i == 0 && told_hw != hw) {
+                        int pw = 0, ph = 0; stereo_eye_dims(&pw, &ph); told_hw = hw;
+                        fprintf(stderr, "[xr] flat screen: %.0f x %.0f eye pixels (%.0f deg across), the picture %dx%d - %.2f x %.2f texels a pixel\n",
+                                e->w * hw / (d * tx), e->h * hh / (d * ty), 2 * atanf(hw / d) * 57.2958f, pw, ph,
+                                pw / (e->w * hw / (d * tx)), ph / (e->h * hh / (d * ty)));
+                    }
+                }
                 xo_draw_screen(m, layers ? layers : stereo_eye_texture(0), layers != 0, layers && stereo_screen_3d() ? i : 0, (int)e->w, (int)e->h);
-            } else
-                gl.BlitFramebuffer(0, 0, (GLint)e->w, (GLint)e->h, 0, 0, (GLint)e->w, (GLint)e->h,
-                                   GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            } else {
+                int pw = 0, ph = 0; stereo_eye_dims(&pw, &ph);      /* (Classic's picture-sized eyes: stretched) */
+                if (pw <= 0 || ph <= 0) { pw = (int)e->w; ph = (int)e->h; }
+                gl.BlitFramebuffer(0, 0, pw, ph, 0, 0, (GLint)e->w, (GLint)e->h,
+                                   GL_COLOR_BUFFER_BIT, pw == (int)e->w && ph == (int)e->h ? GL_NEAREST : GL_LINEAR);
+            }
             static int colour_check = -1;   /* LINDBERGH_COLOUR_CHECK=1: reading back stalls the GPU, a hitch each time */
             if (colour_check < 0) { const char *v = getenv("LINDBERGH_COLOUR_CHECK"); colour_check = v && *v == '1'; }
             if (colour_check && i == 0 && g_frame % 600 == 300) {
                 /* the game's centre pixel, and what the copy stored in the
                  * swapchain: equal unless the copy encoded it as sRGB again */
                 unsigned char a[4] = { 0 }, b[4] = { 0 };
+                int pw = 0, ph = 0; stereo_eye_dims(&pw, &ph);
                 GLint cx = (GLint)e->w / 2, cy = (GLint)e->h / 2;
-                gl.ReadPixels(cx, cy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, a);
+                gl.ReadPixels(pw > 0 ? pw / 2 : cx, ph > 0 ? ph / 2 : cy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, a);
                 gl.BindFramebuffer(GL_READ_FRAMEBUFFER, e->fb[e->acquired]);
                 gl.ReadPixels(cx, cy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, b);
                 gl.BindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);

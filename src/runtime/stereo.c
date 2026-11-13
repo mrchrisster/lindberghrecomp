@@ -4657,8 +4657,40 @@ void stereo_vt3_camera_post(unsigned mode, float lens)
 /* ---- the host's side ---- */
 int stereo_enabled(void) { return g_on; }
 
+/* Classic's picture at its own shape (2026-11-13, step 1 of ai_docs/research/
+ * classic-mode-simplification.md in virtuatennis3-vr): in Classic every frame is
+ * the arcade's flat picture, which the host puts on the screen quad - drawn into
+ * eye-sized layers (2064x2208) it was stretched 1.52 x 2.88 and then shrunk ~2x
+ * across and ~4x down onto the quad by one bilinear tap: thin lines and the
+ * grass's detail sparkled with every small head movement (the owner's "texture
+ * flicker"). Now the eye array is the game's picture times k (1360k x 768k, the
+ * same scale both ways); multiview, MSAA and every eye-scaled target follow
+ * g_ew / g_eh as before. LINDBERGH_CLASSIC_PIC=<k> (0.5 - 3; default 1.5),
+ * LINDBERGH_CLASSIC_PIC=0: eye-sized as before. Immersive (or LINDBERGH_FLAT_ALL=0):
+ * unchanged. Decided once, at start (the mode applies on restart). */
+float stereo_classic_pic(void)
+{
+    static float k = -1;
+    if (k < 0) {
+        const char *v = getenv("LINDBERGH_CLASSIC_PIC"), *fa = getenv("LINDBERGH_FLAT_ALL");
+        k = v && *v ? (float)atof(v) : 1.5f;
+        if (!(k >= 0.5f && k <= 3.0f)) k = 0;
+        if (!world_mode_capable() || world_mode_immersive() || (fa && *fa == '0')) k = 0;
+    }
+    return k;
+}
 void stereo_eye_size(int w, int h)
 {
+    const float k = stereo_classic_pic();
+    if (k > 0) {
+        int gw = 0, gh = 0;
+        lindbergh_window_size(&gw, &gh);
+        if (gw <= 0 || gh <= 0) { gw = GAME_W; gh = GAME_H; }
+        const int pw = ((int)lroundf(gw * k) + 1) & ~1, ph = ((int)lroundf(gh * k) + 1) & ~1;
+        fprintf(stderr, "[stereo] Classic: the picture drawn %dx%d (x%.2f of the game's %dx%d), not %dx%d (LINDBERGH_CLASSIC_PIC)\n",
+                pw, ph, k, gw, gh, w, h);
+        w = pw; h = ph;
+    }
     g_ew = w; g_eh = h;
     g_sx = (float)w / GAME_W; g_sy = (float)h / GAME_H;
     g_cur_k[0] = g_sx; g_cur_k[1] = g_sy;
