@@ -1918,7 +1918,7 @@ static unsigned g_mask_frame = ~0u;         /* the frame the twin holds this fra
 static int mask_on(void)
 {
     static int on = -1;
-    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_MASK"); on = world_mode_immersive() && v && *v == '1'; }   /* opt-in: broken on the Quest */
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_MASK"); on = world_mode_immersive() && !(v && *v == '0'); }   /* default on in Immersive (T23 H1) */
     return on;
 }
 int stereo_mask_twin(unsigned tex, float inv[2], unsigned *twin)

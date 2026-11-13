@@ -1195,7 +1195,7 @@ static int vt3_mask_unit(void)
         const char *v = getenv("LINDBERGH_VT3_MASK");
         u = -1;
 #ifdef LINDBERGH_GL4ES
-        if (world_mode_immersive() && gl4es_mv_shaders && vt3_screen_fix() && v && *v == '1') {   /* opt-in: shadows vanish with it on the Quest (HANDOFF 3.1) */
+        if (world_mode_immersive() && gl4es_mv_shaders && vt3_screen_fix() && !(v && *v == '0')) {   /* default on (T23 H1: both eyes' shadows right on the Quest) */
             GLint n = 0; glGetIntegerv(GL_MAX_TEXTURE_UNITS, &n);
             u = (n > 16 ? 16 : n) - 1;
             if (u < 4) u = -1;
