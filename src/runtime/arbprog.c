@@ -40,6 +40,7 @@
 #include "gl_posix.h"
 #include "arbprog.h"
 #include "game_profile.h"
+static int vt3_mask_unit(void);
 /* GLES has no GL_TEXTURE_LOD_BIAS; gl4es keeps what the game set per texture
  * (gl4es_texture_lod_bias) and fragment programs pass it as texture2D's bias
  * argument, u_lodb[unit] (Virtua Tennis 3 asks -1 for its crowd, boards and
@@ -1044,6 +1045,14 @@ static int emit_instr(Tr *t, char *stmt)
         }
         else if (target == 4 && getenv("LINDBERGH_CUBE_GREY") && *getenv("LINDBERGH_CUBE_GREY") == '1')
             snprintf(r, sizeof r, "vec4(0.5, 0.5, 0.5, 1.0)");   /* LINDBERGH_CUBE_GREY=1: every cube map lookup a flat grey (is the cube map what is missing?) */
+        else if (proj && target == 2 && t->stage == 1 && (g_tr_scr >> unit & 1) && vt3_mask_unit() >= 0)
+            /* a screen copy: u_scr.x < 0 - the ground shadow mask's per-eye twin at this
+             * fragment (stereo.c mask_copy; u_scr.xy = (-1/eye width, +1/eye height):
+             * only x carries the sign - negating both, as the first version did, read
+             * the twin at y < 0, its clamped bottom row, and the shadows vanished);
+             * > 0 - where the first eye drew this point */
+            snprintf(r, sizeof r, "(u_scr[%d].x < 0.0 ? lg_mask(vec2(-u_scr[%d].x, u_scr[%d].y)) : u_scr[%d].x != 0.0 ? texture2D(s2_%d, (lg_eye0.xy / lg_eye0.w * 0.5 + 0.5) * u_scr[%d].xy + u_scr[%d].zw) : texture2DProj(s2_%d, %s))",
+                     unit, unit, unit, unit, unit, unit, unit, unit, X(0));
         else if (proj && target == 2 && t->stage == 1 && (g_tr_scr >> unit & 1))   /* a screen copy, where the eye drew this point */
             snprintf(r, sizeof r, "(u_scr[%d].x != 0.0 ? texture2D(s2_%d, (lg_eye0.xy / lg_eye0.w * 0.5 + 0.5) * u_scr[%d].xy + u_scr[%d].zw) : texture2DProj(s2_%d, %s))",
                      unit, unit, unit, unit, unit, X(0));
@@ -1175,6 +1184,37 @@ static const char k_sky_pre[] =
     "  if (u_sky.x > 0.0 && dot(gl_Vertex.xyz, gl_Vertex.xyz) > u_sky.x) { lg_sk = 1.0; gl_Position.z = u_sky.z - u_sky.y * gl_Position.w; }\n";
 static const char k_sky_post[] =
     "  if (lg_sk > 0.5) { if (u_sky.w < 0.0) gl_Position = vec4(0.0, 0.0, 2.0, 1.0); else gl_Position.z = gl_Position.w * u_sky.w; }\n";
+/* Virtua Tennis 3, Immersive: the unit the ground shadow mask's per-eye twin
+ * is bound on for programs reading a screen copy (stereo.c mask_copy), -1
+ * off (LINDBERGH_VT3_MASK=0, Classic, no multiview shaders). The last unit
+ * gl4es has; the game's programs use the low ones. */
+static int vt3_mask_unit(void)
+{
+    static int u = -2;
+    if (u == -2) {
+        const char *v = getenv("LINDBERGH_VT3_MASK");
+        u = -1;
+#ifdef LINDBERGH_GL4ES
+        if (world_mode_immersive() && gl4es_mv_shaders && vt3_screen_fix() && v && *v == '1') {   /* opt-in: shadows vanish with it on the Quest (HANDOFF 3.1) */
+            GLint n = 0; glGetIntegerv(GL_MAX_TEXTURE_UNITS, &n);
+            u = (n > 16 ? 16 : n) - 1;
+            if (u < 4) u = -1;
+            fprintf(stderr, "[arbprog] ground shadow mask read per eye on unit %d (%d units)\n", u, (int)n);
+        }
+#else
+        (void)v;
+#endif
+    }
+    return u;
+}
+/* 5 taps, ~1.3 eye pixels apart: soft edges for the hard planar shadows */
+static const char k_mask_fn[] =
+    "vec4 lg_mask(vec2 inv) {\n"
+    "  vec2 p = gl_FragCoord.xy; float r = 1.3;\n"
+    "  return 0.2 * (texture2D(sl_%d, vec3(p * inv, gl4es_layer))\n"
+    "    + texture2D(sl_%d, vec3((p + vec2(r, r)) * inv, gl4es_layer)) + texture2D(sl_%d, vec3((p + vec2(-r, r)) * inv, gl4es_layer))\n"
+    "    + texture2D(sl_%d, vec3((p + vec2(r, -r)) * inv, gl4es_layer)) + texture2D(sl_%d, vec3((p + vec2(-r, -r)) * inv, gl4es_layer)));\n"
+    "}\n";
 static const char k_ground_decl[] = "uniform vec4 u_gnd;\nuniform mat4 u_gP, u_gPi;\n";
 /* A planar shadow is right on the game camera's screen and nowhere else (it
  * moved with the head): taken along that camera's ray to the court plane
@@ -1399,6 +1439,11 @@ static char *translate(int stage, const char *src_in, Tr *t)
         if (vt3_screen_fix() && (!stage || g_tr_scr)) bput(&g, "varying vec4 lg_eye0;\n");
         if (stage && g_tr_scr) bput(&g, "uniform vec4 u_scr[16];\n");
         if (stage && lod_bias_on()) bput(&g, "uniform float u_lodb[16];\n");
+        if (stage && g_tr_scr && vt3_mask_unit() >= 0) {
+            const int mu = vt3_mask_unit();
+            if (!t->tex_target[mu]) bput(&g, "uniform sampler2DArray sl_%d;\n", mu);
+            bput(&g, k_mask_fn, mu, mu, mu, mu, mu);
+        }
         for (int a = 1; a < 16; a++) if (t->attrib_used[a]) bput(&g, "attribute vec4 va_%d;\n", a);
         if (!stage && t->gen_alias) bput(&g, "uniform float u_gen[16];\n");
         bput(&g, "vec4 arb_lit(vec4 s) {\n"
@@ -2047,6 +2092,16 @@ static void upload(Linked *l)
             GLint tex = 0;
             glActiveTexture(GL_TEXTURE0 + u);
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+            {   /* the mask's per-eye twin this frame: read at the fragment (u_scr.x < 0), the twin on the mask unit */
+                extern int stereo_mask_twin(unsigned tex, float inv[2], unsigned *twin);
+                float inv[2]; unsigned twin = 0; const int mu = vt3_mask_unit();
+                if (mu >= 0 && stereo_mask_twin((unsigned)tex, inv, &twin)) {
+                    m[u][0] = -inv[0]; m[u][1] = inv[1]; m[u][2] = m[u][3] = 0;
+                    glActiveTexture(GL_TEXTURE0 + mu);
+                    glBindTexture(GL_TEXTURE_2D, twin);
+                    continue;
+                }
+            }
             if (!stereo_screen_copy_map((unsigned)tex, m[u])) { m[u][0] = m[u][1] = 1; }
         }
         glActiveTexture((GLenum)active);

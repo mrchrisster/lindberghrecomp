@@ -1899,6 +1899,62 @@ static void side_pass(int on)
 #endif
 }
 
+/* Virtua Tennis 3, Immersive: the ground shadow mask per eye at the eye's
+ * size. The game copies the whole screen into a 1360x768 texture right after
+ * drawing the players' planar shadows (and before the stadium), and the
+ * ground reads it back. From the eyes that copy is the first eye squeezed
+ * 2.9x down - the jagged, crawling ground shadow. At that copy (the frame's
+ * first whole-screen copy from the eyes; the other two each match frame come
+ * after the stadium, for the depth-of-field chain) both eye layers are also copied 1:1
+ * into an eye-sized 2-layer twin (gl4es_multiview_copy_layers); a program
+ * reading the game's copy in a world draw then reads the twin at its own
+ * fragment's position in its own eye (arbprog.c, u_scr < 0), softly (5 taps).
+ * A later copy into the same texture this frame (the depth-of-field chain's)
+ * ends the twin's use for the frame. LINDBERGH_VT3_MASK=0: the old path. */
+int gl4es_multiview_copy_layers(unsigned src, unsigned dst);
+static GLuint   g_mask_tex;                 /* the twin (a 2D texture whose gl4es array holds both eyes) */
+static GLuint   g_mask_src;                 /* the game's texture the mask was copied into */
+static unsigned g_mask_frame = ~0u;         /* the frame the twin holds this frame's mask */
+static int mask_on(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_MASK"); on = world_mode_immersive() && v && *v == '1'; }   /* opt-in: broken on the Quest */
+    return on;
+}
+int stereo_mask_twin(unsigned tex, float inv[2], unsigned *twin)
+{
+    if (!g_mask_tex || tex != g_mask_src || g_mask_frame != g_frame || g_flat) return 0;
+    inv[0] = 1.0f / (float)g_ew; inv[1] = 1.0f / (float)g_eh; *twin = g_mask_tex;
+    return 1;
+}
+static void mask_copy(GLuint tex)
+{
+#ifdef LINDBERGH_GL4ES
+    static unsigned first = ~0u;
+    const int is_first = first != g_frame;
+    first = g_frame;
+    if (tex == g_mask_src) g_mask_frame = ~0u;          /* any other copy into it: the twin no longer stands for it */
+    if (!mask_on() || g_flat || !is_first) return;
+    if (!g_mask_tex) {
+        GLint was = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &was);
+        glGenTextures(1, &g_mask_tex);
+        glBindTexture(GL_TEXTURE_2D, g_mask_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_ew, g_eh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)was);
+        fprintf(stderr, "[stereo] frame %u: ground shadow mask per eye, %dx%d x2 (game texture %u; LINDBERGH_VT3_MASK=0: the game's 1360x768)\n",
+                g_frame, g_ew, g_eh, tex);
+    }
+    if (gl4es_multiview_copy_layers(g_eye_tex[0], g_mask_tex)) { g_mask_src = tex; g_mask_frame = g_frame; }
+#else
+    (void)tex;
+#endif
+}
+
 static int copy_from_eyes(CPU *c, int k)
 {
     {   /* LINDBERGH_COPY_LOG=1: each distinct copy from the framebuffer into a texture */
@@ -1932,6 +1988,7 @@ static int copy_from_eyes(CPU *c, int k)
     int X0 = (int)lroundf(x * sx), Y0 = (int)lroundf(y * sy);
     int X1 = (int)lroundf((x + w) * sx), Y1 = (int)lroundf((y + h) * sy);
     gl4es_multiview_copy(g_side ? g_side_tex[0] : g_eye_tex[0], 0, X0, Y0, X1, Y1, (GLuint)tex, level, xo, yo, xo + w, yo + h);
+    if (!g_side && w >= GAME_W * 9 / 10 && h >= GAME_H * 9 / 10) mask_copy((GLuint)tex);
     if (!g_side && w >= GAME_W * 9 / 10 && h >= GAME_H * 9 / 10 && (g_scene_draws || (g_flat && g_eye_draws))) g_eyes_copied_frame = g_frame;
     if (!g_side && w >= GAME_W * 9 / 10 && h >= GAME_H * 9 / 10 && !screen_copy((GLuint)tex) && g_nscreen_copy < MAX_SCREEN_COPIES) {
         g_screen_copy[g_nscreen_copy++] = (GLuint)tex;
