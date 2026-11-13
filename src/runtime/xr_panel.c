@@ -102,3 +102,10 @@ int xp_hold_button(XpPanel *p,int pressed,int previous,int dual,int64_t time,int
     if(!dual&&pressed&&!previous)*held=time;
     if(!dual&&pressed&&*held&&time-*held>=1000000000){*held=0;toggle(p);return 1;}return 0;
 }
+
+int xp_row_shown(int item,int lever,int no_test_buttons)
+{
+    if(lever&&(item==XP_SIGHT||item==XP_LASER||item==XP_CROSSHAIR||item==XP_GUN||item==XP_HAND||item==XP_DUAL))return 0;
+    if(no_test_buttons&&(item==XP_TEST||item==XP_SERVICE))return 0;
+    return 1;
+}

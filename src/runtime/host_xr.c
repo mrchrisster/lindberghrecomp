@@ -337,7 +337,8 @@ static int nrates;
 
 /* The rows this game's panel shows, as item numbers: a lever cabinet
  * (Virtua Tennis 3) has no gun, so no sight, laser, crosshair, gun model,
- * hand or dual wield; the arcade overlays only for a game that can hide them.
+ * hand or dual wield; no Arcade Test / Service rows for a game that says so
+ * (no_test_buttons: VT3's Test ends the game); the arcade overlays only for a game that can hide them.
  * A game with a world mode (g_world_capable, Virtua Tennis 3) has pages
  * (xr_world_panel.c): the main page with Mode / Restart now / Advanced
  * settings, and an Advanced page per mode; their own rows are XP_COUNT + XW_x. */
@@ -353,14 +354,14 @@ static void menu_world_state(void)
 }
 static void menu_rows(void)
 {
-    const int lever = game_profile()->joystick;
+    const int lever = game_profile()->joystick, no_test = game_profile()->no_test_buttons;
     int rows[XW_ROWS_MAX], n = 0;
     if (g_world_capable) { menu_world_state(); n = xw_page_rows(&wpanel, &cfg, rows); }
     else for (int i = 0; i < XP_COUNT; i++) rows[n++] = i;
     menu_n = 0;
     for (int r = 0; r < n; r++) {
         const int i = rows[r];
-        if (lever && (i == XP_SIGHT || i == XP_LASER || i == XP_CROSSHAIR || i == XP_GUN || i == XP_HAND || i == XP_DUAL)) continue;
+        if (!xp_row_shown(i, lever, no_test)) continue;     /* gun rows on a lever cabinet; Test / Service when the game has none */
         if ((i == XP_OVERLAYS || i == XW_ROW(XW_OVERLAYS)) && !g_arcade_overlay_hooks) continue;
         if ((i == XP_REPLAYS || i == XW_ROW(XW_REPLAYS)) && !g_replay_hook) continue;
         if (i == XW_ROW(XW_CUTAWAYS) && !g_cutaway_hook) continue;

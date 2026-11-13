@@ -18,6 +18,10 @@ int xp_hit(const XpPanel *panel,const float origin[3],const float direction[3],f
 void xp_matrix(const XpPanel *panel,float model[16]);
 int xp_menu_button(XpPanel *panel,int pressed,int previous);
 int xp_hold_button(XpPanel *panel,int pressed,int previous,int dual,int64_t time,int64_t *held_since);
+/* whether a game's panel shows an XP_ item: a lever cabinet (lever) has no gun rows; a game with
+ * no_test_buttons (game_profile.h; Virtua Tennis 3) has no Arcade Test / Service rows. Items of
+ * world-mode pages (XP_COUNT + XW_x) are shown. */
+int xp_row_shown(int item,int lever,int no_test_buttons);
 #ifdef __cplusplus
 }
 #endif

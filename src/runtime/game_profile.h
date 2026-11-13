@@ -49,6 +49,9 @@ typedef struct {
                                  * objects; 0 reports no SGIX configs, the path Let's Go Jungle takes */
     int   joystick;             /* a lever and buttons, not a gun (Virtua Tennis 3): no reload on leaving the
                                  * window, and in the headset the thumbsticks are the lever */
+    int   no_test_buttons;      /* the operator's Test and Service switches are not offered: no panel rows, no
+                                 * desktop keys or Controls items (Virtua Tennis 3: Test ends the game - its main
+                                 * returns 9, the cabinet's hand-over to the test menu - and Service does nothing) */
 
     /* in the headset */
     struct {

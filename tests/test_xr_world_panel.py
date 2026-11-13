@@ -280,7 +280,7 @@ int main(void) {
             xw_items(&pw, &pc, wall);
             for (int i = 0; i < pn; i++) {
                 const int id = pr[i];
-                if (id == XP_SIGHT || id == XP_LASER || id == XP_CROSSHAIR || id == XP_GUN || id == XP_HAND || id == XP_DUAL) continue;
+                if (!xp_row_shown(id, 1, 1)) continue;     /* VT3: a lever cabinet without Test / Service rows */
                 rows[m++] = id < XP_COUNT ? all[id] : wall[id - XP_COUNT];
             }
             const char *page = getenv("LINDBERGH_TEST_PANEL_PAGE");

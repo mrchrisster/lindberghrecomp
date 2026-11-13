@@ -15,6 +15,7 @@
 #include <SDL_syswm.h>
 
 #include "host_settings.h"
+#include "game_profile.h"
 #include "xr_settings.h"
 #include "world_mode.h"
 #include "vt3_save.h"
@@ -52,6 +53,7 @@ static NSString *binding_title(HostAction a)
     if (menu == g_controls) {
         for (int a = 0; a < ACT_COUNT; a++) {
             if (a == ACT_COIN2) [menu addItem:[NSMenuItem separatorItem]];
+            if ((a == ACT_TEST || a == ACT_SERVICE) && game_profile()->no_test_buttons) continue;   /* not offered (VT3) */
             item(menu, binding_title((HostAction)a), @selector(rebind:), a);
         }
         [menu addItem:[NSMenuItem separatorItem]];

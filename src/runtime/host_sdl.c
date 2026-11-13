@@ -295,6 +295,8 @@ static void cabinet_action(HostAction a, int down)
     case ACT_COIN1: if (down) g_cab.coins[0]++; return;
     case ACT_COIN2: if (down) g_cab.coins[1]++; return;
     case ACT_MUTE:  if (down) host_audio_toggle_mute(); return;
+    case ACT_TEST: case ACT_SERVICE: if (game_profile()->no_test_buttons) return;   /* VT3: Test ends the game */
+        break;
     default: break;
     }
     unsigned bit = CAB_OF[a];
