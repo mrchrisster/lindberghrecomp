@@ -49,7 +49,22 @@ typedef struct LgXrSettings {
                                  * game's own filtering; VT3's default 4); applies on the next start */
     char save_name[16];         /* "save_name PLAYER": the name a Save progress record carries (shown on the
                                  * result slate; up to 10 of A-Z 0-9 - xr_settings_save_name); no panel row */
+    int screen_size;            /* "screen_size small|medium|big": the flat picture's size on the headset, by
+                                 * angle (LG_XR_SCREEN_SIZE_DEG); the panel's Screen size row in place of
+                                 * Screen distance (whose distance moved the screen but kept its angle, so
+                                 * it hardly changed anything). -1 (every game's default): no such setting,
+                                 * the Screen distance row as before, nothing written. Virtua Tennis 3: 1
+                                 * (Medium = the size before 2026-11-13); a file without the key takes it
+                                 * from its "screen" distance (xr_settings_screen_size_from) */
 } LgXrSettings;
+/* Screen size Small / Medium / Big: the flat picture's width in degrees (Medium = the arcade's
+ * picture as it always was: lens 1.732, 60 degrees across) */
+#define LG_XR_SCREEN_NSIZES 3
+static const float LG_XR_SCREEN_SIZE_DEG[LG_XR_SCREEN_NSIZES] = { 48.0f, 60.0f, 74.0f };
+/* the picture's scale for a screen_size: 1 for -1 / Medium */
+float xr_settings_screen_scale(int screen_size);
+/* an older file's Screen distance as a size: 2 m (nearest) Big, 2.5 - 3 m Medium, 4 - 5 m Small */
+int xr_settings_screen_size_from(float distance);
 /* Each eye's image by default: the headset's own panel, pixel for pixel.
  * OpenXR reports only a runtime-scaled recommendation, so the panel is the
  * build's: Quest 3 (Android) 2064x2208 per eye, Steam Frame (native Linux)
@@ -72,7 +87,7 @@ typedef struct LgXrSettings {
  * xr_settings_vt3_defaults. (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT,-1}
 /* Save progress's record name (save_name): Virtua Tennis 3's name entry
  * takes up to 10 characters; letters and digits only (the font's, and one
  * vr.cfg token) */

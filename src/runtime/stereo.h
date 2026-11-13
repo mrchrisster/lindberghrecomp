@@ -35,6 +35,8 @@ int  stereo_aims_on_hud(void);
 int  stereo_ray_to_hud(const float o[3], const float d[3], int head, float *x, float *y, float *reach);
 /* The HUD is drawn on a screen this far in front of the game camera. */
 void stereo_set_screen_distance(float d);
+/* a flat picture's size on the headset (Screen size): its width's tangent times k (1 = as the arcade's 60 degrees) */
+void stereo_set_screen_size(float k);
 /* A ray in game camera space -> the point it aims at on that screen, in the
  * game's 640x480 pixels. Returns 0 if it points away. */
 int  stereo_ray_to_screen(const float o[3], const float d[3], float *x, float *y);

@@ -142,6 +142,7 @@ static GLuint   g_rect_bound[8];        /* rectangle texture bound to each unit 
 static unsigned g_rect_on;              /* units with GL_TEXTURE_RECTANGLE enabled */
 static unsigned g_texmat_scaled;        /* units whose texture matrix fixed_function_rect() scaled */
 static float    g_screen_dist = 3.0f;   /* the HUD's screen, in game units from the camera */
+static float    g_screen_size = 1.0f;   /* a flat picture's scale on the headset (Screen size; 1 = lens 1.732) */
 static GLuint   g_hud_fb, g_hud_fb_next = ~0u; /* where the HUD went, last frame and this one */
 static int      g_scissor_on;           /* the game's scissor test */
 static GLint    g_scissor[4];           /* the game's scissor box, in eye pixels */
@@ -2557,7 +2558,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
             int lng = g_proj[g_proj_top][0] > zoom_limit() && !g_rv.active;   /* a replay / close-up in the world stays world */
             if (lng != g_flat) {
                 g_flat = lng; g_zoom_frames = lng ? 6 : 0;
-                if (g_flat) { g_screen_lens[0] = 1.732f; g_screen_lens[1] = 1.732f * GAME_W / GAME_H; }
+                if (g_flat) { g_screen_lens[0] = 1.732f / g_screen_size; g_screen_lens[1] = g_screen_lens[0] * GAME_W / GAME_H; }
                 g_proj_dirty = 1;
                 static int lg = -1; if (lg < 0) { const char *l = getenv("LINDBERGH_VT3_CUTLOG"); lg = l && *l == '1'; }
                 if (lg) fprintf(stderr, "[cut] frame %u: first eye draw's lens %.2f: %s from this frame\n", g_frame, g_proj[g_proj_top][0], lng ? "flat" : "world");
@@ -4547,7 +4548,7 @@ void stereo_frame_begin(void)
      * it has in play (lens 1.73). Kept as last followed, a scope coming up -
      * its lens ramps 2.4, 8.4, 11.4 over a few frames - left the screen a
      * third of its size, and the magnified picture looked like no zoom. */
-    if (g_flat) { g_screen_lens[0] = 1.732f; g_screen_lens[1] = 1.732f * GAME_W / GAME_H; }
+    if (g_flat) { g_screen_lens[0] = 1.732f / g_screen_size; g_screen_lens[1] = g_screen_lens[0] * GAME_W / GAME_H; }
     g_vt3_mode_now = g_vt3_cam_mode;
     g_hud_fb = g_hud_fb_next;           /* 3D drawn there this frame is screen content */
     g_world_fb = g_world_fb_next;
@@ -4738,6 +4739,7 @@ void stereo_reproject(float out[16])
 }
 
 void stereo_set_screen_distance(float d) { if (d > 0) g_screen_dist = d; }
+void stereo_set_screen_size(float k) { if (k > 0.2f && k < 5.0f) g_screen_size = k; }
 
 /* The depth this frame's world left in both eyes (a multiview array, layer
  * per eye) and the near and far planes it was drawn with, in game units: for

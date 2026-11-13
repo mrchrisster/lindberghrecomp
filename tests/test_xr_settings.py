@@ -135,7 +135,30 @@ int main(void) {
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text(self.OWNER)
             self.run_settings(d,{"VT3":"1"})
-            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER)
+            # the same, plus Screen size (2026-11-13): his 2.5 m reads as Medium
+            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER+"screen_size medium\n")
+            self.run_settings(d,{"VT3":"1"})
+            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER+"screen_size medium\n")
+
+    def test_vt3_screen_size(self):
+        # an older file's Screen distance picks the size: 2 m Big, 2.5 - 3 m Medium, 4 - 5 m Small; no screen key = Medium
+        for screen,want in (("2","big"),("2.5","medium"),("3","medium"),("4","small"),("5","small"),(None,"medium")):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d)/"vr.cfg").write_text(f"screen {screen}\n" if screen else "mode classic\n")
+                self.run_settings(d,{"VT3":"1"})
+                saved=self.parse((Path(d)/"vr.cfg").read_text())
+                self.assertEqual(saved["screen_size"],want,screen)
+                if screen:self.assertEqual(saved["screen"],screen)       # the distance itself kept
+        for stored,want in (("small","small"),("big","big"),("medium","medium"),("huge","medium")):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d)/"vr.cfg").write_text(f"screen 5\nscreen_size {stored}\n")     # the key wins over the distance
+                self.run_settings(d,{"VT3":"1"})
+                self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["screen_size"],want,stored)
+        with tempfile.TemporaryDirectory() as d:     # other games: no Screen size, nothing written
+            (Path(d)/"vr.cfg").write_text("screen 4\nscreen_size big\n")
+            self.run_settings(d)
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            self.assertNotIn("screen_size",saved);self.assertEqual(saved["screen"],"4")
 
     def test_vt3_explicit_values_kept_and_other_games_unchanged(self):
         with tempfile.TemporaryDirectory() as d:

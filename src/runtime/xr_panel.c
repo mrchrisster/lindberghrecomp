@@ -23,7 +23,11 @@ void xp_items(const XpPanel *menu,const LgXrSettings *cfg,int hand,int hud_locke
     snprintf(it[XP_STATS].value, 40, "%s", cfg->show_stats ? "On" : "Off");
     snprintf(it[XP_OVERLAYS].value, 40, "%s", cfg->arcade_overlays ? "Shown" : "Hidden");
     snprintf(it[XP_REPLAYS].value, 40, "%s", cfg->replays ? "On" : "Off");
-    snprintf(it[XP_SCREEN].value, 40, "%.1f m", cfg->screen);
+    if (cfg->screen_size >= 0) {         /* Screen size in place of Screen distance (VT3) */
+        static const char *const size[] = { "Small", "Medium", "Big" };
+        it[XP_SCREEN].label = "Screen size";
+        snprintf(it[XP_SCREEN].value, 40, "%s", size[cfg->screen_size > 2 ? 2 : cfg->screen_size]);
+    } else snprintf(it[XP_SCREEN].value, 40, "%.1f m", cfg->screen);
     if (!hud_locked) snprintf(it[XP_HUD].value, 40, "With the screen");
     else if (cfg->hud_pitch == 0) snprintf(it[XP_HUD].value, 40, "Centre");
     else snprintf(it[XP_HUD].value, 40, "%s %d deg", cfg->hud_pitch < 0 ? "Down" : "Up", abs(cfg->hud_pitch));
@@ -55,7 +59,8 @@ unsigned xp_choose(XpPanel *p,LgXrSettings *cfg,int *hand,int item,const float *
     case XP_STATS:cfg->show_stats=!cfg->show_stats;break;
     case XP_OVERLAYS:cfg->arcade_overlays=!cfg->arcade_overlays;effects|=XP_OVERLAYS_CHANGED;break;
     case XP_REPLAYS:cfg->replays=!cfg->replays;effects|=XP_REPLAYS_CHANGED;break;
-    case XP_SCREEN:{int k=0;while(k<5&&screens[k]<=cfg->screen+.01f)++k;cfg->screen=screens[k%5];effects|=XP_SCREEN_CHANGED;break;}
+    case XP_SCREEN:if(cfg->screen_size>=0){cfg->screen_size=(cfg->screen_size+1)%LG_XR_SCREEN_NSIZES;effects|=XP_SCREEN_CHANGED;break;}
+        {int k=0;while(k<5&&screens[k]<=cfg->screen+.01f)++k;cfg->screen=screens[k%5];effects|=XP_SCREEN_CHANGED;break;}
     case XP_HUD:{static const int pitches[]={0,-10,-20,-30,10};int k=0;while(k<5&&pitches[k]!=cfg->hud_pitch)++k;cfg->hud_pitch=pitches[(k+1)%5];effects|=XP_HUD_CHANGED;break;}
     case XP_RATE:if(nrates){int k=0;while(k<nrates&&rates[k]<=cfg->refresh+.5f)++k;cfg->refresh=(int)(rates[k%nrates]+.5f);effects|=XP_RATE_CHANGED;}break;
     case XP_RES:{/* smaller sizes at the headset's proportions, then its panel */

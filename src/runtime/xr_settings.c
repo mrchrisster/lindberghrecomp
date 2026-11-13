@@ -1,5 +1,6 @@
 #include "xr_settings.h"
 #include "xr_overlay.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,10 +17,21 @@ static int view_value(const char *v)
     for (int i = 0; i < 4; i++) if (!strcmp(v, VIEW_NAME[i])) return i;
     return !strcmp(v, "on") ? LG_VIEW_FLAT : LG_VIEW_OFF;
 }
+static const char *const SCREEN_SIZE_NAME[LG_XR_SCREEN_NSIZES] = { "small", "medium", "big" };
+float xr_settings_screen_scale(int v)
+{
+    if (v < 0 || v >= LG_XR_SCREEN_NSIZES) return 1.0f;
+    const float r = 3.14159265f / 360.0f;
+    return tanf(LG_XR_SCREEN_SIZE_DEG[v] * r) / tanf(LG_XR_SCREEN_SIZE_DEG[1] * r);
+}
+int xr_settings_screen_size_from(float d)
+{
+    return d < 2.25f ? 2 : d < 3.5f ? 1 : 0;
+}
 /* every stored setting as "key value" lines, in the file's fixed order */
 static int render(const LgXrSettings *c, char *b, size_t n)
 {
-    return snprintf(b, n, "scale %g\nscreen %g\naim %g\nresolution %d\nwidth %d\nrefresh %d\nhand %s\nlaser %s\ncoins %s\n"
+    int k = snprintf(b, n, "scale %g\nscreen %g\naim %g\nresolution %d\nwidth %d\nrefresh %d\nhand %s\nlaser %s\ncoins %s\n"
                "sight %s\ncrosshair %s\ngun %s\nhud_pitch %d\ndual %s\nstats %s\nfoveation %s\noverlays %s\nreplays %s\n"
                "mode %s\nclassic.shadow %d\nclassic.cutaways %s\nimmersive.replays %s\nimmersive.overlays %s\n"
                "immersive.cutaways %s\nimmersive.sky %s\nimmersive.shadow %d\n"
@@ -33,6 +45,9 @@ static int render(const LgXrSettings *c, char *b, size_t n)
             c->imm_sky == LG_SKY_OFF ? "off" : c->imm_sky == LG_SKY_PAINTED ? "painted" : "stadium", c->imm_shadow,
             c->imm_height, c->classic_card_notice ? "on" : "off", c->language ? "english" : "japanese", c->msaa, c->save ? "on" : "off",
             xr_settings_aniso(c->aniso), c->save_name[0] ? c->save_name : LG_XR_SAVE_NAME_DEFAULT);
+    if (c->screen_size >= 0 && k >= 0 && (size_t)k < n)     /* a game with a Screen size row (VT3) */
+        k += snprintf(b + k, n - (size_t)k, "screen_size %s\n", SCREEN_SIZE_NAME[c->screen_size > 2 ? 2 : c->screen_size]);
+    return k;
 }
 
 int xr_settings_save_name(const char *in, char out[16])
@@ -67,7 +82,7 @@ void xr_settings_vt3_defaults(struct LgXrSettings *c)
     c->replays = c->classic_cutaways = 1; c->arcade_overlays = 0; c->classic_shadow = 1024; c->classic_card_notice = 0;
     c->msaa = 2; c->aniso = 4; c->save = 1; snprintf(c->save_name, sizeof c->save_name, "%s", LG_XR_SAVE_NAME_DEFAULT);
     c->language = 1; c->refresh = 120; c->foveation = 3; c->screen = 2.5f; c->hud_pitch = 10; c->show_stats = 0;
-    c->auto_coins = 1;
+    c->auto_coins = 1; c->screen_size = 1;
 }
 
 int xr_settings_aniso(int v)
@@ -108,11 +123,13 @@ void xr_settings_load(LgXrSettings *c)
     FILE *f = fopen("vr.cfg", "r");
     if (!f) f = fopen("../vr.cfg", "r");    /* beside the game: where adb can put one */
     char key[32], val[32];
-    int has_rep = 0, has_cut = 0, has_irep = 0, has_icut = 0;
+    int has_rep = 0, has_cut = 0, has_irep = 0, has_icut = 0, has_screen = 0, has_size = 0;
+    const int sized = c->screen_size >= 0;      /* the game has a Screen size row */
     while (f && fscanf(f, "%31s %31s", key, val) == 2) {
         xr_settings_set(c,key,val);
         has_rep |= !strcmp(key, "replays"); has_cut |= !strcmp(key, "classic.cutaways");
         has_irep |= !strcmp(key, "immersive.replays"); has_icut |= !strcmp(key, "immersive.cutaways");
+        has_screen |= !strcmp(key, "screen"); has_size |= !strcmp(key, "screen_size");
     }
     if (f) fclose(f);
     /* Replays and point cutaways are one row since 2026-11-13 ("Replays and
@@ -127,6 +144,10 @@ void xr_settings_load(LgXrSettings *c)
         fprintf(stderr, "[xr] vr.cfg: replays %s and classic.cutaways %s differ - one row now, the replays value taken\n",
                 c->replays ? "on" : "off", c->classic_cutaways ? "on" : "off");
     if (has_cut && !has_rep) c->replays = c->classic_cutaways; else c->classic_cutaways = c->replays;
+    /* Screen size (2026-11-13) replaces Screen distance: an older file's distance picks the size */
+    if (!sized) c->screen_size = -1;
+    else if (!has_size && has_screen) c->screen_size = xr_settings_screen_size_from(c->screen);
+    else if (c->screen_size < 0 || c->screen_size >= LG_XR_SCREEN_NSIZES) c->screen_size = 1;
     g_file = *c; g_nrun = 0;
     /* LINDBERGH_XR_SET="key=value,...": for this run only, not saved (testing) */
     const char *e = getenv("LINDBERGH_XR_SET");
@@ -138,6 +159,8 @@ void xr_settings_load(LgXrSettings *c)
         e = strchr(e, ',');
         if (e) e++;
     }
+    if (!sized) c->screen_size = -1;    /* (the saved file keeps the same lines) */
+    else if (c->screen_size < 0 || c->screen_size >= LG_XR_SCREEN_NSIZES) c->screen_size = 1;
     if (c->scale <= 0) c->scale = 1;
     if (c->screen <= 0.2f) c->screen = 3;
     if (c->aim < 1.0f || c->aim > 200.0f) c->aim = 15.0f;
@@ -200,6 +223,7 @@ void xr_settings_set(LgXrSettings *c,const char *key,const char *val)
         else if (!strcmp(key, "msaa")) c->msaa = atoi(val);
         else if (!strcmp(key, "save")) c->save = !strcmp(val, "on");
         else if (!strcmp(key, "aniso")) c->aniso = atoi(val);
+        else if (!strcmp(key, "screen_size")) c->screen_size = !strcmp(val, "small") ? 0 : !strcmp(val, "big") ? 2 : !strcmp(val, "medium") ? 1 : -2;
         else if (!strcmp(key, "save_name")) snprintf(c->save_name, sizeof c->save_name, "%s", val);   /* checked at load */
         else if (!strcmp(key, "foveation")) {
             for (int i = 0; i < 4; i++) if (!strcmp(val, FOVEATION_NAME[i])) c->foveation = i;

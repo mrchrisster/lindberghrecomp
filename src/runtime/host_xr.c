@@ -532,7 +532,7 @@ static void menu_choose(int row)
                 w->cutaways ? "on" : "off", w->dolly, w->back, w->sky == LG_SKY_OFF ? "off" : w->sky == LG_SKY_PAINTED ? "painted" : "stadium");
     }
     if(effects&XP_CROSSHAIR_CHANGED)stereo_show_game_sight(cfg.crosshair && !game_profile()->joystick);
-    if(effects&XP_SCREEN_CHANGED)stereo_set_screen_distance(cfg.screen*cfg.scale);
+    if(effects&XP_SCREEN_CHANGED){stereo_set_screen_distance(cfg.screen*cfg.scale);stereo_set_screen_size(xr_settings_screen_scale(cfg.screen_size));}
     if(effects&XP_HUD_CHANGED)stereo_set_hud_pitch((float)cfg.hud_pitch);
     if((effects&XP_RATE_CHANGED)&&request_rate)request_rate(session,(float)cfg.refresh);
     if(effects&XP_RECENTER)anchor_pending=1;
@@ -1173,6 +1173,7 @@ int xr_init(void)
     stereo_set_aim_hook(aim_probe);
     stereo_eye_size((int)w, (int)h);
     stereo_set_screen_distance(cfg.screen * cfg.scale);
+    stereo_set_screen_size(xr_settings_screen_scale(cfg.screen_size));
     stereo_set_hud_pitch((float)cfg.hud_pitch);
     stereo_start();
     gun_hand = cfg.left_handed ? HAND_L : HAND_R;
@@ -1180,6 +1181,8 @@ int xr_init(void)
             w, h, color_format == GL_SRGB8_ALPHA8 ? "sRGB" : "RGBA8", cfg.scale, cfg.screen,
             (const char *)gl.GetString(GL_RENDERER));
     fprintf(stderr, "[xr] aim aid %s, coins %s\n", LASER_NAME[cfg.laser], cfg.auto_coins ? "automatic" : "by button");
+    if (cfg.screen_size >= 0) fprintf(stderr, "[xr] screen size %s: the flat picture %.0f degrees across (x%.2f)\n",
+        cfg.screen_size == 0 ? "small" : cfg.screen_size == 2 ? "big" : "medium", LG_XR_SCREEN_SIZE_DEG[cfg.screen_size > 2 ? 2 : cfg.screen_size], xr_settings_screen_scale(cfg.screen_size));
 
     /* the session usually becomes ready within a few polls */
     for (int i = 0; i < 200 && !running; i++) { poll_events(); if (!running) usleep(10000); }

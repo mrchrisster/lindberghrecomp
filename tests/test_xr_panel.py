@@ -77,6 +77,16 @@ int main(void) {
     cfg.dual=1;xp_items(&p,&cfg,hand,0,2280,2064,items);
     assert(!strcmp(items[XP_HAND].label,"Player 1 hand"));
     assert(!strcmp(items[XP_HUD].value,"With the screen"));
+    /* Screen distance (every game's default) / Screen size (screen_size >= 0: VT3, 2026-11-13) */
+    assert(!strcmp(items[XP_SCREEN].label,"Screen distance")&&!strcmp(items[XP_SCREEN].value,"3.0 m"));
+    flags=xp_choose(&p,&cfg,&hand,XP_SCREEN,rates,3);assert((flags&XP_SCREEN_CHANGED)&&cfg.screen==4&&cfg.screen_size==-1);
+    cfg.screen_size=1;xp_items(&p,&cfg,hand,0,2280,2064,items);
+    assert(!strcmp(items[XP_SCREEN].label,"Screen size")&&!strcmp(items[XP_SCREEN].value,"Medium"));
+    flags=xp_choose(&p,&cfg,&hand,XP_SCREEN,rates,3);assert((flags&XP_SCREEN_CHANGED)&&(flags&XP_SAVE)&&cfg.screen_size==2&&cfg.screen==4);
+    xp_items(&p,&cfg,hand,0,2280,2064,items);assert(!strcmp(items[XP_SCREEN].value,"Big"));
+    xp_choose(&p,&cfg,&hand,XP_SCREEN,rates,3);assert(cfg.screen_size==0);
+    xp_items(&p,&cfg,hand,0,2280,2064,items);assert(!strcmp(items[XP_SCREEN].value,"Small"));
+    xp_choose(&p,&cfg,&hand,XP_SCREEN,rates,3);assert(cfg.screen_size==1);
     return 0;
 }
 ''')
