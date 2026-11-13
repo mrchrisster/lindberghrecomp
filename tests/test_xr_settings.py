@@ -20,8 +20,11 @@ class XrSettingsTests(unittest.TestCase):
         harness=Path(cls.temp.name)/"settings.c"
         harness.write_text(r'''#include "xr_settings.h"
 #include <stdio.h>
+#include <stdlib.h>
 int main(void) {
- LgXrSettings s=LG_XR_SETTINGS_DEFAULT;xr_settings_load(&s);
+ /* VT3=1: Virtua Tennis 3's profile defaults (game_profile_apply passes them) */
+ if(getenv("VT3"))xr_settings_set_game_defaults(xr_settings_vt3_defaults);
+ LgXrSettings s;xr_settings_defaults(&s);xr_settings_load(&s);
  printf("%d %d %d %.3f %.3f %d %d %d\n",s.width,s.resolution,s.refresh,s.scale,s.screen,s.dual,s.left_handed,s.laser);
  xr_settings_save(&s);return 0;
 }''')
@@ -57,9 +60,9 @@ int main(void) {
             self.assertEqual(self.run_settings(d,{"LINDBERGH_XR_SET":"width=-1,resolution=1,screen=0,scale=-2"}),NATIVE+" 120 1.000 3.000 0 0 0")
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
-               "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"4096",
-               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"2","save":"on",
-               "aniso":"4","save_name":"PLAYER"}
+               "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
+               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0","save":"on",
+               "aniso":"0","save_name":"PLAYER"}
 
     @staticmethod
     def parse(text):
@@ -73,7 +76,9 @@ int main(void) {
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             for k,v in self.parse(old).items():self.assertEqual(saved[k],v,k)
-            for k,v in self.MODE_KEYS.items():self.assertEqual(saved[k],v,k)
+            for k,v in self.MODE_KEYS.items():
+                if k!="classic.cutaways":self.assertEqual(saved[k],v,k)
+            self.assertEqual(saved["classic.cutaways"],"off")    # one row with replays (2026-11-13): the file's replays value
 
     def test_mode_keys_round_trip(self):
         cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"camera",
@@ -111,16 +116,58 @@ int main(void) {
                 self.run_settings(d)
                 self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["save_name"],want,stored)
 
+    # Virtua Tennis 3's defaults (2026-11-13): the owner's Quest 3 vr.cfg, less device / gun-game values
+    OWNER=("scale 1\nscreen 2.5\naim 15\nresolution 2208\nwidth 2064\nrefresh 120\nhand right\nlaser laser\ncoins auto\n"
+           "sight none\ncrosshair on\ngun on\nhud_pitch 10\ndual off\nstats off\nfoveation high\noverlays off\nreplays on\n"
+           "mode immersive\nclassic.shadow 1024\nclassic.cutaways on\nimmersive.replays flat\nimmersive.overlays off\n"
+           "immersive.cutaways flat\nimmersive.sky stadium\nimmersive.shadow 4096\nimmersive.height 10\nclassic.card_notice off\n"
+           "language english\nmsaa 2\nsave on\naniso 4\nsave_name PLAYER\n")
+
+    def test_vt3_defaults_are_the_owners_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.run_settings(d,{"VT3":"1"})
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            want=self.parse(self.OWNER)
+            for k in ("resolution","width"):want.pop(k)      # the device's own size, not the owner's numbers
+            for k,v in want.items():self.assertEqual(saved[k],v,k)
+
+    def test_vt3_owner_file_reads_back_identically(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text(self.OWNER)
+            self.run_settings(d,{"VT3":"1"})
+            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER)
+
+    def test_vt3_explicit_values_kept_and_other_games_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("mode classic\nmsaa 0\naniso 0\nimmersive.shadow 2048\nstats on\nscreen 3\nimmersive.replays camera\n")
+            self.run_settings(d,{"VT3":"1"})
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            for k,v in (("mode","classic"),("msaa","0"),("aniso","0"),("immersive.shadow","2048"),("stats","on"),("screen","3"),
+                        ("immersive.replays","camera"),("immersive.cutaways","camera"),("overlays","off")):
+                self.assertEqual(saved[k],v,k)
+        with tempfile.TemporaryDirectory() as d:     # no game defaults (hotd4, gse, lgj): every game's, as before
+            self.run_settings(d)
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            for k,v in (("mode","classic"),("msaa","0"),("aniso","0"),("immersive.shadow","2048"),("stats","on"),("screen","3"),
+                        ("immersive.replays","off"),("overlays","on"),("hud_pitch","0")):
+                self.assertEqual(saved[k],v,k)
+
+    def test_vr_word_reads_as_camera(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("immersive.replays vr\n")
+            self.run_settings(d)
+            self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["immersive.cutaways"],"camera")
+
     def test_old_on_reads_as_flat_screen(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("immersive.replays on\nimmersive.cutaways off\n")
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
-            self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"off")
+            self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"flat")   # one row: the replays key wins
             (Path(d)/"vr.cfg").write_text("immersive.replays flat\nimmersive.cutaways bogus\n")
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
-            self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"off")
+            self.assertEqual(saved["immersive.replays"],"flat");self.assertEqual(saved["immersive.cutaways"],"flat")
 
     def test_old_world_view_reads_as_camera(self):
         with tempfile.TemporaryDirectory() as d:
@@ -136,7 +183,7 @@ int main(void) {
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
             self.assertNotIn("bogus",saved);self.assertNotIn("future.key",saved)
-            self.assertEqual(saved["mode"],"immersive");self.assertEqual(saved["immersive.shadow"],"4096")
+            self.assertEqual(saved["mode"],"immersive");self.assertEqual(saved["immersive.shadow"],"2048")
             self.assertNotIn("immersive.stand_y",saved);self.assertNotIn("immersive.dolly",saved)
 
     def test_step_back_gone_and_height_low_medium_high(self):

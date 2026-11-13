@@ -6,11 +6,11 @@
  * it applies on the next start, and the line under them says so. Main page:
  * Restart now (only while the saved mode is not the running one), Advanced
  * settings (the saved mode's page), then the shared rows; choosing a mode on
- * an Advanced page shows that mode's page. Classic advanced: replays, point
- * cutaways, arcade overlays, shadow quality (replays and cutaways On / Off).
- * VR advanced: camera height (Low / Medium / High; your player at the far
- * end is always High - stereo.c), the same three (replays and cutaways Off /
- * Flat screen / Camera view), sky (Stadium / Painted / Off),
+ * an Advanced page shows that mode's page. Classic advanced: Replays &
+ * close-ups (On / Off: replays and point cutaways, one row since 2026-11-13),
+ * arcade overlays, shadow quality. VR advanced: camera height (Low / Medium /
+ * High; your player at the far end is always High - stereo.c), the same
+ * (Replays & close-ups Off / Flat screen / VR), sky (Stadium / Painted / Off),
  * shadow quality; both: Save progress, Reset save (pull twice) and Texture
  * filtering (one value each for both modes, on restart; the main page is
  * full). Camera closer and Step back are gone (fixed 20 m / 5 m,
@@ -67,6 +67,11 @@ static int pinned(const XwState *w, int item)
     if (k < 0 || !(w->pins >> k & 1)) return 0;
     return k == WM_MODE || k == WM_LANGUAGE || k == WM_MSAA || k == WM_SAVE || k == WM_ANISO || page_mode(w) == w->running;
 }
+/* Replays & close-ups: one row for both values (2026-11-13), pinned when either env variable is set */
+static int pinned_rc(const XwState *w)
+{
+    return (w->pins >> WM_REPLAYS & 1 || w->pins >> WM_CUTAWAYS & 1) && page_mode(w) == w->running;
+}
 
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
 {
@@ -75,13 +80,13 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     rows[n++] = XW_ROW(XW_MODE_VR);
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
-        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS),
+        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS),
                                  XW_ROW(XW_CARD), XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_HEIGHT),
-                                 XW_ROW(XW_REPLAYS), XW_ROW(XW_CUTAWAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
+                                 XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
                                  XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
@@ -101,9 +106,9 @@ static const char *on_off(int v) { return v ? "On" : "Off"; }
 /* Immersive's Replays / Point cutaways: LG_VIEW_ */
 static const char *view_label(int v)
 {
-    return v == LG_VIEW_FLAT ? "Flat screen" : v == LG_VIEW_WORLD ? "In the world" : v == LG_VIEW_CAMERA ? "Camera view" : "Off";
+    return v == LG_VIEW_FLAT ? "Flat screen" : v == LG_VIEW_WORLD ? "In the world" : v == LG_VIEW_CAMERA ? "VR" : "Off";
 }
-/* Off > Flat screen > Camera view > Off ("In the world" left out, T13: confusing when the angle does not change) */
+/* Off > Flat screen > VR (LG_VIEW_CAMERA: the game camera's shot in 3D; "Camera view" until 2026-11-13) > Off ("In the world" left out, T13: confusing when the angle does not change) */
 static int view_next(int v) { return v == LG_VIEW_OFF ? LG_VIEW_FLAT : v == LG_VIEW_FLAT ? LG_VIEW_CAMERA : LG_VIEW_OFF; }
 static const char *height_label(float units)
 {
@@ -136,8 +141,8 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_DOLLY].label = "Camera closer";
     it[XW_STEPBACK].label = "Step back";
     it[XW_HEIGHT].label = "Camera height";
-    it[XW_REPLAYS].label = "Replays";
-    it[XW_CUTAWAYS].label = "Point cutaways";
+    it[XW_REPLAYS].label = "Replays & close-ups";     /* one row since 2026-11-13: replays, point close-ups, the match's other camera scenes */
+    it[XW_CUTAWAYS].label = "Replays & close-ups";    /* (no row of its own any more) */
     it[XW_OVERLAYS].label = "Arcade overlays";
     it[XW_SKY].label = "Sky";
     it[XW_SHADOW].label = "Shadow quality";
@@ -177,8 +182,10 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     int replays = im ? cfg->imm_replays : cfg->replays, cut = im ? cfg->imm_cutaways : cfg->classic_cutaways;
     int over = im ? cfg->imm_overlays : cfg->arcade_overlays, sh = im ? cfg->imm_shadow : cfg->classic_shadow;
     float dl = (float)cfg->imm_dolly, bk = (float)cfg->imm_back, ht = (float)cfg->imm_height; int sky = cfg->imm_sky;
-    if (pinned(w, XW_REPLAYS)) replays = !e->replays ? LG_VIEW_OFF : im ? e->replay_view : LG_VIEW_FLAT;
-    if (pinned(w, XW_CUTAWAYS)) cut = !e->cutaways ? LG_VIEW_OFF : im ? e->cutaway_view : LG_VIEW_FLAT;
+    if (pinned_rc(w)) {     /* the run's: the replays value (a test may pin the two apart) */
+        replays = !e->replays ? LG_VIEW_OFF : im ? e->replay_view : LG_VIEW_FLAT;
+        cut = !e->cutaways ? LG_VIEW_OFF : im ? e->cutaway_view : LG_VIEW_FLAT;
+    }
     if (pinned(w, XW_OVERLAYS)) over = e->overlays;
     if (pinned(w, XW_SHADOW)) sh = e->shadow;
     if (pinned(w, XW_DOLLY)) dl = e->dolly;
@@ -197,7 +204,8 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     shadow(it[XW_SHADOW].value, sh);
     for (int i = 0; i < XW_COUNT; i++) {
         size_t l = strlen(it[i].value);
-        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && (i != XW_CARD || page_mode(w) == 0) && pinned(w, i)) snprintf(it[i].value + l, 40 - l, " (env.txt)");
+        const int pin = i == XW_REPLAYS || i == XW_CUTAWAYS ? pinned_rc(w) : pinned(w, i);
+        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && (i != XW_CARD || page_mode(w) == 0) && pin) snprintf(it[i].value + l, 40 - l, " (env.txt)");
     }
     if (!pinned(w, XW_SHADOW) && page_mode(w) == w->running && sh != e->shadow) {
         size_t l = strlen(it[XW_SHADOW].value);
@@ -208,7 +216,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
 
 void xw_restore_defaults(LgXrSettings *c, int immersive)
 {
-    const LgXrSettings d = LG_XR_SETTINGS_DEFAULT;
+    LgXrSettings d; xr_settings_defaults(&d);     /* the game's own defaults (Virtua Tennis 3's) */
     if (immersive) {
         c->imm_replays = d.imm_replays; c->imm_overlays = d.imm_overlays; c->imm_cutaways = d.imm_cutaways;
         c->imm_height = d.imm_height;
@@ -232,7 +240,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
         w->reset_save_done = 1;
         return XW_RESET_SAVE_FX | XW_PAGE_CHANGED;
     }
-    if (pinned(w, item)) return armed || save_armed ? XW_PAGE_CHANGED : 0;     /* (env.txt): the run's own value */
+    if (item == XW_REPLAYS || item == XW_CUTAWAYS ? pinned_rc(w) : pinned(w, item)) return armed || save_armed ? XW_PAGE_CHANGED : 0;     /* (env.txt): the run's own value */
     const int im = page_mode(w) == 1;
     const unsigned live = page_mode(w) == w->running ? XW_LIVE_CHANGED : 0;   /* the other mode's: saved for later */
     unsigned fx = XP_SAVE;
@@ -247,8 +255,11 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_RESTART: return XP_RESTART;
     case XW_ADVANCED: w->page = c->world_mode ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; return XW_PAGE_CHANGED;
     case XW_BACK: w->page = XW_PAGE_MAIN; return XW_PAGE_CHANGED;
-    case XW_REPLAYS: if (im) c->imm_replays = view_next(c->imm_replays); else c->replays = !c->replays; fx |= live; break;
-    case XW_CUTAWAYS: if (im) c->imm_cutaways = view_next(c->imm_cutaways); else c->classic_cutaways = !c->classic_cutaways; fx |= live; break;
+    case XW_REPLAYS: case XW_CUTAWAYS:      /* Replays & close-ups: one value, both stored (vr.cfg's two old keys) */
+        if (page_mode(w) < 0) return 0;
+        if (im) c->imm_replays = c->imm_cutaways = view_next(c->imm_replays);
+        else c->replays = c->classic_cutaways = !c->replays;
+        fx |= live; break;
     case XW_OVERLAYS: if (im) c->imm_overlays = !c->imm_overlays; else c->arcade_overlays = !c->arcade_overlays; fx |= live; break;
     case XW_SKY:        /* Stadium -> Painted -> Off -> Stadium */
         if (!im) return 0;

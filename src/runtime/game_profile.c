@@ -12,6 +12,7 @@
 #include "game_profile.h"
 #include "lindbergh_rt.h"
 #include "stereo.h"
+#include "xr_settings.h"
 
 static LgGameProfile g_profile;
 
@@ -26,6 +27,7 @@ static void env_default(const char *name, const char *value)
 void game_profile_apply(const LgGameProfile *p)
 {
     g_profile = *p;
+    xr_settings_set_game_defaults(p->vr.xr_defaults);
     if (p->title) host_window_title(p->title);
     int w = p->width, h = p->height;
 #if defined(LINDBERGH_OPENXR) || defined(LINDBERGH_VULKAN_OFFSCREEN)

@@ -90,8 +90,8 @@ static float scale_of(int size) { return size > 1024 ? size / 1024.0f : 0.0f; }
 
 void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned present, WmValues *o, int src[WM_COUNT])
 {
-    const LgXrSettings def = LG_XR_SETTINGS_DEFAULT;
-    if (!s) s = &def;
+    LgXrSettings def;
+    if (!s) { xr_settings_defaults(&def); s = &def; }
     int k[WM_COUNT];
     for (int i = 0; i < WM_COUNT; i++) k[i] = present >> i & 1 ? WM_SRC_FILE : WM_SRC_DEFAULT;
     const char *v;
@@ -166,6 +166,7 @@ static unsigned file_present(int immersive)
             if (i == WM_MODE ? !strcmp(key, "mode") : (immersive ? b && !strcmp(key, b) : a && !strcmp(key, a))) bits |= 1u << i;
         }
     fclose(f);
+    if (bits & (1u << WM_REPLAYS | 1u << WM_CUTAWAYS)) bits |= 1u << WM_REPLAYS | 1u << WM_CUTAWAYS;   /* one row, one value (xr_settings_load) */
     return bits;
 }
 #endif
@@ -175,10 +176,11 @@ void world_mode_init(int capable)
     if (g_wm_done) return;
     g_wm_done = 1;
     g_wm_capable = capable;
-    LgXrSettings s = LG_XR_SETTINGS_DEFAULT;
+    LgXrSettings s = LG_XR_SETTINGS_DEFAULT;    /* the desktop: every game's defaults (Classic; VT3's VR-first are the headset's) */
     unsigned present = 0;
     int src[WM_COUNT];
 #ifdef LINDBERGH_OPENXR
+    xr_settings_defaults(&s);               /* the game's own (Virtua Tennis 3: VR mode, ...) */
     xr_settings_load(&s);                   /* the headset's stored settings (a scratch copy) */
     world_mode_resolve(&s, -1, capable, 0, &g_wm, NULL);
     present = file_present(g_wm.immersive);

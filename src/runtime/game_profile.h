@@ -14,6 +14,8 @@
 #ifndef GAME_PROFILE_H
 #define GAME_PROFILE_H
 
+struct LgXrSettings;     /* xr_settings.h */
+
 /* When the world's depth is read, for the aim and for the headset: the
  * world's target is left for good only after its last draw, and the depth
  * there can be written over later in the frame. */
@@ -70,6 +72,8 @@ typedef struct {
         int   hud_head_locked;  /* the 2D HUD stays in front of the face, not in the world (LINDBERGH_XR_HUD_LOCK=0 off) */
         int   aim_on_hud;       /* each shot goes where the laser crosses the HUD's screen (LINDBERGH_XR_AIM_HUD=0 off) */
         int   gun_model;        /* XO_GUN_*: the gun in the player's hand (xr_overlay.h; 0: the SMG) */
+        void (*xr_defaults)(struct LgXrSettings *s);   /* the game's own settings defaults over the runtime's
+                                 * (xr_settings_defaults; Virtua Tennis 3: xr_settings_vt3_defaults) */
         float hud_lens;         /* the game draws its 2D through a perspective of its own: one with this x scale
                                  * (projection[0]) is screen content, not world (LINDBERGH_STEREO_2D_LENS) */
     } vr;

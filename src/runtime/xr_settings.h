@@ -12,7 +12,7 @@ enum { LG_SKY_OFF, LG_SKY_STADIUM, LG_SKY_PAINTED };
  * off|flat|camera; an old "on" is flat, "world" camera). Classic's are on /
  * off (always flat). */
 enum { LG_VIEW_OFF, LG_VIEW_FLAT, LG_VIEW_WORLD, LG_VIEW_CAMERA };
-typedef struct {
+typedef struct LgXrSettings {
     float scale,screen,aim;
     int resolution,width,refresh,left_handed,laser,auto_coins;
     int sight,crosshair,show_gun,hud_pitch,dual,show_stats;
@@ -39,13 +39,13 @@ typedef struct {
     int language;               /* "language english|japanese": 1 English (the cabinet's region export), 0
                                  * Japanese; applies on the next start (Virtua Tennis 3) */
     int msaa;                   /* "msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer (VR and
-                                 * Classic on the headset; 0 off; default 2x since 2026-11-12); applies on the next start */
+                                 * Classic on the headset; 0 off; VT3's default 2x); applies on the next start */
     int save;                   /* "save on|off": Save progress - 1P's card record kept in vt3_save.bin
                                  * (Virtua Tennis 3, both modes; default on since T21 - absent = on, an
                                  * explicit "save off" stays off); applies on the next start */
     int aniso;                  /* "aniso 0|2|4|8|16": anisotropic filtering of the game's mipmapped world
                                  * textures (Texture filtering Standard / Sharp 4x / Sharp 8x; 0 = the
-                                 * game's own filtering; default 4 since 2026-11-12); applies on the next start */
+                                 * game's own filtering; VT3's default 4); applies on the next start */
     char save_name[16];         /* "save_name PLAYER": the name a Save progress record carries (shown on the
                                  * result slate; up to 10 of A-Z 0-9 - xr_settings_save_name); no panel row */
 } LgXrSettings;
@@ -66,11 +66,12 @@ typedef struct {
 /* ... dual off, stats panel on (vr.cfg "stats off" hides it), medium foveation, arcade overlays shown, replays on;
  * Classic mode, shadows 1024, cutaways on; Immersive: replays, overlays and cutaways off,
  * 200 units closer and 50 back (fixed: no rows since T12), the stadium's own sky, shadows
- * 4096, Camera height Medium (+1 m; T13); Anti-aliasing 2x, Texture filtering Sharp 4x
- * (both modes; the owner's worn choice, 2026-11-12 - VR shadows 4096 too). (The stands' stretch,
+ * 2048, Camera height Medium (+1 m; T13). These are every game's; a game may change them
+ * (LgGameProfile.vr.xr_defaults, applied by xr_settings_defaults): Virtua Tennis 3's are
+ * xr_settings_vt3_defaults. (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,4096,10,0,1,2,1,4,LG_XR_SAVE_NAME_DEFAULT}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT}
 /* Save progress's record name (save_name): Virtua Tennis 3's name entry
  * takes up to 10 characters; letters and digits only (the font's, and one
  * vr.cfg token) */
@@ -94,6 +95,19 @@ static inline int xr_settings_nearest(int v, const int *steps, int n)
     for (int i = 1; i < n; i++) if ((v > steps[i] ? v - steps[i] : steps[i] - v) < (v > best ? v - best : best - v)) best = steps[i];
     return best;
 }
+/* The defaults: LG_XR_SETTINGS_DEFAULT, then the running game's own changes
+ * (xr_settings_set_game_defaults; game_profile_apply passes its profile's
+ * vr.xr_defaults). Start every settings struct the panel, vr.cfg and Restore
+ * defaults see from this - xr_settings_load reads the file over it. */
+void xr_settings_defaults(LgXrSettings *settings);
+void xr_settings_set_game_defaults(void (*fn)(struct LgXrSettings *));
+/* Virtua Tennis 3's defaults (the owner's Quest 3 settings, 2026-11-13): VR
+ * mode; VR: replays & close-ups Flat screen, overlays hidden, stadium sky,
+ * shadows 4096, Camera height Medium; Classic: replays & close-ups on,
+ * overlays hidden, shadows 1024, card notice off; both: anti-aliasing 2x,
+ * texture filtering 4x, save on, English, 120 Hz, foveation high, screen
+ * 2.5 m, HUD position 10, frame rate counter off, coins automatic */
+void xr_settings_vt3_defaults(struct LgXrSettings *settings);
 void xr_settings_load(LgXrSettings *settings);
 void xr_settings_set(LgXrSettings *settings,const char *key,const char *value);
 void xr_settings_save(const LgXrSettings *settings);

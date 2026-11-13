@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     }
     if (argc > 2) {     /* a menu change: immersive replays on, classic replays off; then the live values */
         LgXrSettings s = LG_XR_SETTINGS_DEFAULT; xr_settings_load(&s);
-        s.imm_replays = 1; s.replays = 0; s.imm_dolly = 50; s.imm_shadow = 1024;
+        s.imm_replays = 1; s.replays = 0; s.imm_dolly = 50; s.imm_shadow = 4096;
         world_mode_update(&s);
         printf(" | %d %d %.0f %d", world_mode_immersive(), world_mode_replays(), world_mode_dolly(), world_mode_values()->shadow);
     }
@@ -112,8 +112,8 @@ int main(int argc, char **argv) {
         self.assertEqual(self.views(imm + "immersive.replays on\nimmersive.cutaways flat\n"), "1 1 1 1 0 0")
         self.assertEqual(self.views(imm + "immersive.replays world\nimmersive.cutaways camera\n"), "1 3 1 3 0 0")   # stored world = camera (T13)
         # an on/off pin alone: flat, whatever vr.cfg says (a test does not depend on it)
-        self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "1"}), "1 1 0 1 1 0")
-        self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "0"}), "0 1 0 1 1 0")
+        self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "1"}), "1 1 1 3 1 0")   # cutaways: the one row's stored value
+        self.assertEqual(self.views(imm + "immersive.replays world\n", {"LINDBERGH_REPLAYS": "0"}), "0 1 1 3 1 0")
         # a view variable alone turns it on; follow = camera; with on/off 0 it stays off
         self.assertEqual(self.views(imm, {"LINDBERGH_VT3_REPLAY_VIEW": "world", "LINDBERGH_VT3_CUTAWAY_VIEW": "follow"}), "1 2 1 3 1 1")
         self.assertEqual(self.views(imm, {"LINDBERGH_VT3_REPLAY_VIEW": "camera", "LINDBERGH_REPLAYS": "0"}), "0 3 0 1 1 0")
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
         # Classic: on/off only, always flat; its view variables do nothing
         self.assertEqual(self.views("replays on\n", {"LINDBERGH_VT3_REPLAY_VIEW": "world"}), "1 1 1 1 1 0")
         _, log = self.run_wm(imm + "immersive.replays world\n")
-        self.assertIn("replays camera (vr.cfg)", log); self.assertIn("cutaways off (default)", log)
+        self.assertIn("replays camera (vr.cfg)", log); self.assertIn("cutaways camera (vr.cfg)", log)   # one row (2026-11-13)
 
     def test_card_notice_and_language(self):
         c = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "card"))[0].split(" | ")[1]
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
         self.assertEqual(sv("save on\n", {"LINDBERGH_VT3_SAVE": "0"}), "0 1 0")
         self.assertEqual(sv(None, {"LINDBERGH_VT3_SAVE": "1"}), "1 1 1")
         self.assertIn("save on (vr.cfg)", self.run_wm("save on\n")[1])
-        self.assertEqual(m(), "2 0 2")                                                   # 2x by default (2026-11-12; T17 had Off)
+        self.assertEqual(m(), "0 0 0")                                                   # Off by default (T17)
         self.assertEqual(m("msaa 4\n"), "4 0 4")
         self.assertEqual(m("mode immersive\nmsaa 2\n"), "2 0 2")                         # one value for both modes
         self.assertEqual(m("msaa 3\n"), "2 0 2")                                         # off the list: the nearer below
@@ -153,11 +153,11 @@ int main(int argc, char **argv) {
         _, log = self.run_wm("msaa 4\n")
         self.assertIn("msaa 4 (vr.cfg)", log)
         _, log = self.run_wm()
-        self.assertIn("msaa 2 (default)", log)
+        self.assertIn("msaa 0 (default)", log)
 
     def test_texture_filtering_and_save_name(self):
         a = lambda cfg=None, env=None, **k: self.run_wm(cfg, env, args=("1", "aniso"), **k)[0].split(" | ")
-        self.assertEqual(a()[1:], ["4 0 4", "PLAYER PLAYER"])                                # defaults: Sharp 4x, PLAYER
+        self.assertEqual(a()[1:], ["0 0 0", "PLAYER PLAYER"])                                # defaults: Standard, PLAYER
         self.assertEqual(a("aniso 8\n")[1], "8 0 8")
         self.assertEqual(a("mode immersive\naniso 4\n")[1], "4 0 4")                         # one value for both modes
         self.assertEqual(a("aniso 6\n")[1], "4 0 4")                                          # off the list: the nearer below
@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
         self.assertIn("aniso 8 (vr.cfg)", self.run_wm("aniso 8\n")[1])
         # the desktop: only Save progress and its name from vr.cfg (its Game menu writes them)
         d = lambda cfg, env=None: self.run_wm(cfg, env, args=("1", "aniso"), binary=self.desk)[0].split(" | ")
-        self.assertEqual(d("aniso 8\nsave_name rally\n")[1:], ["4 0 4", "RALLY RALLY"])   # the default, not vr.cfg's
+        self.assertEqual(d("aniso 8\nsave_name rally\n")[1:], ["0 0 0", "RALLY RALLY"])
         self.assertEqual(d("aniso 8\n", {"LINDBERGH_ANISO": "8"})[1], "8 1 8")
         self.assertEqual(self.run_wm("save on\nmode immersive\n", args=("1", "msaa"), binary=self.desk)[0].split(" | ")[2], "1 0 1")
 
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
 
     def test_vr_cfg_mode_immersive_has_immersive_defaults(self):
         out, log = self.run_wm("mode immersive\nreplays on\noverlays on\n")
-        self.assertEqual(out, "1 0 0 0 4096 200 50 1 4.0")
+        self.assertEqual(out, "1 0 0 0 2048 200 50 1 2.0")
         self.assertIn("[world] mode immersive (vr.cfg) dolly 200 (default)", log)
 
     def test_env_pins_the_mode_and_wins_over_vr_cfg(self):
@@ -191,7 +191,7 @@ int main(int argc, char **argv) {
     def test_env_values_win_over_vr_cfg(self):
         cfg = "mode immersive\nimmersive.replays on\nimmersive.dolly 100\nimmersive.sky off\nimmersive.shadow 4096\n"
         out, log = self.run_wm(cfg)
-        self.assertEqual(out, "1 1 0 0 4096 200 50 0 4.0")    # Camera closer / Step back fixed (T12): vr.cfg ignored
+        self.assertEqual(out, "1 1 0 1 4096 200 50 0 4.0")    # Camera closer / Step back fixed (T12): vr.cfg ignored
         self.assertIn("dolly 200 (default) back 50 (default)", log)
         out, log = self.run_wm(cfg, {"LINDBERGH_REPLAYS": "0", "LINDBERGH_VT3_DOLLY": "250", "LINDBERGH_VT3_SKY": "1",
                                      "LINDBERGH_SHADOW_SCALE": "2",
@@ -211,7 +211,7 @@ int main(int argc, char **argv) {
 
     def test_old_stand_key_is_ignored(self):
         out, log = self.run_wm("mode immersive\nimmersive.stand_y 1.5\n")
-        self.assertEqual(out, "1 0 0 0 4096 200 50 1 4.0")
+        self.assertEqual(out, "1 0 0 0 2048 200 50 1 2.0")
         self.assertNotIn("stand", log)
 
     def test_classic_reads_the_old_keys(self):
@@ -229,9 +229,9 @@ int main(int argc, char **argv) {
 
     def test_live_update_keeps_mode_and_shadow(self):
         out, _ = self.run_wm("mode immersive\n", args=("1", "update"))
-        self.assertEqual(out.split(" | ")[1], "1 1 200 4096")       # replays now on, dolly fixed, shadow as started
+        self.assertEqual(out.split(" | ")[1], "1 1 200 2048")       # replays now on, dolly fixed, shadow as started
         out, _ = self.run_wm("mode immersive\n", {"LINDBERGH_REPLAYS": "0"}, args=("1", "update"))
-        self.assertEqual(out.split(" | ")[1], "1 0 200 4096")       # env still wins
+        self.assertEqual(out.split(" | ")[1], "1 0 200 2048")       # env still wins
         out, _ = self.run_wm("mode classic\n", args=("1", "update"))
         self.assertEqual(out.split(" | ")[1], "0 0 200 1024")       # classic: its own replays (now off)
 

@@ -52,28 +52,25 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 15 && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 14 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
     assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
     assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Medium"));   /* default Medium (T13) */
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
-    assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "Very high 4096"));   /* default 4096 (2026-11-12) */
+    assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
     assert(!strcmp(it[XW_SKY].label, "Sky"));
     assert(!strcmp(xw_hint(&w), "Applies when VR mode runs."));
     /* the non-running mode's page: saved, not live */
     fx = xw_choose(&w, &c, XW_REPLAYS);
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
-    /* VR's Replays / Point cutaways: Off > Flat screen > Camera view > Off (no "In the world" since T13) */
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen"));
-    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_CAMERA);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Camera view"));
-    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.replays == 1);
-    xw_choose(&w, &c, XW_CUTAWAYS); xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_CAMERA);
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_CUTAWAYS].value, "Camera view") && !strcmp(it[XW_CUTAWAYS].label, "Point cutaways"));
-    xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_OFF);
-    c.imm_cutaways = LG_VIEW_WORLD; xw_choose(&w, &c, XW_CUTAWAYS); assert(c.imm_cutaways == LG_VIEW_OFF);   /* a stray world: on to Off */
-    xw_choose(&w, &c, XW_REPLAYS);
+    /* VR's Replays & close-ups (one row for replays and point cutaways, 2026-11-13): Off > Flat screen > VR > Off */
+    assert(c.imm_cutaways == LG_VIEW_FLAT);             /* the row sets both */
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen") && !strcmp(it[XW_REPLAYS].label, "Replays & close-ups"));
+    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_CAMERA && c.imm_cutaways == LG_VIEW_CAMERA);
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "VR"));
+    xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.imm_cutaways == LG_VIEW_OFF && c.replays == 1);
+    c.imm_replays = LG_VIEW_WORLD; xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.imm_cutaways == LG_VIEW_OFF);   /* a stray world: on to Off */
     /* cycles */
     xw_choose(&w, &c, XW_SKY); assert(c.imm_sky == LG_SKY_PAINTED);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_SKY].value, "Painted"));
@@ -87,20 +84,21 @@ int main(void) {
     xw_items(&w, &c, it); assert(!strcmp(it[XW_HEIGHT].value, "Low"));
     xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);
     c.imm_height = -20; xw_choose(&w, &c, XW_HEIGHT); assert(c.imm_height == 10);   /* an old -2 m: from Low */
-    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);    /* from the default 4096 */
-    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 2048);
+    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 4096);
+    xw_choose(&w, &c, XW_SHADOW); assert(c.imm_shadow == 1024);
     /* restore: two pulls */
     fx = xw_choose(&w, &c, XW_RESTORE); assert(w.restore_armed && !(fx & XP_SAVE));
     xw_items(&w, &c, it); assert(!strcmp(it[XW_RESTORE].value, "Pull again to restore"));
     fx = xw_choose(&w, &c, XW_RESTORE); assert((fx & XP_SAVE) && !w.restore_armed);
-    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 10 && c.imm_shadow == 4096 && c.imm_replays == 0);
+    assert(c.imm_sky == LG_SKY_STADIUM && c.imm_height == 10 && c.imm_shadow == 2048 && c.imm_replays == 0);
     xw_choose(&w, &c, XW_RESTORE); xw_choose(&w, &c, XW_SKY); assert(!w.restore_armed);    /* another row disarms */
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_MAIN);
     /* the running mode's page: live; a pinned row shows the run's value and ignores clicks */
     c.world_mode = 0; w.page = XW_PAGE_CLASSIC;
-    fx = xw_choose(&w, &c, XW_CUTAWAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0);
+    fx = xw_choose(&w, &c, XW_REPLAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0 && c.replays == 0);
+    xw_choose(&w, &c, XW_REPLAYS); assert(c.classic_cutaways == 1 && c.replays == 1);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 14 && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 13 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -139,13 +137,11 @@ int main(void) {
       lw.pins = 1u << WM_LANGUAGE; lw.eff.language = 1;
       xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English (env.txt)"));
       assert(xw_choose(&lw, &lc, XW_LANGUAGE) == 0); }
-    /* Anti-aliasing on the main page (both modes), 2x by default (2026-11-12), Off > 2x > 4x > Off, on restart (T17) */
+    /* Anti-aliasing on the main page (both modes), Off by default, Off > 2x > 4x > Off, on restart (T17) */
     { XwState aw; memset(&aw, 0, sizeof aw); LgXrSettings ac = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&ac, 0, 1, 0, &aw.eff, NULL);
       int ar[XW_ROWS_MAX], an = xw_page_rows(&aw, &ac, ar);
-      assert(has(ar, an, XW_ROW(XW_MSAA)) && ac.msaa == 2 && aw.eff.msaa == 2);
-      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x"));
-      ac.msaa = 0; aw.eff.msaa = 0;          /* from Off, through the cycle */
+      assert(has(ar, an, XW_ROW(XW_MSAA)) && ac.msaa == 0 && aw.eff.msaa == 0);
       aw.page = XW_PAGE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
       aw.page = XW_PAGE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
       aw.page = XW_PAGE_MAIN;
@@ -199,12 +195,11 @@ int main(void) {
           rw.reset_save_armed = 0;
       }
       rw.page = XW_PAGE_MAIN; assert(xw_choose(&rw, &rc, XW_RESET_SAVE) == 0); }
-    /* Texture filtering on both Advanced pages (one value), Sharp 4x by default (2026-11-12), Standard > Sharp 4x > Sharp 8x, on restart */
+    /* Texture filtering on both Advanced pages (one value), Standard by default, Standard > Sharp 4x > Sharp 8x, on restart */
     { XwState tw; memset(&tw, 0, sizeof tw); LgXrSettings tc = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&tc, 0, 1, 0, &tw.eff, NULL);
       int tr[XW_ROWS_MAX], tn = xw_page_rows(&tw, &tc, tr);
-      assert(!has(tr, tn, XW_ROW(XW_ANISO)) && tc.aniso == 4 && tw.eff.aniso == 4);
-      tc.aniso = 0; tw.eff.aniso = 0;        /* from Standard, through the cycle */
+      assert(!has(tr, tn, XW_ROW(XW_ANISO)) && tc.aniso == 0 && tw.eff.aniso == 0);
       tw.page = XW_PAGE_CLASSIC; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].label, "Texture filtering") && !strcmp(it[XW_ANISO].value, "Standard"));
       assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
@@ -216,8 +211,14 @@ int main(void) {
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Standard (on restart)"));
       tc.aniso = 16; assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 0);        /* 16 (env / hand edit) -> 8 nearest -> Standard */
       tc.aniso = 2; assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
-      tc.aniso = 8; xw_restore_defaults(&tc, 1); assert(tc.aniso == 4);                        /* Restore defaults: back to Sharp 4x */
-      tc.aniso = 0; xw_restore_defaults(&tc, 0); assert(tc.aniso == 4);                        /* (either page) */
+      xw_restore_defaults(&tc, 1); assert(tc.aniso == 0);                                      /* Restore defaults: the game's default (here every game's, Standard) */
+      tc.aniso = 4;
+      xr_settings_set_game_defaults(xr_settings_vt3_defaults);   /* Virtua Tennis 3's Restore defaults */
+      { LgXrSettings v; memset(&v, 0, sizeof v); xw_restore_defaults(&v, 1);
+        assert(v.imm_replays == LG_VIEW_FLAT && v.imm_cutaways == LG_VIEW_FLAT && v.imm_shadow == 4096 && v.imm_height == 10 && v.aniso == 4 && !v.imm_overlays);
+        memset(&v, 0, sizeof v); xw_restore_defaults(&v, 0);
+        assert(v.replays == 1 && v.classic_cutaways == 1 && v.arcade_overlays == 0 && v.classic_shadow == 1024 && v.aniso == 4); }
+      xr_settings_set_game_defaults(NULL);
       tw.pins = 1u << WM_ANISO; tw.eff.aniso = 16;
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 16x (env.txt)"));
       assert(xw_choose(&tw, &tc, XW_ANISO) == 0 && tc.aniso == 4); }
@@ -267,7 +268,9 @@ int main(void) {
         const char *pp = getenv("LINDBERGH_TEST_PANEL_PPM");
         if (pp) {
             static unsigned char img[XM_W * XM_H * 4];
-            LgXrSettings pc = LG_XR_SETTINGS_DEFAULT; XwState pw; memset(&pw, 0, sizeof pw);
+            xr_settings_set_game_defaults(xr_settings_vt3_defaults);     /* Virtua Tennis 3's panel */
+            LgXrSettings pc; xr_settings_defaults(&pc); XwState pw; memset(&pw, 0, sizeof pw);
+            if (getenv("LINDBERGH_TEST_PANEL_VR")) pc.imm_replays = pc.imm_cutaways = LG_VIEW_CAMERA;
             world_mode_resolve(&pc, 1, 1, 0, &pw.eff, NULL);
             pw.running = 0; pc.world_mode = 1;
             int pr[XW_ROWS_MAX], pn = xw_page_rows(&pw, &pc, pr), m = 0;

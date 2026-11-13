@@ -168,6 +168,7 @@ static void cfg_apply_live(void)
 }
 static void cfg_load(void)
 {
+    xr_settings_defaults(&cfg);         /* the game's own defaults (Virtua Tennis 3's: xr_settings_vt3_defaults) */
     xr_settings_load(&cfg);
     cfg_apply_live();
 }

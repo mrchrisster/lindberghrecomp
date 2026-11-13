@@ -12,6 +12,7 @@ static const char *view_name(int v) { return VIEW_NAME[v < LG_VIEW_OFF || v > LG
 static int view_value(const char *v)
 {
     if (!strcmp(v, "world")) return LG_VIEW_CAMERA;    /* "In the world" is gone from the panel (T13): its old choice = Camera view */
+    if (!strcmp(v, "vr")) return LG_VIEW_CAMERA;       /* the panel's label for it since 2026-11-13 (written as "camera") */
     for (int i = 0; i < 4; i++) if (!strcmp(v, VIEW_NAME[i])) return i;
     return !strcmp(v, "on") ? LG_VIEW_FLAT : LG_VIEW_OFF;
 }
@@ -48,6 +49,25 @@ int xr_settings_save_name(const char *in, char out[16])
     if (ok) { memcpy(out, b, n); out[n] = 0; }
     else snprintf(out, 16, "%s", LG_XR_SAVE_NAME_DEFAULT);
     return ok;
+}
+
+static void (*g_game_defaults)(struct LgXrSettings *);
+void xr_settings_set_game_defaults(void (*fn)(struct LgXrSettings *)) { g_game_defaults = fn; }
+void xr_settings_defaults(LgXrSettings *c)
+{
+    const LgXrSettings d = LG_XR_SETTINGS_DEFAULT;
+    *c = d;
+    if (g_game_defaults) g_game_defaults(c);
+}
+void xr_settings_vt3_defaults(struct LgXrSettings *c)
+{
+    c->world_mode = 1;
+    c->imm_replays = c->imm_cutaways = LG_VIEW_FLAT; c->imm_overlays = 0; c->imm_sky = LG_SKY_STADIUM;
+    c->imm_shadow = 4096; c->imm_height = 10;
+    c->replays = c->classic_cutaways = 1; c->arcade_overlays = 0; c->classic_shadow = 1024; c->classic_card_notice = 0;
+    c->msaa = 2; c->aniso = 4; c->save = 1; snprintf(c->save_name, sizeof c->save_name, "%s", LG_XR_SAVE_NAME_DEFAULT);
+    c->language = 1; c->refresh = 120; c->foveation = 3; c->screen = 2.5f; c->hud_pitch = 10; c->show_stats = 0;
+    c->auto_coins = 1;
 }
 
 int xr_settings_aniso(int v)
@@ -88,8 +108,25 @@ void xr_settings_load(LgXrSettings *c)
     FILE *f = fopen("vr.cfg", "r");
     if (!f) f = fopen("../vr.cfg", "r");    /* beside the game: where adb can put one */
     char key[32], val[32];
-    while (f && fscanf(f, "%31s %31s", key, val) == 2) xr_settings_set(c,key,val);
+    int has_rep = 0, has_cut = 0, has_irep = 0, has_icut = 0;
+    while (f && fscanf(f, "%31s %31s", key, val) == 2) {
+        xr_settings_set(c,key,val);
+        has_rep |= !strcmp(key, "replays"); has_cut |= !strcmp(key, "classic.cutaways");
+        has_irep |= !strcmp(key, "immersive.replays"); has_icut |= !strcmp(key, "immersive.cutaways");
+    }
     if (f) fclose(f);
+    /* Replays and point cutaways are one row since 2026-11-13 ("Replays &
+     * close-ups"): one value per mode, both old keys written with it. A file
+     * with the two different: the replays key's value (an older build's file);
+     * one key alone: that one's. */
+    if (has_irep && has_icut && c->imm_replays != c->imm_cutaways)
+        fprintf(stderr, "[xr] vr.cfg: immersive.replays %s and immersive.cutaways %s differ - one row now, the replays value taken\n",
+                view_name(c->imm_replays), view_name(c->imm_cutaways));
+    if (has_icut && !has_irep) c->imm_replays = c->imm_cutaways; else c->imm_cutaways = c->imm_replays;
+    if (has_rep && has_cut && c->replays != c->classic_cutaways)
+        fprintf(stderr, "[xr] vr.cfg: replays %s and classic.cutaways %s differ - one row now, the replays value taken\n",
+                c->replays ? "on" : "off", c->classic_cutaways ? "on" : "off");
+    if (has_cut && !has_rep) c->replays = c->classic_cutaways; else c->classic_cutaways = c->replays;
     g_file = *c; g_nrun = 0;
     /* LINDBERGH_XR_SET="key=value,...": for this run only, not saved (testing) */
     const char *e = getenv("LINDBERGH_XR_SET");
@@ -112,7 +149,7 @@ void xr_settings_load(LgXrSettings *c)
     if (c->width == 2064 && c->resolution == 2280) {
         c->resolution = LG_XR_NATIVE_HEIGHT; c->width = LG_XR_NATIVE_WIDTH;
     }
-    const LgXrSettings d = LG_XR_SETTINGS_DEFAULT;
+    LgXrSettings d; xr_settings_defaults(&d);
     if (c->classic_shadow != 1024 && c->classic_shadow != 2048 && c->classic_shadow != 4096) c->classic_shadow = d.classic_shadow;
     if (c->imm_shadow != 1024 && c->imm_shadow != 2048 && c->imm_shadow != 4096) c->imm_shadow = d.imm_shadow;
     if (c->imm_sky < LG_SKY_OFF || c->imm_sky > LG_SKY_PAINTED) c->imm_sky = d.imm_sky;
