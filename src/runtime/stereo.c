@@ -123,6 +123,9 @@ static float    g_last_persp[16] = { 1.732f, 0, 0, 0, 0, 2.309f, 0, 0, 0, 0, -1,
                                         /* the game's last perspective (its usual one to start) */
 static float    g_screen_lens[2] = { 1.732f, 2.309f };   /* the screen's lens: the game camera's, as last seen */
 static int      g_vt3_flat_next = -1;   /* Virtua Tennis 3: the next frame flat (1) or world (0) at a camera cut, see stereo_vt3_camera */
+static int vt3_rule_on(void);
+static unsigned g_vt3_cam_mode = ~0u;  /* the game camera's mode last told (stereo_vt3_camera) */
+static unsigned g_vt3_mode_now = ~0u;  /* the camera mode of the frame being drawn (the [flat] log) */
 static unsigned g_vt3_cut_from, g_vt3_cut_until;   /* ... and in these frames, the first eye draw's lens decides (a cut just happened) */
                                         /* the HUD's screen is sized by the game's usual lens, not
                                          * its current one: menus zoom the camera to 3.7 and back,
@@ -4358,6 +4361,17 @@ void stereo_frame_begin(void)
         fprintf(stderr, "[stereo] frame %u: %u world draws%s, lens %.2f, near %.4f; world %.3f %.3f (%.3f %.3f), screen lens %.3f %.3f\n",
                 g_frame, g_scene_draws, g_menu ? " (menu)" : "", g_lens_seen, g_near_seen, g_world_persp[0], g_world_persp[5],
                 g_world_persp[8], g_world_persp[9], g_screen_lens[0], g_screen_lens[1]);
+    {   /* LINDBERGH_VT3_FLATLOG=1: each run of frames with one camera mode and one flat / world,
+         * as "[flat] frames A-B (N): camera mode M lens L: flat|world" when it ends */
+        static int fl = -1; static unsigned from = 0, last_mode = ~0u; static int last_flat = -1; static float last_lens;
+        if (fl < 0) { const char *v = getenv("LINDBERGH_VT3_FLATLOG"); fl = v && *v == '1'; }
+        if (fl && (g_vt3_mode_now != last_mode || g_flat != last_flat)) {
+            if (last_flat >= 0)
+                fprintf(stderr, "[flat] frames %u-%u (%u): camera mode %#x lens %.2f%s: %s\n", from, g_frame - 1, g_frame - from,
+                        last_mode, last_lens, menu_state() ? " (menu state)" : "", last_flat ? "flat" : "world");
+            from = g_frame; last_mode = g_vt3_mode_now; last_flat = g_flat; last_lens = g_world_persp[0];
+        }
+    }
     static int mode_log = -1, last_sig = -1;
     if (mode_log < 0) { const char *v = getenv("LINDBERGH_MODE_LOG"); mode_log = v && *v && *v != '0'; }
     if (mode_log) {
@@ -4437,10 +4451,18 @@ void stereo_frame_begin(void)
          * full-screen haze passes ran over the empty room and turned it a
          * flat lavender. */
         g_flat = flat_all || menu_state() || g_zoom_frames >= 6;
-        if (g_vt3_flat_next >= 0) {        /* Virtua Tennis 3: the game's camera crossed the long lens (stereo_vt3_camera) */
+        static int vt3_cur = -1;            /* the camera rule's decision in force (stereo_vt3_camera) */
+        if (g_vt3_flat_next >= 0) {        /* Virtua Tennis 3: the game's camera changed flat / world (stereo_vt3_camera) */
             g_zoom_frames = g_vt3_flat_next ? 6 : 0;
             g_flat = flat_all || menu_state() || g_vt3_flat_next;
+            vt3_cur = g_vt3_flat_next;
             g_vt3_flat_next = -1;
+        } else if (vt3_cur == 1 && vt3_rule_on()) {
+            /* held by the mode rule: a flat scene's short lens must not let
+             * the zoom count drop it back to world after one frame */
+            g_zoom_frames = 6; g_flat = 1;
+        } else if (vt3_cur == 0 && vt3_rule_on() && !flat_all && !menu_state()) {
+            g_zoom_frames = 0; g_flat = 0;  /* the court camera: world, whatever lens passes through */
         }
         /* Widescreen: a sniping event is the arcade's 4:3 from its start - the
          * scope's mask is drawn for the 4:3 screen, and waiting for its lens
@@ -4453,6 +4475,7 @@ void stereo_frame_begin(void)
      * its lens ramps 2.4, 8.4, 11.4 over a few frames - left the screen a
      * third of its size, and the magnified picture looked like no zoom. */
     if (g_flat) { g_screen_lens[0] = 1.732f; g_screen_lens[1] = 1.732f * GAME_W / GAME_H; }
+    g_vt3_mode_now = g_vt3_cam_mode;
     g_hud_fb = g_hud_fb_next;           /* 3D drawn there this frame is screen content */
     g_world_fb = g_world_fb_next;
     g_hud_fb_next = ~0u;
@@ -4483,8 +4506,47 @@ void stereo_frame_begin(void)
  * next frame starts flat (or world) at once, and the zoom count agrees.
  * LINDBERGH_VT3_CUTFLAT=0 turns it off (the 6-frame rule alone);
  * LINDBERGH_VT3_CUTLOG=1 logs camera modes and each decision. */
-static unsigned g_vt3_cam_mode = ~0u;
 static int g_vt3_cam_long = -1;
+/* 2026-11-13 (owner: "with flat replays and points there are still some
+ * replays in vr"): flat or world by the camera's MODE, not its lens. The lens
+ * rule (flat past zoom_limit) missed every scene shot with a short lens - most
+ * replays (lens ~3.2), many point close-ups (3.2), the big-point serve
+ * close-up's first ~20 frames (2.3-4), game set and match's first frames
+ * (~6.4, a short one never zoomed) - and those were drawn as a 3D world
+ * although the row said Flat screen. Now, in Immersive:
+ *   1, 2 (the court / play camera): world;
+ *   6 replay, 7 point close-up (and its split screen), 5 big-point serve
+ *   close-up, 8 change of ends, 9 game set and match, 4 match intro: the
+ *   "Replays and reaction cams" row - VR (LG_VIEW_CAMERA / _WORLD; only 6
+ *   and 7 have a VR view, stereo_vt3_view): 6/7 world, the others by the
+ *   lens as before; Flat screen or Off (a scene the game still plays, e.g.
+ *   game set and match): flat. 6 follows the replays value, the others the
+ *   cutaways value (the one row sets both; tests may pin them apart);
+ *   anything else (0xa slate, 0xb continue, 0xd game over, the attract's):
+ *   the lens rule (their loops are menu states - games/vt3/src/host.c).
+ * LINDBERGH_VT3_FLATRULE=0: the lens rule alone (before). */
+static int vt3_rule_on(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_FLATRULE"), *c = getenv("LINDBERGH_VT3_CUTFLAT");
+                  on = world_mode_immersive() && !(v && *v == '0') && !(c && *c == '0'); }
+    return on;
+}
+static int vt3_mode_flat(unsigned mode, float lens)
+{
+    static int rule = -1;
+    if (rule < 0) { const char *v = getenv("LINDBERGH_VT3_FLATRULE"); rule = !(v && *v == '0'); }
+    const int by_lens = lens > zoom_limit() && !g_rv.active;    /* a replay / close-up drawn in the world (stereo_vt3_view): world */
+    if (!rule) return by_lens;
+    switch (mode) {
+    case 1: case 2: return 0;
+    case 6: case 7: return rv_kind(mode) ? 0 : 1;
+    case 4: case 5: case 8: case 9: {
+        const int vr = world_mode_cutaways() && (world_mode_cutaway_view() == LG_VIEW_CAMERA || world_mode_cutaway_view() == LG_VIEW_WORLD);
+        return vr ? by_lens : 1; }
+    default: return by_lens;
+    }
+}
 void stereo_vt3_camera(unsigned mode, float lens)
 {
     static int on = -1, lg;
@@ -4496,7 +4558,7 @@ void stereo_vt3_camera(unsigned mode, float lens)
         if (g_vt3_cam_mode != ~0u) { g_vt3_cut_from = g_frame + 1; g_vt3_cut_until = g_frame + 2; }
         g_vt3_cam_mode = mode;
     }
-    int lng = lens > zoom_limit() && !g_rv.active;    /* a replay / close-up drawn in the world (stereo_vt3_view): world */
+    int lng = vt3_mode_flat(mode, lens);
     if (lng == g_vt3_cam_long) return;
     g_vt3_cam_long = lng;
     g_vt3_flat_next = lng;

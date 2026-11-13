@@ -11,6 +11,7 @@
  */
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -600,6 +601,20 @@ void host_vr_input(int gun_x, int gun_y, unsigned held, int coin)
     g_held = held;
     if (coin) g_cab.coins[0] += (unsigned)coin;
 }
+
+/* The game asks for a coin (Virtua Tennis 3's continue screen opening,
+ * hle_sega.c): the headset gives one with Coins Automatic (host_xr.c takes the
+ * request, xr_controls.c coin_wanted); the desktop only with
+ * LINDBERGH_CONTINUE_COIN=1 (tests - a person drops their own coin). */
+static _Atomic int g_coin_wanted;
+int (*g_host_takes_coin_requests)(void);    /* host_xr.c: non-zero when it handles them */
+void host_coin_wanted(void)
+{
+    if (g_host_takes_coin_requests && g_host_takes_coin_requests()) { atomic_store(&g_coin_wanted, 1); return; }
+    const char *v = getenv("LINDBERGH_CONTINUE_COIN");
+    if (v && *v == '1') { g_cab.coins[0]++; fprintf(stderr, "[cab] frame %u: a coin for the continue screen (LINDBERGH_CONTINUE_COIN)\n", g_frame); }
+}
+int host_take_coin_wanted(void) { return atomic_exchange(&g_coin_wanted, 0); }
 
 /* Two guns (dual wielding): the second one's place too; on 0, P1's alone. */
 void host_vr_input2(int on, int gun2_x, int gun2_y)

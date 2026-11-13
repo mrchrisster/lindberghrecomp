@@ -7,11 +7,11 @@ import unittest
 
 class State(C.Structure):
     _fields_=[("gun_hand",C.c_int),("prev_trigger",C.c_int*2),("prev_grip",C.c_int*2),("prev_start",C.c_int*2),
-              ("grip_at",C.c_int64*2),("joined_at",C.c_int64),("credit_frames",C.c_uint)]
+              ("grip_at",C.c_int64*2),("joined_at",C.c_int64),("credit_frames",C.c_uint),("auto_coin_at",C.c_int64)]
 class Frame(C.Structure):
     _fields_=[("time",C.c_int64),("dual",C.c_int),("auto_coins",C.c_int),("blocked",C.c_int),
               *[(name,C.c_int*2) for name in ("trigger","grip","lower","upper","stick","aimed","start_override","firing")],("fire_supplied",C.c_int),
-              ("joystick",C.c_int),("thumb_x",C.c_float*2),("thumb_y",C.c_float*2)]
+              ("joystick",C.c_int),("thumb_x",C.c_float*2),("thumb_y",C.c_float*2),("coin_wanted",C.c_int)]
 class Cabinet(C.Structure):
     _fields_=[("held",C.c_uint),("coins",C.c_int)]
 
@@ -87,6 +87,15 @@ class ControlsTests(unittest.TestCase):
         self.assertEqual(self.step(10,auto_coins=1,stick=[1,0]).coins,0)
         self.step(20,auto_coins=1)
         self.assertEqual(self.step(30,auto_coins=1,stick=[0,1]).coins,1)
+    def test_lever_cabinet_continue_coin_then_plain_start(self):
+        # Virtua Tennis 3: the continue screen asks for a coin; a Start within 10 s is a plain Start
+        self.assertEqual(self.step(0,joystick=1,auto_coins=1,coin_wanted=1).coins,1)
+        r=self.step(4500,joystick=1,auto_coins=1,stick=[1,0]);self.assertEqual(r.coins,0);self.assertTrue(r.held)
+        self.step(4600,joystick=1,auto_coins=1)
+        self.assertEqual(self.step(16000,joystick=1,auto_coins=1,stick=[1,0]).coins,1)   # 10 s on: a coin again
+        self.step(16100,joystick=1,auto_coins=1)
+        self.assertEqual(self.step(17000,joystick=1,auto_coins=1,stick=[1,0]).coins,0)   # ...and the next press is plain
+        self.assertEqual(self.step(30000,joystick=1,auto_coins=0,coin_wanted=1).coins,0) # coins by menu: none given
     def test_startup_credit_occurs_once(self):
         self.assertEqual(sum(self.step(i,auto_coins=1).coins for i in range(500)),1)
     def test_gl_firing_result_preserves_panel_callback_order(self):

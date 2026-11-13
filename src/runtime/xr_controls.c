@@ -59,9 +59,19 @@ LgXrCabinet lg_xr_controls_update(LgXrControls *s,const LgXrControlFrame *f)
     if(start)out.held|=CAB_P1_START;
     if(start2)out.held|=CAB_P2_START;
     if(f->auto_coins) {
-        if(++s->credit_frames==240)++out.coins;
-        if(start&&!s->prev_start[0])++out.coins;
-        if(start2&&!s->prev_start[1])++out.coins;
+        /* A lever cabinet (Virtua Tennis 3): a coin the game takes ~2 s to count
+         * makes a Start pressed with it go unheard (its continue screen: each
+         * stick click added a coin and nothing else - the owner's "only add
+         * coins", 2026-11-13). So the coin comes when the game asks for one
+         * (coin_wanted: the continue screen opening), and a Start press adds one
+         * only when no automatic coin came in the last 10 s - a second press is
+         * a plain Start. Gun games: a coin with every Start, as before. */
+        const int lever_cab=f->joystick;
+        const int cool=lever_cab&&s->auto_coin_at&&f->time-s->auto_coin_at<10000000000LL;
+        if(++s->credit_frames==240){++out.coins;s->auto_coin_at=f->time;}
+        if(lever_cab&&f->coin_wanted){++out.coins;s->auto_coin_at=f->time;}
+        if(start&&!s->prev_start[0]&&!cool){++out.coins;s->auto_coin_at=f->time;}
+        if(start2&&!s->prev_start[1]&&!cool){++out.coins;s->auto_coin_at=f->time;}
     }
     if(join_start&&!f->blocked)out.held|=CAB_P2_START;
     s->prev_start[0]=start;s->prev_start[1]=start2;

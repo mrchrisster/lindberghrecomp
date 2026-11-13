@@ -9,6 +9,7 @@ typedef struct {
     int gun_hand,prev_trigger[2],prev_grip[2],prev_start[2];
     int64_t grip_at[2],joined_at;
     unsigned credit_frames;
+    int64_t auto_coin_at;       /* a lever cabinet's last automatic coin (0: none yet) */
 } LgXrControls;
 #define LG_XR_CONTROLS_DEFAULT {1,{0,0},{0,0},{0,0},{0,0},0,0}
 typedef struct {
@@ -20,6 +21,9 @@ typedef struct {
     int firing[2],fire_supplied;
     /* a lever cabinet (game_profile()->joystick): the thumbsticks, -1..1, up positive */
     int joystick;float thumb_x[2],thumb_y[2];
+    /* the game asks for a coin now (Virtua Tennis 3's continue screen opening, hle_sega.c):
+     * given with Coins Automatic */
+    int coin_wanted;
 } LgXrControlFrame;
 typedef struct { unsigned held;int coins; } LgXrCabinet;
 int lg_xr_controls_select(LgXrControls *state,const int trigger[2],int dual);

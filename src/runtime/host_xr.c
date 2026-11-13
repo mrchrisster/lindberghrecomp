@@ -90,6 +90,8 @@
 /* host_sdl.c: the gun and the cabinet's buttons, from the controllers */
 void host_vr_input(int gun_x, int gun_y, unsigned held, int coin);
 void host_vr_input2(int on, int gun2_x, int gun2_y);
+int host_take_coin_wanted(void);
+extern int (*g_host_takes_coin_requests)(void);
 
 #ifndef GL_TEXTURE_INTERNAL_FORMAT
 #define GL_TEXTURE_WIDTH            0x1000
@@ -166,6 +168,7 @@ static void cfg_apply_live(void)
     g_replays = world_mode_replays();
     g_cutaways = world_mode_cutaways();
 }
+static int xr_takes_coin_requests(void) { return cfg.auto_coins; }   /* Coins Automatic: the game's asks are ours */
 static void cfg_load(void)
 {
     xr_settings_defaults(&cfg);         /* the game's own defaults (Virtua Tennis 3's: xr_settings_vt3_defaults) */
@@ -833,7 +836,7 @@ static void input_frame(XrTime t)
                     aim_hit_t[pl] > 0 ? "read" : "assumed", stereo_flat_frame(), aim_on_box[pl] ? ", on a box" : "");
     }
 
-    LgXrControlFrame frame={0};frame.time=t;frame.dual=dual;frame.auto_coins=cfg.auto_coins;frame.blocked=menu.open;
+    LgXrControlFrame frame={0};frame.time=t;frame.dual=dual;frame.auto_coins=cfg.auto_coins;frame.blocked=menu.open;frame.coin_wanted=host_take_coin_wanted();
     for(int h=0;h<2;++h) {
         frame.trigger[h]=trig[h];frame.grip[h]=grip[h];frame.lower[h]=btn_a[h];frame.upper[h]=btn_b[h];frame.stick[h]=stick[h];
     }
@@ -934,6 +937,7 @@ int xr_init(void)
     if (!gl_load()) { fprintf(stderr, "[xr] cannot load GLES\n"); return 0; }
     { extern void (*g_hold_next_frame)(void); g_hold_next_frame = xr_hold_next_frame; }
     cfg_load();
+    g_host_takes_coin_requests = xr_takes_coin_requests;
     stereo_show_game_sight(cfg.crosshair && !game_profile()->joystick);   /* no sight on a lever cabinet */
 
 #ifdef __ANDROID__

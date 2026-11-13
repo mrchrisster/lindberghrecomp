@@ -1443,11 +1443,26 @@ static void vt3_entrance_note(void)
 {
     if (vt3_hold_on() && g_hold_next_frame) g_hold_next_frame();
 }
+/* Virtua Tennis 3's continue screen opening (usrAcContinueLoop::init): the
+ * host is asked for a coin - with Coins Automatic the headset drops one, so
+ * the credit is counted (the game takes ~2 s) before the screen takes Start
+ * (~4.5 s in): the stick click continues (2026-11-13, owner: "i can not resume
+ * a game on game over - only add coins"). LINDBERGH_VT3_CONTINUE_COIN=0 off. */
+static void vt3_continue_note(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("LINDBERGH_VT3_CONTINUE_COIN"); on = !(v && *v == '0'); }
+    extern void host_coin_wanted(void);
+    if (on) host_coin_wanted();
+}
+static void (*g_vt3_continue)(CPU *);
+static void h_vt3_continue(CPU *c) { vt3_continue_note(); push32(c, 0xDEADBEEFu); g_vt3_continue(c); }
 static void (*g_vt3_entrance)(CPU *);
 static void h_vt3_entrance(CPU *c) { vt3_entrance_note(); push32(c, 0xDEADBEEFu); g_vt3_entrance(c); }
 #define FLOW_DEF(n, sym) static void (*g_flow_##n)(CPU *); \
     static void h_flow_##n(CPU *c) { extern unsigned g_frame; fprintf(stderr, "[flow] frame %u: %s\n", g_frame, #n); \
                                      if (!strcmp(#n, "EntranceLoop")) vt3_entrance_note(); \
+                                     if (!strcmp(#n, "ContinueLoop")) vt3_continue_note(); \
                                      push32(c, 0xDEADBEEFu); g_flow_##n(c); }
 FLOW_STATES(FLOW_DEF)
 static int g_vt3_flowlog;
@@ -2095,6 +2110,8 @@ static void vt3_jumps(void)
             if (!g_vt3_flowlog && g_world_capable && vt3_hold_on() &&
                 vt3_wrap("_ZN17usrAcEntranceLoop4initEv", &g_vt3_entrance, h_vt3_entrance))
                 fprintf(stderr, "[sega] Virtua Tennis 3: the frame after each match's intro starts held (LINDBERGH_VT3_HOLD=0 off)\n");
+            if (!g_vt3_flowlog && !vt3_wrap("_ZN17usrAcContinueLoop4initEv", &g_vt3_continue, h_vt3_continue))
+                fprintf(stderr, "[sega] Virtua Tennis 3: WARNING usrAcContinueLoop::init not wrapped - no automatic coin for the continue screen\n");
             vt3_hud_anchor_install();
             vt3_routines_install();
             { const char *u = getenv("LINDBERGH_VT3_ATTACHLOG");
