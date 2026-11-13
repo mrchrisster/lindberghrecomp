@@ -4336,9 +4336,22 @@ void stereo_frame_begin(void)
         g_weapon_draws = 0;
     }
     /* (not a replay's / close-up's lens drawn in the world: the HUD's screen keeps the court camera's size) */
+    static float court_lens[2]; static int have_court;
     if (!g_flat && !g_rv.active && g_scene_draws > 0 && is_perspective(g_world_persp) && g_world_persp[0] > 0.3f && g_world_persp[0] < zoom_limit()) {
         g_screen_lens[0] = g_world_persp[0];
         g_screen_lens[1] = g_world_persp[5];
+        court_lens[0] = g_screen_lens[0]; court_lens[1] = g_screen_lens[1]; have_court = 1;
+    }
+    /* T21: a replay or close-up in Camera view - the HUD's screen (head-locked,
+     * as wide as the court camera's view: its corners ~30 degrees out) drawn
+     * smaller, so the corner plates (REPLAY, the close-up's point plate) sit
+     * nearer the middle of the view; back to the court's size with the court.
+     * LINDBERGH_VT3_REPLAY_HUD=<k>: the screen 1/k as wide (default 1.6; 1 off). */
+    if (!g_flat && have_court) {
+        static float k = -1;
+        if (k < 0) { const char *v = getenv("LINDBERGH_VT3_REPLAY_HUD"); k = v && *v ? (float)atof(v) : 1.6f; if (!(k >= 1 && k <= 4)) k = 1; }
+        const float f = g_rv.active == LG_VIEW_CAMERA ? k : 1.0f;
+        g_screen_lens[0] = court_lens[0] * f; g_screen_lens[1] = court_lens[1] * f;
     }
     g_hud2d = g_pass2d = 0;
     g_zoom_draws = g_hudfb_draws = 0;
