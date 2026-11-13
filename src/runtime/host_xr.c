@@ -1324,6 +1324,13 @@ static int splash_init(void)
     for (int y = 0; y < h; y++)        /* GL rows run bottom up */
         gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, h - 1 - y, w, 1, GL_RGBA, GL_UNSIGNED_BYTE, px + (size_t)y * w * 4);
     gl.BindTexture(GL_TEXTURE_2D, (GLuint)was);
+    /* T21b: the picture's 1220 row uploads finished before the image goes to
+     * the compositor. Without it the driver sent the first rows on and kept
+     * the rest queued until the next flush - on a cold first start (the game's
+     * loading holding the queue) for seconds: the panel showed cut off below
+     * the controllers, and the loading line's colour cell and the ball (the
+     * last rows of the atlas) were not there yet - the line missing. */
+    gl.Finish();
     XrSwapchainImageReleaseInfo ri = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
     xrReleaseSwapchainImage(sp_chain, &ri);
     free(px);
