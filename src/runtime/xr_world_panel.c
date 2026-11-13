@@ -81,7 +81,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS),
-                                 XW_ROW(XW_CARD), XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
+                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
@@ -167,12 +167,10 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
         snprintf(it[XW_MSAA].value, 40, "%s%s", m >= 4 ? "4x" : m >= 2 ? "2x" : "Off",
                  !pinned(w, XW_MSAA) && m != w->eff.msaa ? " (on restart)" : "");
     }
-    {   /* both apply on the next start: "(on restart)" while the stored one is not the running one */
-        int card = cfg->classic_card_notice, lang = cfg->language;
-        if (pinned(w, XW_CARD)) card = w->eff.card_notice;
+    {   /* applies on the next start: "(on restart)" while the stored one is not the running one */
+        int lang = cfg->language;
         if (pinned(w, XW_LANGUAGE)) lang = w->eff.language;
-        snprintf(it[XW_CARD].value, 40, "%s%s", on_off(card),
-                 !pinned(w, XW_CARD) && w->running == 0 && card != w->eff.card_notice ? " (on restart)" : "");
+        snprintf(it[XW_CARD].value, 40, "%s", on_off(w->eff.card_notice));     /* (no row since 2026-11-13) */
         snprintf(it[XW_LANGUAGE].value, 40, "%s%s", lang ? "English" : "Japanese",
                  !pinned(w, XW_LANGUAGE) && lang != w->eff.language ? " (on restart)" : "");
     }
@@ -205,7 +203,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     for (int i = 0; i < XW_COUNT; i++) {
         size_t l = strlen(it[i].value);
         const int pin = i == XW_REPLAYS || i == XW_CUTAWAYS ? pinned_rc(w) : pinned(w, i);
-        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && (i != XW_CARD || page_mode(w) == 0) && pin) snprintf(it[i].value + l, 40 - l, " (env.txt)");
+        if (i != XW_MODE && i != XW_MODE_CLASSIC && i != XW_MODE_VR && i != XW_CARD && pin) snprintf(it[i].value + l, 40 - l, " (env.txt)");
     }
     if (!pinned(w, XW_SHADOW) && page_mode(w) == w->running && sh != e->shadow) {
         size_t l = strlen(it[XW_SHADOW].value);
@@ -223,7 +221,7 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
         c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow;
         c->aniso = d.aniso;     /* Texture filtering: a row on both advanced pages (one value) */
     } else {
-        c->replays = d.replays; c->arcade_overlays = d.arcade_overlays; c->classic_card_notice = d.classic_card_notice;
+        c->replays = d.replays; c->arcade_overlays = d.arcade_overlays;
         c->classic_cutaways = d.classic_cutaways; c->classic_shadow = d.classic_shadow;
         c->aniso = d.aniso;
     }
@@ -266,7 +264,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
         c->imm_sky = c->imm_sky == LG_SKY_STADIUM ? LG_SKY_PAINTED : c->imm_sky == LG_SKY_PAINTED ? LG_SKY_OFF : LG_SKY_STADIUM;
         fx |= live; break;
     case XW_HEIGHT: if (!im) return 0; c->imm_height = next_step(c->imm_height, LG_XR_HEIGHT_STEPS, LG_XR_HEIGHT_NSTEPS); fx |= live; break;
-    case XW_CARD: if (im || page_mode(w) < 0) return 0; c->classic_card_notice = !c->classic_card_notice; break;   /* on restart */
+    case XW_CARD: return 0;     /* Card reader notice: no row since 2026-11-13 (always off; classic.card_notice ignored) */
     case XW_LANGUAGE: c->language = !c->language; break;                                                     /* on restart */
     case XW_SAVE: if (page_mode(w) < 0) return 0; c->save = !c->save; break;                               /* on restart */
     case XW_MSAA: c->msaa = c->msaa >= 4 ? 0 : c->msaa >= 2 ? 4 : 2; break;                                 /* Off > 2x > 4x, on restart */

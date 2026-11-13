@@ -126,8 +126,9 @@ int main(int argc, char **argv) {
     def test_card_notice_and_language(self):
         c = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "card"))[0].split(" | ")[1]
         self.assertEqual(c(), "0 1")                                                     # off, English
-        self.assertEqual(c("classic.card_notice on\nlanguage japanese\n"), "1 0")
+        self.assertEqual(c("classic.card_notice on\nlanguage japanese\n"), "0 0")     # no row / no effect since 2026-11-13
         self.assertEqual(c("mode immersive\nclassic.card_notice on\n"), "0 1")         # VR: always off
+        self.assertEqual(c("classic.card_notice on\n", {"LINDBERGH_VT3_CARD_RW": "1"}), "1 1")
         self.assertEqual(c("mode immersive\n", {"LINDBERGH_VT3_CARD_RW": "1"}), "1 1")  # env for tests
         self.assertEqual(c(None, {"LINDBERGH_VT3_LANGUAGE": "japanese"}), "0 0")
         _, log = self.run_wm("language japanese\n")

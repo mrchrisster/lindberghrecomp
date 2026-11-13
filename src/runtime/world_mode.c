@@ -27,7 +27,7 @@ static const char *const ENV_NAME[WM_COUNT] = {
     "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK", "LINDBERGH_VT3_SKY",
     "LINDBERGH_VT3_HEIGHT", "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE", "LINDBERGH_ANISO" };
 static const char *const KEY_CLASSIC[WM_COUNT] = {
-    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, "classic.card_notice", "language", "msaa", "save", "aniso" };
+    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, NULL, "language", "msaa", "save", "aniso" };
 static const char *const KEY_IMMERSIVE[WM_COUNT] = {
     "mode", "immersive.replays", "immersive.overlays", "immersive.cutaways", "immersive.shadow",
     "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height", NULL, "language", "msaa", "save", "aniso" };
@@ -118,8 +118,12 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     if (k[WM_DOLLY] == WM_SRC_FILE) k[WM_DOLLY] = WM_SRC_DEFAULT;   /* (no longer read from vr.cfg) */
     if (k[WM_BACK] == WM_SRC_FILE) k[WM_BACK] = WM_SRC_DEFAULT;
     if ((v = env(WM_HEIGHT))) { o->height = (float)atof(v); k[WM_HEIGHT] = WM_SRC_ENV; }
-    o->card_notice = im ? 0 : s->classic_card_notice;        /* VR: always off */
-    if (im) k[WM_CARD] = WM_SRC_DEFAULT;
+    /* The card reader's notice: off in both modes (2026-11-13, owner). Classic's "Card reader notice"
+     * row is gone: with Save progress on (the default) the readers stayed off whatever it said, and with
+     * Arcade overlays hidden the bar was never opened either. vr.cfg's classic.card_notice is still read
+     * and written back (an older build reads it) but does nothing; LINDBERGH_VT3_CARD_RW=1 for tests. */
+    o->card_notice = 0; k[WM_CARD] = WM_SRC_DEFAULT;
+    (void)s->classic_card_notice;
     if ((v = env(WM_CARD))) { o->card_notice = *v == '1'; k[WM_CARD] = WM_SRC_ENV; }
     o->language = s->language;
     o->msaa = s->msaa;

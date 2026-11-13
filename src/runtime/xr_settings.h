@@ -34,8 +34,9 @@ typedef struct LgXrSettings {
     int imm_shadow;             /* "immersive.shadow" */
     int imm_height;             /* "immersive.height": the viewpoint raised from the camera's own, game
                                  * units (0.1 m): 0 / 10 / 20 = Low / Medium / High (an older negative = Low) */
-    int classic_card_notice;    /* "classic.card_notice off|on": the card reader's "cannot use a card" bar and
-                                 * boot wait (Virtua Tennis 3; VR: always off); applies on the next start */
+    int classic_card_notice;    /* "classic.card_notice off|on": was Classic's Card reader notice row (Virtua
+                                 * Tennis 3); no row and no effect since 2026-11-13 (the notice is always off) -
+                                 * read and written back unchanged so an older build's file stays as it was */
     int language;               /* "language english|japanese": 1 English (the cabinet's region export), 0
                                  * Japanese; applies on the next start (Virtua Tennis 3) */
     int msaa;                   /* "msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer (VR and

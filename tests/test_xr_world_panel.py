@@ -98,7 +98,7 @@ int main(void) {
     fx = xw_choose(&w, &c, XW_REPLAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0 && c.replays == 0);
     xw_choose(&w, &c, XW_REPLAYS); assert(c.classic_cutaways == 1 && c.replays == 1);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 13 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 12 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && !has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -110,14 +110,11 @@ int main(void) {
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "In the world (env.txt)"));
     assert(xw_choose(&w, &c, XW_REPLAYS) == 0);
     w.running = 0; w.eff.replays = 0;
-    /* Classic's Card reader notice: Off by default, on restart */
+    /* Classic's Card reader notice: no row since 2026-11-13 (no effect with Save progress on), clicks ignored */
     w.page = XW_PAGE_CLASSIC;
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_CARD].label, "Card reader notice") && !strncmp(it[XW_CARD].value, "Off", 3));
-    { int pins = w.pins; w.pins = 0; w.eff.card_notice = 0;
-      fx = xw_choose(&w, &c, XW_CARD); assert(fx == XP_SAVE && c.classic_card_notice == 1);
-      xw_items(&w, &c, it); assert(!strcmp(it[XW_CARD].value, "On (on restart)"));
-      xw_choose(&w, &c, XW_CARD); assert(c.classic_card_notice == 0);
-      w.page = XW_PAGE_IMMERSIVE; assert(xw_choose(&w, &c, XW_CARD) == 0); w.page = XW_PAGE_CLASSIC;   /* not VR's */
+    { int pins = w.pins; w.pins = 0; w.eff.card_notice = 0; c.classic_card_notice = 0;
+      assert(xw_choose(&w, &c, XW_CARD) == 0 && c.classic_card_notice == 0);
+      w.page = XW_PAGE_IMMERSIVE; assert(xw_choose(&w, &c, XW_CARD) == 0); w.page = XW_PAGE_CLASSIC;
       w.pins = pins; }
     /* shadow on restart, on the running mode's page */
     w.page = XW_PAGE_CLASSIC; w.eff.shadow = 1024; c.classic_shadow = 2048;

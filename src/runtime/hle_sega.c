@@ -2104,10 +2104,10 @@ static void vt3_jumps(void)
             nh += vt3_wrap("_ZN22CCardSlotWindowManager19window_slot_usecardElb", &g_vt3_slot_card, h_vt3_slot_card);
             nh += vt3_wrap("_ZN12ab_card_info4initEv", &g_vt3_card_init, h_vt3_card_init);
         }
-        {   /* Classic's Card reader notice row (classic.card_notice; VR: always off), LINDBERGH_VT3_CARD_RW=1|0;
-             * Save progress keeps the reader off whatever the notice row says */
+        {   /* the card reader's notice: always off (no panel row since 2026-11-13); LINDBERGH_VT3_CARD_RW=1 for tests;
+             * Save progress keeps the reader off even then */
             if (world_mode_save() && world_mode_card_notice() && guest_symbol("_ZN6backup17getCard_rw_1p_useEv"))
-                fprintf(stderr, "[sega] Virtua Tennis 3: Save progress on - card readers kept off (the Card reader notice row is ignored)\n");
+                fprintf(stderr, "[sega] Virtua Tennis 3: Save progress on - card readers kept off (LINDBERGH_VT3_CARD_RW=1 ignored)\n");
             if ((!world_mode_card_notice() || world_mode_save()) && guest_symbol("_ZN6backup17getCard_rw_1p_useEv")) {     /* Virtua Tennis 3 only */
                 if (guest_override("_ZN6backup17getCard_rw_1p_useEv", h_vt3_card_rw_off) &&
                     guest_override("_ZN6backup17getCard_rw_2p_useEv", h_vt3_card_rw_off))

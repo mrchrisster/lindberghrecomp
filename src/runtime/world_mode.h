@@ -35,8 +35,8 @@ typedef struct {
     float shadow_scale;         /* what stereo.c scales shadow maps by: 0 = as the game makes them */
     float dolly, back;          /* viewpoint forward / back in game units (immersive) */
     float height;               /* viewpoint raised (+) / lowered (-) in game units (immersive) */
-    int card_notice;            /* the card reader's notice and boot wait (Classic's classic.card_notice;
-                                 * VR: 0); LINDBERGH_VT3_CARD_RW=1|0; at registration, so on restart */
+    int card_notice;            /* the card reader's notice and boot wait: 0 (no panel row since 2026-11-13;
+                                 * vr.cfg classic.card_notice ignored); LINDBERGH_VT3_CARD_RW=1 for tests */
     int language;               /* 1 English, 0 Japanese (vr.cfg language, LINDBERGH_VT3_LANGUAGE); on restart */
     int msaa;                   /* anti-aliasing samples asked for: 0, 2, 4 (vr.cfg msaa, LINDBERGH_MSAA); on restart */
     int save;                   /* Save progress: 1P's card record kept in vt3_save.bin (vr.cfg save, LINDBERGH_VT3_SAVE); on restart */
