@@ -989,7 +989,34 @@ int host_gl_context(void)
     return lvk_host_init(g_win.win, g_win.w, g_win.h);
 #else
     if (g_win.gl) return 1;
+#if defined(__ANDROID__)
+    /* LINDBERGH_GL_ROBUST=1 (test switch, the Quest's GPU page faults - kgsl
+     * "UCHE: BR_SP" ~900/s from the boot screens on): a context with robust
+     * buffer access, where a shader's read past a buffer (a uniform block, a
+     * uniform array read at a run-time index) gives zeros instead of
+     * faulting. Fewer or no faults with it on = an out-of-range buffer read;
+     * the same faults = a texture descriptor (sampler / unit mismatch).
+     * Refused by the driver: made without, as before. */
+    const char *rv = getenv("LINDBERGH_GL_ROBUST");
+    const int robust = rv && *rv == '1';
+    if (robust) SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_ROBUST_ACCESS_FLAG);
+#endif
     g_win.gl = SDL_GL_CreateContext(g_win.win);
+#if defined(__ANDROID__)
+    if (robust && !g_win.gl) {
+        fprintf(stderr, "[window] robust context refused (%s) - made without\n", SDL_GetError());
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        g_win.gl = SDL_GL_CreateContext(g_win.win);
+    } else if (robust && g_win.gl) {
+        void (*get)(unsigned, int *) = (void (*)(unsigned, int *))SDL_GL_GetProcAddress("glGetIntegerv");
+        const unsigned char *(*str)(unsigned) = (const unsigned char *(*)(unsigned))SDL_GL_GetProcAddress("glGetString");
+        int ra = -1;
+        if (get) get(0x90F3 /* GL_CONTEXT_ROBUST_ACCESS */, &ra);
+        const char *ext = str ? (const char *)str(0x1F03 /* GL_EXTENSIONS */) : NULL;
+        fprintf(stderr, "[window] robust buffer access context: GL_CONTEXT_ROBUST_ACCESS %d, KHR_robust_buffer_access_behavior %s\n",
+                ra, ext && strstr(ext, "GL_KHR_robust_buffer_access_behavior") ? "yes" : "no");
+    }
+#endif
     if (!g_win.gl) {
         fprintf(stderr, "[window] SDL_GL_CreateContext: %s\n", SDL_GetError());
         return 0;
