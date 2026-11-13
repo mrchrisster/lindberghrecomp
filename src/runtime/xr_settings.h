@@ -39,8 +39,8 @@ typedef struct LgXrSettings {
                                  * read and written back unchanged so an older build's file stays as it was */
     int language;               /* "language english|japanese": 1 English (the cabinet's region export), 0
                                  * Japanese; applies on the next start (Virtua Tennis 3) */
-    int msaa;                   /* "msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer (VR and
-                                 * Classic on the headset; 0 off; VT3's default 2x); applies on the next start */
+    int classic_msaa;           /* "classic.msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer in
+                                 * Classic mode on the headset (0 off); applies on the next start */
     int save;                   /* "save on|off": Save progress - 1P's card record kept in vt3_save.bin
                                  * (Virtua Tennis 3, both modes; default on since T21 - absent = on, an
                                  * explicit "save off" stays off); applies on the next start */
@@ -56,6 +56,8 @@ typedef struct LgXrSettings {
                                  * the Screen distance row as before, nothing written. Virtua Tennis 3: 1
                                  * (Medium = the size before 2026-11-13); a file without the key takes it
                                  * from its "screen" distance (xr_settings_screen_size_from) */
+    int imm_msaa;               /* "immersive.msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer
+                                 * in VR mode (0 off; VT3's default 2x); applies on the next start */
 } LgXrSettings;
 /* Screen size Small / Medium / Big: the flat picture's width in degrees (Medium = the arcade's
  * picture as it always was: lens 1.732, 60 degrees across) */
@@ -87,7 +89,7 @@ int xr_settings_screen_size_from(float distance);
  * xr_settings_vt3_defaults. (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT,-1}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT,-1,0}
 /* Save progress's record name (save_name): Virtua Tennis 3's name entry
  * takes up to 10 characters; letters and digits only (the font's, and one
  * vr.cfg token) */
@@ -119,10 +121,11 @@ void xr_settings_defaults(LgXrSettings *settings);
 void xr_settings_set_game_defaults(void (*fn)(struct LgXrSettings *));
 /* Virtua Tennis 3's defaults (the owner's Quest 3 settings, 2026-11-13): VR
  * mode; VR: Replays and reaction cams Flat screen, overlays hidden, stadium sky,
- * shadows 4096, Camera height Medium; Classic: Replays and reaction cams on,
- * overlays hidden, shadows 1024, card notice off; both: anti-aliasing 2x,
- * texture filtering 4x, save on, English, 120 Hz, foveation high, screen
- * 2.5 m, HUD position 10, frame rate counter off, coins automatic */
+ * shadows 4096, Camera height Medium, anti-aliasing 2x; Classic: Replays and
+ * reaction cams on, overlays hidden, shadows 1024, card notice off,
+ * anti-aliasing Off; both: texture filtering 4x, save on, English, 120 Hz,
+ * foveation high, screen 2.5 m, HUD position 10, frame rate counter off, coins
+ * automatic */
 void xr_settings_vt3_defaults(struct LgXrSettings *settings);
 void xr_settings_load(LgXrSettings *settings);
 void xr_settings_set(LgXrSettings *settings,const char *key,const char *value);
@@ -132,6 +135,8 @@ void xr_settings_save(const LgXrSettings *settings);
 int xr_settings_save_name(const char *in, char out[16]);
 /* an anisotropy value as stored: 0 (off), 2, 4, 8 or 16 - others the nearest below (1 = 0) */
 int xr_settings_aniso(int v);
+/* anti-aliasing samples as stored: 0 (off), 2 or 4 (1/3 -> 2, >4 -> 4, <0 -> 0) */
+int xr_settings_msaa(int v);
 #ifdef __cplusplus
 }
 #endif

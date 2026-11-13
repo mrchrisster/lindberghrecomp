@@ -27,10 +27,10 @@ static const char *const ENV_NAME[WM_COUNT] = {
     "LINDBERGH_SHADOW_SCALE", "LINDBERGH_VT3_DOLLY", "LINDBERGH_VT3_BACK", "LINDBERGH_VT3_SKY",
     "LINDBERGH_VT3_HEIGHT", "LINDBERGH_VT3_CARD_RW", "LINDBERGH_VT3_LANGUAGE", "LINDBERGH_MSAA", "LINDBERGH_VT3_SAVE", "LINDBERGH_ANISO" };
 static const char *const KEY_CLASSIC[WM_COUNT] = {
-    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, NULL, "language", "msaa", "save", "aniso" };
+    "mode", "replays", "overlays", "classic.cutaways", "classic.shadow", NULL, NULL, NULL, NULL, NULL, "language", "classic.msaa", "save", "aniso" };
 static const char *const KEY_IMMERSIVE[WM_COUNT] = {
     "mode", "immersive.replays", "immersive.overlays", "immersive.cutaways", "immersive.shadow",
-    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height", NULL, "language", "msaa", "save", "aniso" };
+    "immersive.dolly", "immersive.back", "immersive.sky", "immersive.height", NULL, "language", "immersive.msaa", "save", "aniso" };
 
 const char *world_mode_env_name(int key) { return key >= 0 && key < WM_COUNT ? ENV_NAME[key] : NULL; }
 const char *world_mode_key(int key, int immersive)
@@ -126,14 +126,14 @@ void world_mode_resolve(const LgXrSettings *s, int mode, int capable, unsigned p
     (void)s->classic_card_notice;
     if ((v = env(WM_CARD))) { o->card_notice = *v == '1'; k[WM_CARD] = WM_SRC_ENV; }
     o->language = s->language;
-    o->msaa = s->msaa;
+    o->msaa = xr_settings_msaa(im ? s->imm_msaa : s->classic_msaa);
     o->save = s->save;
     if ((v = env(WM_SAVE))) { o->save = *v == '1' || !strcmp(v, "on"); k[WM_SAVE] = WM_SRC_ENV; }
     o->aniso = xr_settings_aniso(s->aniso);
     if ((v = env(WM_ANISO))) { o->aniso = xr_settings_aniso(atoi(v)); k[WM_ANISO] = WM_SRC_ENV; }
     {   const char *nm = getenv("LINDBERGH_VT3_SAVE_NAME");
         if (!(nm && *nm && xr_settings_save_name(nm, o->save_name))) xr_settings_save_name(s->save_name, o->save_name); }
-    if ((v = env(WM_MSAA))) { int n = atoi(v); o->msaa = n >= 4 ? 4 : n >= 2 ? 2 : 0; k[WM_MSAA] = WM_SRC_ENV; }
+    if ((v = env(WM_MSAA))) { o->msaa = xr_settings_msaa(atoi(v)); k[WM_MSAA] = WM_SRC_ENV; }
     if ((v = env(WM_LANGUAGE))) { o->language = !(*v == '0' || !strcmp(v, "japanese")); k[WM_LANGUAGE] = WM_SRC_ENV; }
     if ((v = env(WM_SKY))) { o->sky = world_mode_sky_value(v); k[WM_SKY] = WM_SRC_ENV; }
     if (src) memcpy(src, k, sizeof k);
@@ -157,19 +157,23 @@ static _Atomic(WmSwitchFn) g_switch_fn;
 
 #ifdef LINDBERGH_OPENXR
 /* which of the running mode's keys vr.cfg holds (for the [world] line) */
-static unsigned file_present(int immersive)
+static unsigned file_present(int immersive, int file_mode)
 {
     FILE *f = fopen("vr.cfg", "r");
     if (!f) f = fopen("../vr.cfg", "r");
     if (!f) return 0;
     unsigned bits = 0;
+    int has_msaa = 0;
     char key[32], val[32];
-    while (fscanf(f, "%31s %31s", key, val) == 2)
+    while (fscanf(f, "%31s %31s", key, val) == 2) {
+        if (!strcmp(key, "msaa")) has_msaa = 1;
         for (int i = 0; i < WM_COUNT; i++) {
             const char *a = KEY_CLASSIC[i], *b = KEY_IMMERSIVE[i];
             if (i == WM_MODE ? !strcmp(key, "mode") : (immersive ? b && !strcmp(key, b) : a && !strcmp(key, a))) bits |= 1u << i;
         }
+    }
     fclose(f);
+    if (has_msaa && !(bits >> WM_MSAA & 1) && file_mode == immersive) bits |= 1u << WM_MSAA;
     if (bits & (1u << WM_REPLAYS | 1u << WM_CUTAWAYS)) bits |= 1u << WM_REPLAYS | 1u << WM_CUTAWAYS;   /* one row, one value (xr_settings_load) */
     return bits;
 }
@@ -187,7 +191,7 @@ void world_mode_init(int capable)
     xr_settings_defaults(&s);               /* the game's own (Virtua Tennis 3: VR mode, ...) */
     xr_settings_load(&s);                   /* the headset's stored settings (a scratch copy) */
     world_mode_resolve(&s, -1, capable, 0, &g_wm, NULL);
-    present = file_present(g_wm.immersive);
+    present = file_present(g_wm.immersive, s.world_mode);
 #else
     {   /* the desktop: only the game settings its Game menu writes to vr.cfg (host_menu_mac.m:
          * save, save_name) - display settings stay the headset's */

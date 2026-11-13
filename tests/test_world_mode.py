@@ -145,14 +145,21 @@ int main(int argc, char **argv) {
         self.assertEqual(sv(None, {"LINDBERGH_VT3_SAVE": "1"}), "1 1 1")
         self.assertIn("save on (vr.cfg)", self.run_wm("save on\n")[1])
         self.assertEqual(m(), "0 0 0")                                                   # Off by default (T17)
-        self.assertEqual(m("msaa 4\n"), "4 0 4")
-        self.assertEqual(m("mode immersive\nmsaa 2\n"), "2 0 2")                         # one value for both modes
-        self.assertEqual(m("msaa 3\n"), "2 0 2")                                         # off the list: the nearer below
-        self.assertEqual(m("msaa 16\n"), "4 0 4")
-        self.assertEqual(m("msaa 4\n", {"LINDBERGH_MSAA": "0"}), "0 1 0")               # env wins, pinned
+        self.assertEqual(m("classic.msaa 4\n"), "4 0 4")
+        self.assertEqual(m("mode immersive\nclassic.msaa 4\nimmersive.msaa 2\n"), "2 0 2")  # per-mode
+        self.assertEqual(m("classic.msaa 4\nimmersive.msaa 2\n"), "4 0 4")
+        self.assertEqual(m("mode immersive\nclassic.msaa 4\n"), "0 0 0")
+        self.assertEqual(m("msaa 4\n"), "4 0 4")                                         # legacy single key -> file's mode
+        self.assertEqual(m("mode immersive\nmsaa 2\n"), "2 0 2")
+        self.assertEqual(m("mode immersive\nmsaa 2\n", {"LINDBERGH_VT3_IMMERSIVE": "0"}), "0 0 0")
+        self.assertEqual(m("classic.msaa 3\n"), "2 0 2")                                 # off the list: the nearer below
+        self.assertEqual(m("classic.msaa 16\n"), "4 0 4")
+        self.assertEqual(m("classic.msaa 4\n", {"LINDBERGH_MSAA": "0"}), "0 1 0")       # env wins, pinned
         self.assertEqual(m(None, {"LINDBERGH_MSAA": "2"}), "2 1 2")
-        _, log = self.run_wm("msaa 4\n")
+        _, log = self.run_wm("classic.msaa 4\n")
         self.assertIn("msaa 4 (vr.cfg)", log)
+        _, log = self.run_wm("mode immersive\nclassic.msaa 4\n")
+        self.assertIn("msaa 0 (default)", log)
         _, log = self.run_wm()
         self.assertIn("msaa 0 (default)", log)
 

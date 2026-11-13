@@ -61,7 +61,7 @@ int main(void) {
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
-               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0","save":"on",
+               "immersive.height":"10","classic.card_notice":"off","language":"english","classic.msaa":"0","immersive.msaa":"0","save":"on",
                "aniso":"0","save_name":"PLAYER"}
 
     @staticmethod
@@ -83,7 +83,7 @@ int main(void) {
     def test_mode_keys_round_trip(self):
         cfg={"mode":"immersive","classic.shadow":"4096","classic.cutaways":"off","immersive.replays":"camera",
              "immersive.overlays":"on","immersive.cutaways":"camera","immersive.sky":"painted","immersive.shadow":"1024",
-             "immersive.height":"10","classic.card_notice":"on","language":"japanese","msaa":"4","save":"on",
+             "immersive.height":"10","classic.card_notice":"on","language":"japanese","classic.msaa":"2","immersive.msaa":"4","save":"on",
              "aniso":"8","save_name":"RALLY"}
         with tempfile.TemporaryDirectory() as d:
             (Path(d)/"vr.cfg").write_text("".join(f"{k} {v}\n" for k,v in cfg.items()))
@@ -94,11 +94,23 @@ int main(void) {
             self.assertEqual((Path(d)/"vr.cfg").read_text(),first)
 
     def test_msaa_off_the_list(self):
-        for stored,want in (("2","2"),("3","2"),("1","2"),("8","4"),("-1","0"),("bogus","0")):
-            with tempfile.TemporaryDirectory() as d:
-                (Path(d)/"vr.cfg").write_text(f"msaa {stored}\n")
-                self.run_settings(d)
-                self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["msaa"],want,stored)
+        for key in ("classic.msaa","immersive.msaa"):
+            for stored,want in (("2","2"),("3","2"),("1","2"),("8","4"),("-1","0"),("bogus","0")):
+                with tempfile.TemporaryDirectory() as d:
+                    (Path(d)/"vr.cfg").write_text(f"{key} {stored}\n")
+                    self.run_settings(d)
+                    self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())[key],want,(key,stored))
+        # an older file's single "msaa" goes to that file's mode, leaving the other mode at its default
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("mode classic\nmsaa 4\n")
+            self.run_settings(d,{"VT3":"1"})
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            self.assertEqual(saved["classic.msaa"],"4");self.assertEqual(saved["immersive.msaa"],"2")
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/"vr.cfg").write_text("mode immersive\nmsaa 4\n")
+            self.run_settings(d,{"VT3":"1"})
+            saved=self.parse((Path(d)/"vr.cfg").read_text())
+            self.assertEqual(saved["classic.msaa"],"0");self.assertEqual(saved["immersive.msaa"],"4")
 
     def test_aniso_off_the_list(self):
         for stored,want in (("4","4"),("16","16"),("3","2"),("1","0"),("12","8"),("64","16"),("-1","0"),("bogus","0")):
@@ -116,12 +128,17 @@ int main(void) {
                 self.run_settings(d)
                 self.assertEqual(self.parse((Path(d)/"vr.cfg").read_text())["save_name"],want,stored)
 
-    # Virtua Tennis 3's defaults (2026-11-13): the owner's Quest 3 vr.cfg, less device / gun-game values
+    # Virtua Tennis 3's defaults: VR mode with 2x MSAA, Classic mode with MSAA Off
+    OWNER_LEGACY=("scale 1\nscreen 2.5\naim 15\nresolution 2208\nwidth 2064\nrefresh 120\nhand right\nlaser laser\ncoins auto\n"
+                  "sight none\ncrosshair on\ngun on\nhud_pitch 10\ndual off\nstats off\nfoveation high\noverlays off\nreplays on\n"
+                  "mode immersive\nclassic.shadow 1024\nclassic.cutaways on\nimmersive.replays flat\nimmersive.overlays off\n"
+                  "immersive.cutaways flat\nimmersive.sky stadium\nimmersive.shadow 4096\nimmersive.height 10\nclassic.card_notice off\n"
+                  "language english\nmsaa 2\nsave on\naniso 4\nsave_name PLAYER\n")
     OWNER=("scale 1\nscreen 2.5\naim 15\nresolution 2208\nwidth 2064\nrefresh 120\nhand right\nlaser laser\ncoins auto\n"
            "sight none\ncrosshair on\ngun on\nhud_pitch 10\ndual off\nstats off\nfoveation high\noverlays off\nreplays on\n"
            "mode immersive\nclassic.shadow 1024\nclassic.cutaways on\nimmersive.replays flat\nimmersive.overlays off\n"
            "immersive.cutaways flat\nimmersive.sky stadium\nimmersive.shadow 4096\nimmersive.height 10\nclassic.card_notice off\n"
-           "language english\nmsaa 2\nsave on\naniso 4\nsave_name PLAYER\n")
+           "language english\nclassic.msaa 0\nimmersive.msaa 2\nsave on\naniso 4\nsave_name PLAYER\nscreen_size medium\n")
 
     def test_vt3_defaults_are_the_owners_settings(self):
         with tempfile.TemporaryDirectory() as d:
@@ -133,12 +150,12 @@ int main(void) {
 
     def test_vt3_owner_file_reads_back_identically(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d)/"vr.cfg").write_text(self.OWNER)
+            (Path(d)/"vr.cfg").write_text(self.OWNER_LEGACY)
             self.run_settings(d,{"VT3":"1"})
-            # the same, plus Screen size (2026-11-13): his 2.5 m reads as Medium
-            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER+"screen_size medium\n")
+            # older file's msaa 2 goes to immersive.msaa; Classic stays Off; 2.5 m reads as Medium
+            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER)
             self.run_settings(d,{"VT3":"1"})
-            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER+"screen_size medium\n")
+            self.assertEqual((Path(d)/"vr.cfg").read_text(),self.OWNER)
 
     def test_vt3_screen_size(self):
         # an older file's Screen distance picks the size: 2 m Big, 2.5 - 3 m Medium, 4 - 5 m Small; no screen key = Medium
@@ -162,16 +179,16 @@ int main(void) {
 
     def test_vt3_explicit_values_kept_and_other_games_unchanged(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d)/"vr.cfg").write_text("mode classic\nmsaa 0\naniso 0\nimmersive.shadow 2048\nstats on\nscreen 3\nimmersive.replays camera\n")
+            (Path(d)/"vr.cfg").write_text("mode classic\nclassic.msaa 4\nimmersive.msaa 0\naniso 0\nimmersive.shadow 2048\nstats on\nscreen 3\nimmersive.replays camera\n")
             self.run_settings(d,{"VT3":"1"})
             saved=self.parse((Path(d)/"vr.cfg").read_text())
-            for k,v in (("mode","classic"),("msaa","0"),("aniso","0"),("immersive.shadow","2048"),("stats","on"),("screen","3"),
+            for k,v in (("mode","classic"),("classic.msaa","4"),("immersive.msaa","0"),("aniso","0"),("immersive.shadow","2048"),("stats","on"),("screen","3"),
                         ("immersive.replays","camera"),("immersive.cutaways","camera"),("overlays","off")):
                 self.assertEqual(saved[k],v,k)
         with tempfile.TemporaryDirectory() as d:     # no game defaults (hotd4, gse, lgj): every game's, as before
             self.run_settings(d)
             saved=self.parse((Path(d)/"vr.cfg").read_text())
-            for k,v in (("mode","classic"),("msaa","0"),("aniso","0"),("immersive.shadow","2048"),("stats","on"),("screen","3"),
+            for k,v in (("mode","classic"),("classic.msaa","0"),("immersive.msaa","0"),("aniso","0"),("immersive.shadow","2048"),("stats","on"),("screen","3"),
                         ("immersive.replays","off"),("overlays","on"),("hud_pitch","0")):
                 self.assertEqual(saved[k],v,k)
 

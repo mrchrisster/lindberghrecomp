@@ -8,14 +8,14 @@
  * settings (the saved mode's page), then the shared rows; choosing a mode on
  * an Advanced page shows that mode's page. Classic advanced: Replays
  * and reaction cams (On / Off: replays and point cutaways, one row since 2026-11-13),
- * arcade overlays, shadow quality. VR advanced: camera height (Low / Medium /
+ * arcade overlays, shadow quality, anti-aliasing. VR advanced: camera height (Low / Medium /
  * High; your player at the far end is always High - stereo.c), the same
  * (Replays and reaction cams Off / Flat screen / VR), sky (Stadium / Painted / Off),
- * shadow quality; both: Save progress, Reset save (pull twice) and Texture
+ * shadow quality, anti-aliasing; both: Save progress, Reset save (pull twice) and Texture
  * filtering (one value each for both modes, on restart; the main page is
  * full). Camera closer and Step back are gone (fixed 20 m / 5 m,
  * T12). Replays, cutaways, overlays, camera height and sky are live for the
- * running mode; shadow quality and the mode apply on restart. A row whose env
+ * running mode; shadow quality, anti-aliasing and the mode apply on restart. A row whose env
  * variable is set shows "(env.txt)" with the run's value and ignores clicks.
  * With XwState.live (switching live, Phase B; host_xr.c keeps it 0 for now)
  * the mode applies at once: no Restart now.
@@ -65,7 +65,7 @@ static int pinned(const XwState *w, int item)
 {
     const int k = wm_key(item);
     if (k < 0 || !(w->pins >> k & 1)) return 0;
-    return k == WM_MODE || k == WM_LANGUAGE || k == WM_MSAA || k == WM_SAVE || k == WM_ANISO || page_mode(w) == w->running;
+    return k == WM_MODE || k == WM_LANGUAGE || k == WM_SAVE || k == WM_ANISO || page_mode(w) == w->running;
 }
 /* Replays and reaction cams: one row for both values (2026-11-13), pinned when either env variable is set */
 static int pinned_rc(const XwState *w)
@@ -81,22 +81,21 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS),
-                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
+                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_MSAA), XW_ROW(XW_ANISO), XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_IMMERSIVE: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_HEIGHT),
                                  XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
-                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_ANISO), XP_STATS, XW_ROW(XW_RESTORE), XP_CLOSE };
+                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_MSAA), XW_ROW(XW_ANISO), XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     default:
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
         rows[n++] = XW_ROW(XW_LANGUAGE);
-        rows[n++] = XW_ROW(XW_MSAA);
         for (int i = 0; i < XP_COUNT; i++)
-            if (i != XP_STATS && i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
+            if (i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
         break;
     }
     return n;
@@ -163,9 +162,9 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
         snprintf(it[XW_SAVE].value, 40, "%s%s", on_off(v), !pinned(w, XW_SAVE) && v != w->eff.save ? " (on restart)" : "");
     }
     {
-        const int m = pinned(w, XW_MSAA) ? w->eff.msaa : cfg->msaa;
+        const int m = pinned(w, XW_MSAA) ? w->eff.msaa : xr_settings_msaa(im ? cfg->imm_msaa : cfg->classic_msaa);
         snprintf(it[XW_MSAA].value, 40, "%s%s", m >= 4 ? "4x" : m >= 2 ? "2x" : "Off",
-                 !pinned(w, XW_MSAA) && m != w->eff.msaa ? " (on restart)" : "");
+                 !pinned(w, XW_MSAA) && page_mode(w) == w->running && m != w->eff.msaa ? " (on restart)" : "");
     }
     {   /* applies on the next start: "(on restart)" while the stored one is not the running one */
         int lang = cfg->language;
@@ -218,11 +217,11 @@ void xw_restore_defaults(LgXrSettings *c, int immersive)
     if (immersive) {
         c->imm_replays = d.imm_replays; c->imm_overlays = d.imm_overlays; c->imm_cutaways = d.imm_cutaways;
         c->imm_height = d.imm_height;
-        c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow;
+        c->imm_sky = d.imm_sky; c->imm_shadow = d.imm_shadow; c->imm_msaa = d.imm_msaa;
         c->aniso = d.aniso;     /* Texture filtering: a row on both advanced pages (one value) */
     } else {
         c->replays = d.replays; c->arcade_overlays = d.arcade_overlays;
-        c->classic_cutaways = d.classic_cutaways; c->classic_shadow = d.classic_shadow;
+        c->classic_cutaways = d.classic_cutaways; c->classic_shadow = d.classic_shadow; c->classic_msaa = d.classic_msaa;
         c->aniso = d.aniso;
     }
 }
@@ -267,7 +266,10 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_CARD: return 0;     /* Card reader notice: no row since 2026-11-13 (always off; classic.card_notice ignored) */
     case XW_LANGUAGE: c->language = !c->language; break;                                                     /* on restart */
     case XW_SAVE: if (page_mode(w) < 0) return 0; c->save = !c->save; break;                               /* on restart */
-    case XW_MSAA: c->msaa = c->msaa >= 4 ? 0 : c->msaa >= 2 ? 4 : 2; break;                                 /* Off > 2x > 4x, on restart */
+    case XW_MSAA: {
+        if (page_mode(w) < 0) return 0;
+        int *m = im ? &c->imm_msaa : &c->classic_msaa;
+        *m = *m >= 4 ? 0 : *m >= 2 ? 4 : 2; break; }                                 /* Off > 2x > 4x, on restart */
     case XW_ANISO: c->aniso = next_step(xr_settings_aniso(c->aniso), LG_XR_ANISO_STEPS, LG_XR_ANISO_NSTEPS); break;   /* Standard > 4x > 8x, on restart */
     case XW_SHADOW: {
         int *s = im ? &c->imm_shadow : &c->classic_shadow, k = 0;

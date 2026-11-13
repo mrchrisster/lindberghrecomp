@@ -18,10 +18,10 @@ extern "C" {
 enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPLAYS, XW_CUTAWAYS,
        XW_OVERLAYS, XW_SKY, XW_SHADOW, XW_RESTORE, XW_HEIGHT, XW_MODE_CLASSIC, XW_MODE_VR,
        XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_ANISO, XW_RESET_SAVE, XW_COUNT };
-/* Classic's Card reader notice; the main page's Language and Anti-aliasing;
- * both Advanced pages' Save progress and Texture filtering (one value each
- * for both modes) - all on restart. Reset save (both Advanced pages, below Save
- * progress): pull twice, like Restore defaults - returns XW_RESET_SAVE */
+/* the main page's Language; both Advanced pages' Anti-aliasing (per mode),
+ * Save progress and Texture filtering (one value each for both modes) - all
+ * on restart. Reset save (both Advanced pages, below Save progress): pull
+ * twice, like Restore defaults - returns XW_RESET_SAVE */
 enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGES };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */
@@ -44,9 +44,9 @@ typedef struct {
 } XwState;
 
 /* The rows of the current page, in order (XP_ ids or XW_ROW(x)); returns the
- * count. The main page carries every XP_ item but Frame rate counter, Arcade
- * overlays and Replays (on the Advanced pages here): the host still leaves
- * out rows its game has no use for. */
+ * count. The main page carries every XP_ item but Arcade overlays and Replays
+ * (on the Advanced pages here): the host still leaves out rows its game has
+ * no use for. */
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows);
 /* The line under the mode buttons: which mode runs, and whether the choice
  * waits for a restart (or is pinned by env.txt) */

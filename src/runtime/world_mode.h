@@ -38,7 +38,7 @@ typedef struct {
     int card_notice;            /* the card reader's notice and boot wait: 0 (no panel row since 2026-11-13;
                                  * vr.cfg classic.card_notice ignored); LINDBERGH_VT3_CARD_RW=1 for tests */
     int language;               /* 1 English, 0 Japanese (vr.cfg language, LINDBERGH_VT3_LANGUAGE); on restart */
-    int msaa;                   /* anti-aliasing samples asked for: 0, 2, 4 (vr.cfg msaa, LINDBERGH_MSAA); on restart */
+    int msaa;                   /* anti-aliasing samples asked for: 0, 2, 4 (vr.cfg classic.msaa / immersive.msaa, LINDBERGH_MSAA); on restart */
     int save;                   /* Save progress: 1P's card record kept in vt3_save.bin (vr.cfg save, LINDBERGH_VT3_SAVE); on restart */
     int aniso;                  /* anisotropic filtering of mipmapped world textures: 0 (off), 2, 4, 8, 16
                                  * (vr.cfg aniso, LINDBERGH_ANISO); on restart */

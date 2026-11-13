@@ -28,11 +28,11 @@ int main(void) {
     world_mode_resolve(&c, 0, 1, 0, &w.eff, NULL);
     int r[XW_ROWS_MAX], n;
     XmItem it[XW_COUNT];
-    /* main page, Classic running: the Classic / VR buttons, Advanced, the shared rows less stats/overlays/replays; no Restart */
+    /* main page, Classic running: the Classic / VR buttons, Advanced, Frame rate counter, the shared rows less overlays/replays; no Restart */
     n = xw_page_rows(&w, &c, r);
     assert(r[0] == XW_ROW(XW_MODE_CLASSIC) && r[1] == XW_ROW(XW_MODE_VR) && r[2] == XW_ROW(XW_ADVANCED) && !has(r, n, XW_ROW(XW_RESTART)));
-    assert(!has(r, n, XW_ROW(XW_MODE)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
-    assert(!has(r, n, XP_STATS) && !has(r, n, XP_OVERLAYS) && !has(r, n, XP_REPLAYS) && has(r, n, XP_RESET) && r[n - 1] == XP_CLOSE);
+    assert(!has(r, n, XW_ROW(XW_MODE)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)) && !has(r, n, XW_ROW(XW_MSAA)));
+    assert(has(r, n, XP_STATS) && !has(r, n, XP_OVERLAYS) && !has(r, n, XP_REPLAYS) && has(r, n, XP_RESET) && r[n - 1] == XP_CLOSE);
     assert(n <= XW_ROWS_MAX && n - 6 + 1 <= XM_MODE_ROWS);     /* minus the gun rows a lever cabinet drops, plus Restart */
     xw_items(&w, &c, it);
     assert(!strcmp(it[XW_MODE_CLASSIC].label, "Classic") && !strcmp(it[XW_MODE_CLASSIC].value, "selected"));
@@ -52,7 +52,7 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 14 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && has(r, n, XP_STATS) && r[n - 1] == XP_CLOSE);
+    assert(n == 14 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && !has(r, n, XP_STATS) && has(r, n, XW_ROW(XW_MSAA)) && r[n - 1] == XP_CLOSE);
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
     assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
@@ -98,7 +98,7 @@ int main(void) {
     fx = xw_choose(&w, &c, XW_REPLAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0 && c.replays == 0);
     xw_choose(&w, &c, XW_REPLAYS); assert(c.classic_cutaways == 1 && c.replays == 1);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 12 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && !has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(n == 12 && !has(r, n, XP_STATS) && has(r, n, XW_ROW(XW_MSAA)) && !has(r, n, XW_ROW(XW_CUTAWAYS)) && !has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -134,25 +134,30 @@ int main(void) {
       lw.pins = 1u << WM_LANGUAGE; lw.eff.language = 1;
       xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English (env.txt)"));
       assert(xw_choose(&lw, &lc, XW_LANGUAGE) == 0); }
-    /* Anti-aliasing on the main page (both modes), Off by default, Off > 2x > 4x > Off, on restart (T17) */
+    /* Anti-aliasing on both Advanced pages (per mode; not on main), Classic Off / VR 2x for VT3, Off > 2x > 4x > Off, on restart */
     { XwState aw; memset(&aw, 0, sizeof aw); LgXrSettings ac = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&ac, 0, 1, 0, &aw.eff, NULL);
       int ar[XW_ROWS_MAX], an = xw_page_rows(&aw, &ac, ar);
-      assert(has(ar, an, XW_ROW(XW_MSAA)) && ac.msaa == 0 && aw.eff.msaa == 0);
-      aw.page = XW_PAGE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
-      aw.page = XW_PAGE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(!has(ar, an, XW_ROW(XW_MSAA)));
-      aw.page = XW_PAGE_MAIN;
+      assert(!has(ar, an, XW_ROW(XW_MSAA)) && ac.classic_msaa == 0 && ac.imm_msaa == 0 && aw.eff.msaa == 0);
+      assert(xw_choose(&aw, &ac, XW_MSAA) == 0);
+      aw.page = XW_PAGE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(has(ar, an, XW_ROW(XW_MSAA)));
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].label, "Anti-aliasing") && !strcmp(it[XW_MSAA].value, "Off"));
-      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.msaa == 2);
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.classic_msaa == 2 && ac.imm_msaa == 0);
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (on restart)"));
-      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.msaa == 4);
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.classic_msaa == 4);
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "4x (on restart)"));
       aw.eff.msaa = 4; xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "4x"));
-      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.msaa == 0);
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.classic_msaa == 0);
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "Off (on restart)"));
+      aw.page = XW_PAGE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(has(ar, an, XW_ROW(XW_MSAA)));
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "Off"));   /* non-running mode: no "(on restart)" */
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.imm_msaa == 2 && ac.classic_msaa == 0);
       aw.pins = 1u << WM_MSAA; aw.eff.msaa = 2;
+      xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x"));    /* pin is the running mode's only */
+      assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.imm_msaa == 4);
+      aw.page = XW_PAGE_CLASSIC;
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (env.txt)"));
-      assert(xw_choose(&aw, &ac, XW_MSAA) == 0 && ac.msaa == 0); }
+      assert(xw_choose(&aw, &ac, XW_MSAA) == 0 && ac.classic_msaa == 0); }
     /* Save progress on both Advanced pages (one value), On by default (T21), on restart; not on the main page (T16) */
     { XwState sw; memset(&sw, 0, sizeof sw); LgXrSettings sc = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&sc, 0, 1, 0, &sw.eff, NULL);
@@ -212,9 +217,9 @@ int main(void) {
       tc.aniso = 4;
       xr_settings_set_game_defaults(xr_settings_vt3_defaults);   /* Virtua Tennis 3's Restore defaults */
       { LgXrSettings v; memset(&v, 0, sizeof v); xw_restore_defaults(&v, 1);
-        assert(v.imm_replays == LG_VIEW_FLAT && v.imm_cutaways == LG_VIEW_FLAT && v.imm_shadow == 4096 && v.imm_height == 10 && v.aniso == 4 && !v.imm_overlays);
+        assert(v.imm_replays == LG_VIEW_FLAT && v.imm_cutaways == LG_VIEW_FLAT && v.imm_shadow == 4096 && v.imm_height == 10 && v.imm_msaa == 2 && v.aniso == 4 && !v.imm_overlays);
         memset(&v, 0, sizeof v); xw_restore_defaults(&v, 0);
-        assert(v.replays == 1 && v.classic_cutaways == 1 && v.arcade_overlays == 0 && v.classic_shadow == 1024 && v.aniso == 4); }
+        assert(v.replays == 1 && v.classic_cutaways == 1 && v.arcade_overlays == 0 && v.classic_shadow == 1024 && v.classic_msaa == 0 && v.aniso == 4); }
       xr_settings_set_game_defaults(NULL);
       tw.pins = 1u << WM_ANISO; tw.eff.aniso = 16;
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 16x (env.txt)"));

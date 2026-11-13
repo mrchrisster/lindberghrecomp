@@ -35,7 +35,7 @@ static int render(const LgXrSettings *c, char *b, size_t n)
                "sight %s\ncrosshair %s\ngun %s\nhud_pitch %d\ndual %s\nstats %s\nfoveation %s\noverlays %s\nreplays %s\n"
                "mode %s\nclassic.shadow %d\nclassic.cutaways %s\nimmersive.replays %s\nimmersive.overlays %s\n"
                "immersive.cutaways %s\nimmersive.sky %s\nimmersive.shadow %d\n"
-               "immersive.height %d\nclassic.card_notice %s\nlanguage %s\nmsaa %d\nsave %s\naniso %d\nsave_name %s\n",
+               "immersive.height %d\nclassic.card_notice %s\nlanguage %s\nclassic.msaa %d\nimmersive.msaa %d\nsave %s\naniso %d\nsave_name %s\n",
             c->scale, c->screen, c->aim, c->resolution, c->width, c->refresh, c->left_handed ? "left" : "right",
             LASER_NAME[c->laser], c->auto_coins ? "auto" : "manual",
             SIGHT_NAME[c->sight], c->crosshair ? "on" : "off", c->show_gun ? "on" : "off", c->hud_pitch, c->dual ? "on" : "off", c->show_stats ? "on" : "off",
@@ -43,7 +43,8 @@ static int render(const LgXrSettings *c, char *b, size_t n)
             c->world_mode ? "immersive" : "classic", c->classic_shadow, c->classic_cutaways ? "on" : "off",
             view_name(c->imm_replays), c->imm_overlays ? "on" : "off", view_name(c->imm_cutaways),
             c->imm_sky == LG_SKY_OFF ? "off" : c->imm_sky == LG_SKY_PAINTED ? "painted" : "stadium", c->imm_shadow,
-            c->imm_height, c->classic_card_notice ? "on" : "off", c->language ? "english" : "japanese", c->msaa, c->save ? "on" : "off",
+            c->imm_height, c->classic_card_notice ? "on" : "off", c->language ? "english" : "japanese",
+            xr_settings_msaa(c->classic_msaa), xr_settings_msaa(c->imm_msaa), c->save ? "on" : "off",
             xr_settings_aniso(c->aniso), c->save_name[0] ? c->save_name : LG_XR_SAVE_NAME_DEFAULT);
     if (c->screen_size >= 0 && k >= 0 && (size_t)k < n)     /* a game with a Screen size row (VT3) */
         k += snprintf(b + k, n - (size_t)k, "screen_size %s\n", SCREEN_SIZE_NAME[c->screen_size > 2 ? 2 : c->screen_size]);
@@ -78,9 +79,9 @@ void xr_settings_vt3_defaults(struct LgXrSettings *c)
 {
     c->world_mode = 1;
     c->imm_replays = c->imm_cutaways = LG_VIEW_FLAT; c->imm_overlays = 0; c->imm_sky = LG_SKY_STADIUM;
-    c->imm_shadow = 4096; c->imm_height = 10;
+    c->imm_shadow = 4096; c->imm_height = 10; c->imm_msaa = 2;
     c->replays = c->classic_cutaways = 1; c->arcade_overlays = 0; c->classic_shadow = 1024; c->classic_card_notice = 0;
-    c->msaa = 2; c->aniso = 4; c->save = 1; snprintf(c->save_name, sizeof c->save_name, "%s", LG_XR_SAVE_NAME_DEFAULT);
+    c->classic_msaa = 0; c->aniso = 4; c->save = 1; snprintf(c->save_name, sizeof c->save_name, "%s", LG_XR_SAVE_NAME_DEFAULT);
     c->language = 1; c->refresh = 120; c->foveation = 3; c->screen = 2.5f; c->hud_pitch = 10; c->show_stats = 0;
     c->auto_coins = 1; c->screen_size = 1;
 }
@@ -88,6 +89,11 @@ void xr_settings_vt3_defaults(struct LgXrSettings *c)
 int xr_settings_aniso(int v)
 {
     return v >= 16 ? 16 : v >= 8 ? 8 : v >= 4 ? 4 : v >= 2 ? 2 : 0;
+}
+
+int xr_settings_msaa(int v)
+{
+    return v >= 4 ? 4 : v > 0 ? 2 : 0;
 }
 
 /* LINDBERGH_XR_SET's keys are for its run only: the save writes those keys as
@@ -124,14 +130,23 @@ void xr_settings_load(LgXrSettings *c)
     if (!f) f = fopen("../vr.cfg", "r");    /* beside the game: where adb can put one */
     char key[32], val[32];
     int has_rep = 0, has_cut = 0, has_irep = 0, has_icut = 0, has_screen = 0, has_size = 0;
+    int has_cmsaa = 0, has_imsaa = 0, has_msaa = 0, legacy_msaa = 0;
     const int sized = c->screen_size >= 0;      /* the game has a Screen size row */
     while (f && fscanf(f, "%31s %31s", key, val) == 2) {
+        if (!strcmp(key, "msaa")) { legacy_msaa = atoi(val); has_msaa = 1; continue; }
         xr_settings_set(c,key,val);
         has_rep |= !strcmp(key, "replays"); has_cut |= !strcmp(key, "classic.cutaways");
         has_irep |= !strcmp(key, "immersive.replays"); has_icut |= !strcmp(key, "immersive.cutaways");
         has_screen |= !strcmp(key, "screen"); has_size |= !strcmp(key, "screen_size");
+        has_cmsaa |= !strcmp(key, "classic.msaa"); has_imsaa |= !strcmp(key, "immersive.msaa");
     }
     if (f) fclose(f);
+    /* An older file's single "msaa" key applies to the mode that file chose,
+     * leaving the other mode at its default (so Classic stays Off). */
+    if (has_msaa) {
+        if (c->world_mode && !has_imsaa) c->imm_msaa = legacy_msaa;
+        else if (!c->world_mode && !has_cmsaa) c->classic_msaa = legacy_msaa;
+    }
     /* Replays and point cutaways are one row since 2026-11-13 ("Replays and
      * reaction cams"): one value per mode, both old keys written with it. A file
      * with the two different: the replays key's value (an older build's file);
@@ -154,7 +169,10 @@ void xr_settings_load(LgXrSettings *c)
     while (e && *e) {
         if (sscanf(e, "%31[^=]=%31[^,]", key, val) == 2) {
             xr_settings_set(c,key,val);
-            if (g_nrun < 24) memcpy(g_run_keys[g_nrun++], key, sizeof key);
+            if (!strcmp(key, "msaa")) {
+                if (g_nrun < 24) snprintf(g_run_keys[g_nrun++], 32, "classic.msaa");
+                if (g_nrun < 24) snprintf(g_run_keys[g_nrun++], 32, "immersive.msaa");
+            } else if (g_nrun < 24) memcpy(g_run_keys[g_nrun++], key, sizeof key);
         }
         e = strchr(e, ',');
         if (e) e++;
@@ -177,7 +195,8 @@ void xr_settings_load(LgXrSettings *c)
     if (c->imm_shadow != 1024 && c->imm_shadow != 2048 && c->imm_shadow != 4096) c->imm_shadow = d.imm_shadow;
     if (c->imm_sky < LG_SKY_OFF || c->imm_sky > LG_SKY_PAINTED) c->imm_sky = d.imm_sky;
     c->imm_dolly = d.imm_dolly; c->imm_back = d.imm_back;
-    if (c->msaa != 0 && c->msaa != 2 && c->msaa != 4) c->msaa = c->msaa > 4 ? 4 : c->msaa > 0 ? 2 : 0;
+    c->classic_msaa = xr_settings_msaa(c->classic_msaa);
+    c->imm_msaa = xr_settings_msaa(c->imm_msaa);
     c->aniso = xr_settings_aniso(c->aniso);
     { char nm[16]; xr_settings_save_name(c->save_name, nm); memcpy(c->save_name, nm, sizeof nm); }
     if (c->imm_replays < LG_VIEW_OFF || c->imm_replays > LG_VIEW_CAMERA) c->imm_replays = d.imm_replays;
@@ -220,7 +239,9 @@ void xr_settings_set(LgXrSettings *c,const char *key,const char *val)
         else if (!strcmp(key, "immersive.height")) c->imm_height = atoi(val);
         else if (!strcmp(key, "classic.card_notice")) c->classic_card_notice = !strcmp(val, "on");
         else if (!strcmp(key, "language")) c->language = strcmp(val, "japanese") != 0;
-        else if (!strcmp(key, "msaa")) c->msaa = atoi(val);
+        else if (!strcmp(key, "classic.msaa")) c->classic_msaa = atoi(val);
+        else if (!strcmp(key, "immersive.msaa")) c->imm_msaa = atoi(val);
+        else if (!strcmp(key, "msaa")) c->classic_msaa = c->imm_msaa = atoi(val);
         else if (!strcmp(key, "save")) c->save = !strcmp(val, "on");
         else if (!strcmp(key, "aniso")) c->aniso = atoi(val);
         else if (!strcmp(key, "screen_size")) c->screen_size = !strcmp(val, "small") ? 0 : !strcmp(val, "big") ? 2 : !strcmp(val, "medium") ? 1 : -2;
