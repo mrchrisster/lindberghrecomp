@@ -1306,14 +1306,48 @@ static void vt3_far_end_note(unsigned mode, const float *v)
         if (pl && (int32_t)rd32(pl + 8) <= 3) { uint32_t b = rd32(pl + 0x18 + 8); memcpy(&pz, &b, 4); found = 1; break; }
     }
     const float ez = -(v[2] * v[3] + v[6] * v[7] + v[10] * v[11]);
-    const int at_far = found && fabsf(pz) > 5.0f && fabsf(ez) > 50.0f && pz * ez < 0;
+    /* a camera near the court's middle (the StartLoop's snap, a cut) or a
+     * player on the net line says nothing: no reading (it used to count as
+     * "near" - a far-end player read near for a moment, frames 8209-8220 of a
+     * macOS round0 WIN run) */
+    if (!(found && fabsf(pz) > 5.0f && fabsf(ez) > 50.0f)) return;
+    const int at_far = pz * ez < 0;
     static int held, last = -1;
     held = at_far == last ? held + 1 : 0; last = at_far;
-    if (at_far != g_vt3_far && held >= 10 && g_vt3_loop != 4) {
+    /* 2026-11-13 (owner: "still higher up on the next change when the player is
+     * in the front again"): the latch was allowed only outside GameLoop, from a
+     * court camera (mode 1/2). With point cutaways on, a big point's StartLoop is
+     * spent in the serve close-up (mode 5) and a new match's in its intro, so no
+     * court camera was seen before GameLoop and the end was never re-read - the
+     * height stayed High back at the near end (and on desktop runs the first
+     * change of ends was missed too). Now each point decides once from the
+     * game's state: every StartLoop opens a new decision, taken from the first
+     * steady court-camera reading - in StartLoop if it has one, else in the
+     * point's first frames of GameLoop (the players do not change ends in a
+     * rally) - and kept for the rest of the point. LINDBERGH_VT3_FARLOG=1 logs
+     * each point's decision. */
+    static unsigned prev_loop = ~0u; static int decided; static unsigned points;
+    if (g_vt3_loop == 3 && prev_loop != 3) { decided = 0; points++; }
+    prev_loop = g_vt3_loop;
+    if (held >= 10 && (g_vt3_loop != 4 || !decided)) {
         extern unsigned g_frame;
-        g_vt3_far = at_far;
-        fprintf(stderr, "[vt3] frame %u: your player at the %s end (player z %.0f, camera z %.0f)%s\n", g_frame, at_far ? "far" : "near", pz, ez,
-                at_far ? " - VR camera height High" : "");
+        static int lg = -1;
+        if (lg < 0) { const char *e = getenv("LINDBERGH_VT3_FARLOG"); lg = e && *e == '1'; }
+        if (lg && !decided) {
+            fprintf(stderr, "[vt3] frame %u: point %u, loop %u: player z %.0f, camera z %.0f -> %s end; players", g_frame, points, g_vt3_loop, pz, ez, at_far ? "far" : "near");
+            for (uint32_t i = 0; i < n && i < 4 && arr; i++) {
+                uint32_t pl = rd32(arr + 4 * i); if (!pl) continue;
+                uint32_t b = rd32(pl + 0x18 + 8); float z; memcpy(&z, &b, 4);
+                fprintf(stderr, " [%u: +8 %d +c %d +10 %d z %.0f]", i, (int32_t)rd32(pl + 8), (int32_t)rd32(pl + 0xc), (int32_t)rd32(pl + 0x10), z);
+            }
+            fprintf(stderr, "\n");
+        }
+        decided = 1;
+        if (at_far != g_vt3_far) {
+            g_vt3_far = at_far;
+            fprintf(stderr, "[vt3] frame %u: your player at the %s end (player z %.0f, camera z %.0f) - VR camera height %s\n", g_frame, at_far ? "far" : "near", pz, ez,
+                    at_far ? "High" : "as set");
+        }
     }
 }
 static void (*g_vt3_proj_cam)(CPU *);
