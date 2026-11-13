@@ -115,8 +115,8 @@ void xr_settings_load(LgXrSettings *c)
         has_irep |= !strcmp(key, "immersive.replays"); has_icut |= !strcmp(key, "immersive.cutaways");
     }
     if (f) fclose(f);
-    /* Replays and point cutaways are one row since 2026-11-13 ("Replays &
-     * close-ups"): one value per mode, both old keys written with it. A file
+    /* Replays and point cutaways are one row since 2026-11-13 ("Replays and
+     * reaction cams"): one value per mode, both old keys written with it. A file
      * with the two different: the replays key's value (an older build's file);
      * one key alone: that one's. */
     if (has_irep && has_icut && c->imm_replays != c->imm_cutaways)

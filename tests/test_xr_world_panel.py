@@ -64,9 +64,9 @@ int main(void) {
     /* the non-running mode's page: saved, not live */
     fx = xw_choose(&w, &c, XW_REPLAYS);
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
-    /* VR's Replays & close-ups (one row for replays and point cutaways, 2026-11-13): Off > Flat screen > VR > Off */
+    /* VR's Replays and reaction cams (one row for replays and point cutaways, 2026-11-13): Off > Flat screen > VR > Off */
     assert(c.imm_cutaways == LG_VIEW_FLAT);             /* the row sets both */
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen") && !strcmp(it[XW_REPLAYS].label, "Replays & close-ups"));
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen") && !strcmp(it[XW_REPLAYS].label, "Replays and reaction cams"));
     xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_CAMERA && c.imm_cutaways == LG_VIEW_CAMERA);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "VR"));
     xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.imm_cutaways == LG_VIEW_OFF && c.replays == 1);

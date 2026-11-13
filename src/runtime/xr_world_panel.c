@@ -6,11 +6,11 @@
  * it applies on the next start, and the line under them says so. Main page:
  * Restart now (only while the saved mode is not the running one), Advanced
  * settings (the saved mode's page), then the shared rows; choosing a mode on
- * an Advanced page shows that mode's page. Classic advanced: Replays &
- * close-ups (On / Off: replays and point cutaways, one row since 2026-11-13),
+ * an Advanced page shows that mode's page. Classic advanced: Replays
+ * and reaction cams (On / Off: replays and point cutaways, one row since 2026-11-13),
  * arcade overlays, shadow quality. VR advanced: camera height (Low / Medium /
  * High; your player at the far end is always High - stereo.c), the same
- * (Replays & close-ups Off / Flat screen / VR), sky (Stadium / Painted / Off),
+ * (Replays and reaction cams Off / Flat screen / VR), sky (Stadium / Painted / Off),
  * shadow quality; both: Save progress, Reset save (pull twice) and Texture
  * filtering (one value each for both modes, on restart; the main page is
  * full). Camera closer and Step back are gone (fixed 20 m / 5 m,
@@ -67,7 +67,7 @@ static int pinned(const XwState *w, int item)
     if (k < 0 || !(w->pins >> k & 1)) return 0;
     return k == WM_MODE || k == WM_LANGUAGE || k == WM_MSAA || k == WM_SAVE || k == WM_ANISO || page_mode(w) == w->running;
 }
-/* Replays & close-ups: one row for both values (2026-11-13), pinned when either env variable is set */
+/* Replays and reaction cams: one row for both values (2026-11-13), pinned when either env variable is set */
 static int pinned_rc(const XwState *w)
 {
     return (w->pins >> WM_REPLAYS & 1 || w->pins >> WM_CUTAWAYS & 1) && page_mode(w) == w->running;
@@ -141,8 +141,8 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     it[XW_DOLLY].label = "Camera closer";
     it[XW_STEPBACK].label = "Step back";
     it[XW_HEIGHT].label = "Camera height";
-    it[XW_REPLAYS].label = "Replays & close-ups";     /* one row since 2026-11-13: replays, point close-ups, the match's other camera scenes */
-    it[XW_CUTAWAYS].label = "Replays & close-ups";    /* (no row of its own any more) */
+    it[XW_REPLAYS].label = "Replays and reaction cams";     /* one row since 2026-11-13: replays, point close-ups, the match's other camera scenes */
+    it[XW_CUTAWAYS].label = "Replays and reaction cams";    /* (no row of its own any more) */
     it[XW_OVERLAYS].label = "Arcade overlays";
     it[XW_SKY].label = "Sky";
     it[XW_SHADOW].label = "Shadow quality";
@@ -255,7 +255,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_RESTART: return XP_RESTART;
     case XW_ADVANCED: w->page = c->world_mode ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; return XW_PAGE_CHANGED;
     case XW_BACK: w->page = XW_PAGE_MAIN; return XW_PAGE_CHANGED;
-    case XW_REPLAYS: case XW_CUTAWAYS:      /* Replays & close-ups: one value, both stored (vr.cfg's two old keys) */
+    case XW_REPLAYS: case XW_CUTAWAYS:      /* Replays and reaction cams: one value, both stored (vr.cfg's two old keys) */
         if (page_mode(w) < 0) return 0;
         if (im) c->imm_replays = c->imm_cutaways = view_next(c->imm_replays);
         else c->replays = c->classic_cutaways = !c->replays;

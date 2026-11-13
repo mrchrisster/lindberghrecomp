@@ -102,8 +102,8 @@ static inline int xr_settings_nearest(int v, const int *steps, int n)
 void xr_settings_defaults(LgXrSettings *settings);
 void xr_settings_set_game_defaults(void (*fn)(struct LgXrSettings *));
 /* Virtua Tennis 3's defaults (the owner's Quest 3 settings, 2026-11-13): VR
- * mode; VR: replays & close-ups Flat screen, overlays hidden, stadium sky,
- * shadows 4096, Camera height Medium; Classic: replays & close-ups on,
+ * mode; VR: Replays and reaction cams Flat screen, overlays hidden, stadium sky,
+ * shadows 4096, Camera height Medium; Classic: Replays and reaction cams on,
  * overlays hidden, shadows 1024, card notice off; both: anti-aliasing 2x,
  * texture filtering 4x, save on, English, 120 Hz, foveation high, screen
  * 2.5 m, HUD position 10, frame rate counter off, coins automatic */
