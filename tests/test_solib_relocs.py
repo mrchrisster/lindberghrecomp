@@ -12,11 +12,17 @@ import types
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.recomp import solib  # noqa: E402
+try:
+    from tools.recomp import solib  # noqa: E402
+except ModuleNotFoundError as missing:  # pyelftools / capstone not installed
+    solib = None
+    MISSING = missing.name
 
 BASE = 0xB4000000
 
 
+@unittest.skipIf(solib is None, "needs the recompiler's Python packages "
+                 "(pip install -r requirements-dev.txt): %s missing" % (None if solib else MISSING))
 class SolibRelocTests(unittest.TestCase):
     def test_apply_reloc_each_type(self):
         img = bytearray(64)

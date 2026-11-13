@@ -74,3 +74,5 @@ int main(void) {
             subprocess.run([cc,"-std=c11","-Wall","-Wextra","-Werror","-I",str(runtime),str(source),
                             str(runtime/"xr_panel.c"),str(runtime/"stereo_projection.c"),"-lm","-o",str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
+
+if __name__=="__main__":unittest.main()

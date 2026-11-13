@@ -9,10 +9,15 @@ class ActionsTests(unittest.TestCase):
         cc=shutil.which("cc")
         if not cc:self.skipTest("host C compiler unavailable")
         root=Path(__file__).resolve().parents[1]
-        candidates=[Path(os.environ.get("LINDBERGH_TEST_OPENXR_HEADERS","/opt/homebrew/include")),
-                    Path("/usr/include"),root.parent.parent/"deps/oxr/prefab/modules/headers/include"]
+        # openxr/openxr.h: LINDBERGH_TEST_OPENXR_HEADERS, Homebrew / system
+        # headers, or the Quest build's loader headers ($DEPS, default the
+        # folder next to the repository that holds this submodule: ../deps).
+        deps=Path(os.environ["DEPS"]) if os.environ.get("DEPS") else root.parent.parent/"deps"
+        candidates=[Path(p) for p in (os.environ.get("LINDBERGH_TEST_OPENXR_HEADERS"),) if p]+[
+                    Path("/opt/homebrew/include"),Path("/usr/local/include"),Path("/usr/include"),
+                    deps/"oxr/prefab/modules/headers/include"]
         include=next((p for p in candidates if (p/"openxr/openxr.h").exists()),None)
-        if include is None:self.skipTest("OpenXR declarations unavailable")
+        if include is None:self.skipTest("openxr/openxr.h not found (set LINDBERGH_TEST_OPENXR_HEADERS, or build ../deps with quest/deps.sh)")
         with tempfile.TemporaryDirectory() as d:
             binary=Path(d)/"actions"
             subprocess.run([cc,"-std=c11","-Wall","-Wextra","-Werror","-Wno-missing-field-initializers", "-I",str(include),

@@ -76,3 +76,5 @@ int main(int argc,char **argv) {
         for setting in ("1","0","-2","nan","inf","4junk"):
             with self.subTest(setting=setting):self.run_case(setting,1,0)
         self.run_case("4",4,0,fail=1)
+
+if __name__=="__main__":unittest.main()
