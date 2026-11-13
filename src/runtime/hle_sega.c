@@ -1961,6 +1961,37 @@ static void h_vt3_is_visible(CPU *c)
     }
     RET(vis);
 }
+/* T21: player models gone in a replay in Camera view (owner, 2026-11-12).
+ * TScene::Scene::entryModelPacket sorts each model into the frame's draw
+ * groups only if TScene::Frustum::intersect(const Model &) finds its bounding
+ * spheres inside the frustum drawView builds from the game camera's own lens
+ * - a replay camera's is 8-17 degrees wide. The camera pans with the ball, a
+ * player runs out of that narrow picture and is no longer drawn (his planar
+ * shadow, listed before the test, still is), while the headset's Camera view
+ * shows ~100 degrees. Measured on the Quest (T21 run R1, replay type 4): the
+ * player gone from frame 2514 of a replay that ran 2463-2542; on macOS the
+ * game's own picture loses him at the same point. While a replay or close-up
+ * is drawn in Camera view or the world (and 10 frames after, the end's kept
+ * frames), every model is taken as inside. LINDBERGH_VT3_MODEL_CULL=1 keeps
+ * the game's test. */
+static void (*g_vt3_frustum_model)(CPU *);
+static void h_vt3_frustum_model(CPU *c)
+{
+    extern unsigned g_frame; extern int stereo_vt3_view_kind(unsigned mode);
+    static unsigned seen = ~0u;
+    const unsigned m = g_vt3_camera ? rd32(g_vt3_camera + 0x38) : ~0u;
+    if ((m == 6 || m == 7) && stereo_vt3_view_kind(m)) seen = g_frame;
+    const int force = seen != ~0u && g_frame - seen <= 10;
+    if (force && !g_vt3_cull_log) { RET(1); return; }
+    push32(c, 0xDEADBEEFu); g_vt3_frustum_model(c);
+    if (g_vt3_cull_log) {                   /* LINDBERGH_VT3_CULLLOG=1: the models the game would have left out */
+        static unsigned n, out, at;
+        n++; if (!c->eax) out++;
+        if (g_frame - at >= 30) { if (force || out) fprintf(stderr, "[cull] frame %u: models %u tested, %u outside the game's lens%s\n",
+                                                          g_frame, n, out, force ? " - drawn (Camera view)" : ""); at = g_frame; n = out = 0; }
+    }
+    if (force) c->eax = 1;
+}
 /* Virtua Tennis 3, Immersive: Sega's whole stadium drawn. field::createTree
  * (0x080FFF8E) gives each tree of the stadium model a type byte in
  * [field+0x3c][i]: GAME_SOUTH 1, GAME_NORTH 2, GAME_NO 3 (the upper tiers,
@@ -2092,6 +2123,10 @@ static void vt3_jumps(void)
                 if (g_world_capable && vt3_wrap("_ZN5field4drawEv", &g_vt3_field_draw, h_vt3_field_draw))
                     fprintf(stderr, "[sega] Virtua Tennis 3: stadium draw wrapped (Immersive: %s)\n",
                             g_vt3_stands ? "upper stands, both ends and the sky dome drawn" : "the game's court-camera cut kept"); }
+            {   const char *mc = getenv("LINDBERGH_VT3_MODEL_CULL");
+                if (im && !(mc && *mc == '1') &&
+                    vt3_wrap("_ZNK6TScene7Frustum9intersectERKNS_5ModelE", &g_vt3_frustum_model, h_vt3_frustum_model))
+                    fprintf(stderr, "[sega] Virtua Tennis 3: immersive - every model drawn while a replay or close-up is in Camera view or the world\n"); }
             if (im && vt3_wrap("_ZN8_sRender22setProjectCameraMatrixEv", &g_vt3_proj_cam, h_vt3_proj_cam))
                 fprintf(stderr, "[sega] Virtua Tennis 3: immersive - the camera's own projection read\n");
         }

@@ -3365,6 +3365,14 @@ int arb_note_projection(const float *proj, const float *view)
             took = 1;
         }
     }
+    {   /* LINDBERGH_VT3_PROJLOG=1: each camera noted - its near / far planes and lens (diagnostic) */
+        static int pl = -1; extern unsigned g_frame;
+        if (pl < 0) { const char *v = getenv("LINDBERGH_VT3_PROJLOG"); pl = v && *v == '1'; }
+        if (pl) fprintf(stderr, "[proj] frame %u: took %d near %.2f far %.1f lens %.2f eye %.0f %.0f %.0f feeding %d\n", g_frame, took,
+                        proj[11] / (proj[10] - 1), proj[11] / (proj[10] + 1), proj[5],
+                        -(view[0] * view[3] + view[4] * view[7] + view[8] * view[11]), -(view[1] * view[3] + view[5] * view[7] + view[9] * view[11]),
+                        -(view[2] * view[3] + view[6] * view[7] + view[10] * view[11]), g_vt3_feeding);
+    }
     for (int i = 0; i < g_noted_n; i++) if (!memcmp(g_noted_proj[i], proj, 64)) return took;
     memcpy(g_noted_proj[g_noted_next], proj, 64);
     g_noted_next = (g_noted_next + 1) % 4; if (g_noted_n < 4) g_noted_n++;

@@ -415,6 +415,8 @@ static int rv_kind(unsigned mode)
     }
     return k == LG_VIEW_WORLD || k == LG_VIEW_CAMERA ? k : 0;
 }
+/* the view a camera mode is drawn with (0: as the game has it) - hle_sega.c's model culling */
+int stereo_vt3_view_kind(unsigned mode) { return rv_kind(mode); }
 static int g_rv_hold = 3;               /* black frames of the current dip */
 static void rv_fade_start(const char *why, int hold)
 {
@@ -580,12 +582,29 @@ void stereo_vt3_view(unsigned mode, const float *view, int cut, const float *pro
     }
     if (mode != g_rv.mode_seen) { g_rv.mode_seen = mode; g_rv.mode_frame = g_frame; }
     const int stale = g_frame == g_rv.mode_frame;     /* (measured: one frame) */
+    /* T21: a replay's or close-up's end - the game names the next camera mode a
+     * few frames before it moves the camera (measured on macOS: 2-3 frames of
+     * the old camera after the mode change, the end dip held exactly 3): those
+     * frames, drawn as the court, showed the replay's long lens round the head
+     * for a moment wherever the dip came a frame late (the Quest's GL thread).
+     * While the camera has not cut (moved under 1 m and 5 degrees a frame - a
+     * replay camera still panning; 6 frames at most) the shot goes on as it
+     * was; the end dip starts on the first frame of the new camera. */
+    int k = rv_kind(mode), was = g_rv.active, kept = 0;
+    {   static int keep_n; static unsigned keep_at;      /* frames kept (a close-up notes its camera twice a frame) */
+        float d2 = 0, dt = 0;
+        for (int i = 0; i < 3; i++) { d2 += (pos[i] - g_rv.last_pos[i]) * (pos[i] - g_rv.last_pos[i]); dt += fwd[i] * g_rv.last_fwd[i]; }
+        if (was && !k && g_rv.have_last && (keep_n < 6 || keep_at == g_frame) && d2 < 10.0f * 10.0f && dt > 0.996f) {
+            k = was; mode = g_rv.mode; kept = 1;
+            if (keep_at != g_frame) { keep_at = g_frame; keep_n++; }
+            if (rv_log()) fprintf(stderr, "[rview] frame %u: camera not cut yet - the shot kept (%d)\n", g_frame, keep_n);
+        } else keep_n = 0;
+    }
     if ((mode == 1 || mode == 2) && !stale) {   /* the court camera: the anchor, until a replay or close-up */
         memcpy(g_rv.anchor, V, sizeof V);
         g_rv.anchor_up[0] = view[1]; g_rv.anchor_up[1] = view[5]; g_rv.anchor_up[2] = view[9];
         g_rv.anchor_ok = 1;
     }
-    int k = rv_kind(mode), was = g_rv.active;
     if (k == LG_VIEW_WORLD && !g_rv.anchor_ok) {
         static int told; if (!told++) fprintf(stderr, "[rview] frame %u: no court view seen yet - camera mode %u shown as before\n", g_frame, mode);
         k = 0;
@@ -604,14 +623,14 @@ void stereo_vt3_view(unsigned mode, const float *view, int cut, const float *pro
         static int follow = -1;
         if (follow < 0) { const char *v = getenv("LINDBERGH_VT3_REPLAY_FOLLOW"); follow = v && *v == '1'; }
         const int start = was != k || mode != g_rv.mode;
-        int shot = start || cut || !g_rv.have_last || (g_frame - g_rv.mode_frame == 1 && g_rv.shot_frame != g_frame);
-        if (!shot) {
+        int shot = !kept && (start || cut || !g_rv.have_last || (g_frame - g_rv.mode_frame == 1 && g_rv.shot_frame != g_frame));
+        if (!shot && !kept) {
             float d2 = 0, dt = 0;
             for (int i = 0; i < 3; i++) { d2 += (pos[i] - g_rv.last_pos[i]) * (pos[i] - g_rv.last_pos[i]); dt += fwd[i] * g_rv.last_fwd[i]; }
             shot = d2 > 100.0f * 100.0f || dt < 0.94f;   /* 10 m or 20 degrees in a frame: a cut */
         }
         float d = 0, de = 0;
-        if (shot || follow)
+        if (shot || (follow && !kept))
             rv_frame_shot(mode, pos, fwd, target, proj ? proj[5] : 0, pl, npl, g_rv.shot_eye, g_rv.shot_dir, &d, &de);
         float L[16];
         rv_look_at(g_rv.shot_eye, g_rv.shot_dir, L);
@@ -670,6 +689,24 @@ void stereo_vt3_view(unsigned mode, const float *view, int cut, const float *pro
     if (rv_log() && (mode == 6 || mode == 7))
         fprintf(stderr, "[rview] frame %u: mode %u view %d eye %.0f %.0f %.0f fwd %.2f %.2f %.2f\n",
                 g_frame, mode, k, pos[0], pos[1], pos[2], fwd[0], fwd[1], fwd[2]);
+    {   /* LINDBERGH_VT3_RVSHOT=<n>: a game shot of every frame of the first n
+         * replays / close-ups drawn in Camera view or the world, and of the
+         * 30 frames after each, each logged with its mode and dip
+         * (diagnostic: player models gone in a replay, the glitch at its end) */
+        static int segs = -2, seg, after; extern volatile int g_game_shot_req;
+        if (segs == -2) { const char *v = getenv("LINDBERGH_VT3_RVSHOT"); segs = v && *v ? atoi(v) : 0; }
+        if (segs > 0) {
+            if (k && !was) seg++;
+            if (!k && was) after = 30;
+            const int in = k && seg <= segs;
+            if (in || (after > 0 && seg <= segs)) {
+                if (!in) after--;
+                g_game_shot_req = 1;
+                fprintf(stderr, "[rvshot] frame %u: mode %u view %d stale %d dip %.2f glide %d eye %.0f %.0f %.0f fwd %.2f %.2f %.2f\n",
+                        g_frame, mode, k, stale, rv_fade_alpha(), g_rv.glide, pos[0], pos[1], pos[2], fwd[0], fwd[1], fwd[2]);
+            }
+        }
+    }
     g_rv.active = k; g_rv.mode = mode;
     memcpy(g_rv.last_pos, pos, sizeof pos); memcpy(g_rv.last_fwd, fwd, sizeof fwd); g_rv.have_last = 1;
     g_proj_dirty = 1;

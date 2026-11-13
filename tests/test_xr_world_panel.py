@@ -158,21 +158,21 @@ int main(void) {
       aw.pins = 1u << WM_MSAA; aw.eff.msaa = 2;
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (env.txt)"));
       assert(xw_choose(&aw, &ac, XW_MSAA) == 0 && ac.msaa == 0); }
-    /* Save progress on both Advanced pages (one value), Off by default, on restart; not on the main page (T16) */
+    /* Save progress on both Advanced pages (one value), On by default (T21), on restart; not on the main page (T16) */
     { XwState sw; memset(&sw, 0, sizeof sw); LgXrSettings sc = LG_XR_SETTINGS_DEFAULT;
       world_mode_resolve(&sc, 0, 1, 0, &sw.eff, NULL);
       int sr[XW_ROWS_MAX], sn = xw_page_rows(&sw, &sc, sr);
-      assert(!has(sr, sn, XW_ROW(XW_SAVE)) && sc.save == 0 && sw.eff.save == 0);
+      assert(!has(sr, sn, XW_ROW(XW_SAVE)) && sc.save == 1 && sw.eff.save == 1);
       sw.page = XW_PAGE_CLASSIC; sn = xw_page_rows(&sw, &sc, sr); assert(has(sr, sn, XW_ROW(XW_SAVE)));
-      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].label, "Save progress") && !strcmp(it[XW_SAVE].value, "Off"));
-      assert(xw_choose(&sw, &sc, XW_SAVE) == XP_SAVE && sc.save == 1);
-      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "On (on restart)"));
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].label, "Save progress") && !strcmp(it[XW_SAVE].value, "On"));
+      assert(xw_choose(&sw, &sc, XW_SAVE) == XP_SAVE && sc.save == 0);
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "Off (on restart)"));
       sw.page = XW_PAGE_IMMERSIVE; sn = xw_page_rows(&sw, &sc, sr); assert(has(sr, sn, XW_ROW(XW_SAVE)));
-      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "On (on restart)"));          /* the same value on VR's page */
-      xw_restore_defaults(&sc, 1); xw_restore_defaults(&sc, 0); assert(sc.save == 1);             /* Restore defaults keeps it */
+      xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "Off (on restart)"));         /* the same value on VR's page */
+      xw_restore_defaults(&sc, 1); xw_restore_defaults(&sc, 0); assert(sc.save == 0);             /* Restore defaults keeps it */
       sw.pins = 1u << WM_SAVE; sw.eff.save = 0;
       xw_items(&sw, &sc, it); assert(!strcmp(it[XW_SAVE].value, "Off (env.txt)"));
-      assert(xw_choose(&sw, &sc, XW_SAVE) == 0 && sc.save == 1); }
+      assert(xw_choose(&sw, &sc, XW_SAVE) == 0 && sc.save == 0); }
     /* Reset save below Save progress on both Advanced pages: pull twice (like Restore defaults), an action - nothing stored */
     { XwState rw; memset(&rw, 0, sizeof rw); LgXrSettings rc = LG_XR_SETTINGS_DEFAULT, before;
       world_mode_resolve(&rc, 0, 1, 0, &rw.eff, NULL);

@@ -58,7 +58,7 @@ int main(void) {
 
     MODE_KEYS={"mode":"classic","classic.shadow":"1024","classic.cutaways":"on","immersive.replays":"off",
                "immersive.overlays":"off","immersive.cutaways":"off","immersive.sky":"stadium","immersive.shadow":"2048",
-               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0","save":"off",
+               "immersive.height":"10","classic.card_notice":"off","language":"english","msaa":"0","save":"on",
                "aniso":"0","save_name":"PLAYER"}
 
     @staticmethod

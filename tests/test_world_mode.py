@@ -136,7 +136,8 @@ int main(int argc, char **argv) {
     def test_antialiasing(self):
         m = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "msaa"))[0].split(" | ")[1]
         sv = lambda cfg=None, env=None: self.run_wm(cfg, env, args=("1", "msaa"))[0].split(" | ")[2]
-        self.assertEqual(sv(), "0 0 0")                                                  # Save progress off by default (T16)
+        self.assertEqual(sv(), "1 0 1")                                                  # Save progress on by default (T21; was off, T16)
+        self.assertEqual(sv("save off\n"), "0 0 0")                                       # an explicit off stays off
         self.assertEqual(sv("save on\n"), "1 0 1")
         self.assertEqual(sv("mode immersive\nsave on\n"), "1 0 1")                       # one value for both modes
         self.assertEqual(sv("save on\n", {"LINDBERGH_VT3_SAVE": "0"}), "0 1 0")

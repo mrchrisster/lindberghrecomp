@@ -1327,8 +1327,11 @@ static int splash_init(void)
     XrSwapchainImageReleaseInfo ri = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
     xrReleaseSwapchainImage(sp_chain, &ri);
     free(px);
+    /* T21: the last start's time, within 8-60 s - a start that waited on the
+     * headset (taken off, a Guardian prompt) measured minutes, and the next
+     * start's line then crept a pixel at a time, as good as not there */
     FILE *f = fopen("startup_seconds", "r");
-    if (f) { double s; if (fscanf(f, "%lf", &s) == 1 && s > 3 && s < 300) sp_expect = s; fclose(f); }
+    if (f) { double s; if (fscanf(f, "%lf", &s) == 1 && s > 3 && s < 300) sp_expect = s < 8 ? 8 : s > 60 ? 60 : s; fclose(f); }
     sp_t0 = sp_now();
     fprintf(stderr, "[xr] splash: %dx%d, counting down from %.0f s\n", w, h, sp_expect);
     return 1;
@@ -1370,6 +1373,7 @@ static int sp_layers(XrCompositionLayerQuad q[4])
         for (int i = secs < 10 ? 1 : 0; i < 2; i++)
             q[n++] = sp_quad(dig[i] * cw, lg_splash_panel_h, cw, ch, lg_splash_digits[0] + i * dw, (float)lg_splash_digits[1], dw, dh, 1);
     double p = t / sp_expect; if (p > 0.97) p = 0.97;
+    if (p < 0.04) p = 0.04;            /* T21: the line shows from the first frame */
     float bx = (float)lg_splash_bar[0], by = (float)lg_splash_bar[1], bw = (float)(lg_splash_bar[2] - lg_splash_bar[0]) * (float)p,
           bh = (float)(lg_splash_bar[3] - lg_splash_bar[1]);
     if (bw >= 1) q[n++] = sp_quad(10 * cw + 16, lg_splash_panel_h + 16, cw - 32, ch - 32, bx, by, bw, bh, 0);
@@ -1405,7 +1409,8 @@ static void *sp_loop(void *arg)
         static unsigned frames, bad;
         if (XR_FAILED(r) && bad++ < 10) fprintf(stderr, "[xr] splash: xrEndFrame failed %d (%d layers)\n", (int)r, n);
         if (++frames == 1 || frames % 300 == 0)
-            fprintf(stderr, "[xr] splash: frame %u, %d layers, should render %d, state %d\n", frames, n, (int)fs.shouldRender, (int)state);
+            fprintf(stderr, "[xr] splash: frame %u, %d layers, should render %d, state %d, line %.0f%% (%.1f of %.0f s)\n", frames, n,
+                    (int)fs.shouldRender, (int)state, 100.0 * fmin(fmax((sp_now() - sp_t0) / sp_expect, 0.04), 0.97), sp_now() - sp_t0, sp_expect);
     }
     return NULL;
 }
@@ -1425,7 +1430,7 @@ static void splash_done(const char *why)
     sp_on = 0;
     double t = sp_now() - sp_t0;
     fprintf(stderr, "[xr] splash: off after %.1f s (%s)\n", t, why);
-    if (!strcmp(why, "the game is showing")) {
+    if (!strcmp(why, "the game is showing") && t < 90) {   /* (not a start that waited on the headset) */
         FILE *f = fopen("startup_seconds", "w");
         if (f) { fprintf(f, "%.0f\n", t); fclose(f); }
     }
@@ -1537,6 +1542,7 @@ void xr_frame_begin(void)
         static int first = 1;
         if (first) {
             first = 0;
+            if (!running) fprintf(stderr, "[xr] splash: not shown - the headset's session was not running yet at the first frame\n");
             if (running && (sp_on = splash_init())) {
                 sp_stop = 0;
                 sp_thread_on = pthread_create(&sp_thread, NULL, sp_loop, NULL) == 0;
