@@ -1928,6 +1928,33 @@ static void side_pass(int on)
 static unsigned g_pane_frame = ~0u;
 static int      g_pane[4];              /* this frame's panes so far, one box: x0, y0, x1, y1 (game pixels) */
 static int      g_pane_side;            /* inside a pane's prelude (a side pass) */
+/* TEST SWITCH, OFF BY DEFAULT (2026-11-13): Virtua Tennis 3 in Classic with the
+ * VR rules for screen copies lifted. In Classic every frame is flat, so the
+ * VR rules "a screen copy drawn back is left out" and "the colour clear before
+ * it is dropped" (7675d88) also apply to Classic, where both layers carry the
+ * same picture. LINDBERGH_CLASSIC_COMPOSITE=1 keeps such draws (in regular play
+ * none bind a copy on the active unit, so nothing changes there); =2 also keeps
+ * the colour clears - on the Quest every game frame then came out BLACK: the
+ * game ends each frame with clear colour+stencil, a copy into its texture
+ * (45 on the Quest, 23 on macOS - likely the depth for the next frame) and
+ * one draw, also on macOS (where the picture is fine), so where the picture
+ * comes from after that clear under gl4es multiview is not understood yet.
+ * LINDBERGH_CLASSIC_COMPOSITE_AT=<frame>: from that frame on (A/B in one run).
+ * See HANDOFF 3.1, 2026-11-13 ~12:00. */
+static int classic_composite(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("LINDBERGH_CLASSIC_COMPOSITE"), *fa = getenv("LINDBERGH_FLAT_ALL");
+        on = v && *v ? atoi(v) : 0;     /* test switch, off by default: 1 the composite draws kept; 2 the colour clears kept too */
+        if (!world_mode_capable() || world_mode_immersive() || (fa && *fa == '0')) on = 0;
+        fprintf(stderr, "[stereo] Classic: the game's screen copies composited back (depth of field, glare): %s\n",
+                on == 2 ? "yes, with the colour clears" : on ? "yes (the colour clears still left out)" : "no (LINDBERGH_CLASSIC_COMPOSITE=0 or not Classic)");
+    }
+    static long at = -2;    /* LINDBERGH_CLASSIC_COMPOSITE_AT=<frame>: off before that frame, on from it (tests: before / after in one run) */
+    if (at == -2) { const char *v = getenv("LINDBERGH_CLASSIC_COMPOSITE_AT"); at = v && *v ? atol(v) : -1; }
+    return on && g_flat && (at < 0 || (long)g_frame >= at) ? on : 0;
+}
 static int pane_prelude_on(void)
 {
     static int on = -1;
@@ -2292,7 +2319,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
      * effect) would flatten it to one eye's picture: left out. Over no world
      * it is the whole picture - a transition, last frame's view swept away -
      * and leaving it out left the eyes black: it goes over the whole view. */
-    if (g_on && g_mv && !g_side && (is_draw(k) || k == K_BEGIN) && g_tex2d_on && g_nscreen_copy && screen_copy(g_tex2d_bound) && (g_scene_draws || (g_flat && g_eye_draws))) {
+    if (g_on && g_mv && !g_side && (is_draw(k) || k == K_BEGIN) && g_tex2d_on && g_nscreen_copy && screen_copy(g_tex2d_bound) && (g_scene_draws || (g_flat && g_eye_draws)) && !classic_composite()) {
         if (k == K_BEGIN) g_skip_begin = 1;
         return 1;
     }
@@ -2330,7 +2357,7 @@ static int transform_call(CPU *c, HleId id, const char *n)
          * black - it goes. */
         if (g_pane_side && (mask & GL_DEPTH_BUFFER_BIT) && !(mask & GL_COLOR_BUFFER_BIT)) pane_prelude_end();   /* the pane itself: the eyes */
         if (g_on && g_mv && !g_side && g_game_fb == 0 && mask == GL_DEPTH_BUFFER_BIT) pane_note();
-        if (g_on && g_mv && !g_side && g_game_fb == 0 && (mask & GL_COLOR_BUFFER_BIT) &&
+        if (g_on && g_mv && !g_side && g_game_fb == 0 && (mask & GL_COLOR_BUFFER_BIT) && classic_composite() != 2 &&
             ((g_scene_draws && g_eyes_copied_frame == g_frame) || (g_flat && g_eye_draws))) {
             if (pane_prelude_begin()) return 0;     /* the clear as the game made it, into the side target */
             mask &= ~(GLbitfield)GL_COLOR_BUFFER_BIT;
@@ -2341,8 +2368,9 @@ static int transform_call(CPU *c, HleId id, const char *n)
             static long dl = -2, dl1;
             if (dl == -2) { const char *v = getenv("LINDBERGH_DRAW_LOG"); dl = v ? atol(v) : -1; dl1 = v && strchr(v, '-') ? atol(strchr(v, '-') + 1) : dl; }
             if ((long)g_frame == g_cap_frame || (long)g_frame + 1 == g_cap_frame || (long)g_frame == g_draw_log_frame || (dl >= 0 && (long)g_frame >= dl && (long)g_frame <= dl1))
-                fprintf(stderr, "[units] frame %u clear %#x fb %u vp %d,%d %dx%d side %d scissor %d %d,%d %dx%d\n", g_frame, mask, (unsigned)g_game_fb, g_vp[0], g_vp[1], g_vp[2], g_vp[3], g_side,
-                        g_scissor_on, g_game_scissor[0], g_game_scissor[1], g_game_scissor[2], g_game_scissor[3]);
+            {   GLboolean cw[4] = { 0 }; glGetBooleanv(GL_COLOR_WRITEMASK, cw);
+                fprintf(stderr, "[units] frame %u clear %#x fb %u vp %d,%d %dx%d side %d scissor %d %d,%d %dx%d colour mask %d%d%d%d\n", g_frame, mask, (unsigned)g_game_fb, g_vp[0], g_vp[1], g_vp[2], g_vp[3], g_side,
+                        g_scissor_on, g_game_scissor[0], g_game_scissor[1], g_game_scissor[2], g_game_scissor[3], cw[0], cw[1], cw[2], cw[3]); }
         }
         if (g_mv && g_pbuffers && (g_game_fb == 0 || g_side)) {
             /* Only a clear with colour starts a side pass: the passes above
