@@ -523,13 +523,18 @@ static int rv_players_seen(const float L[16], const float (*pl)[3], int npl, con
         if (dx * dx + dz * dz < best) { best = dx * dx + dz * dz; near = k; }
     }
     *subject = -1;
+    /* the eye's field: the headset's, or (no VR host: macOS, before the first
+     * XR frame - g_tan all 0, which saw nothing) the 90-degree square eye
+     * rv_frame_shot frames for */
+    static const float sq[4] = { 1, 1, 1, 1 };
+    const float *tn = g_tan[0][0] > 0 && g_tan[0][1] > 0 && g_tan[0][2] > 0 && g_tan[0][3] > 0 ? g_tan[0] : sq;
     for (int k = 0; k < npl; k++) {
         const float p[3] = { pl[k][0], pl[k][1] + 10.0f, pl[k][2] };
         float q[3];
         for (int i = 0; i < 3; i++) q[i] = L[i] * p[0] + L[4 + i] * p[1] + L[8 + i] * p[2] + L[12 + i];
         if (q[2] < -1.0f) {
             const float x = q[0] / -q[2], y = q[1] / -q[2];
-            if (x > -g_tan[0][0] && x < g_tan[0][1] && y > -g_tan[0][2] && y < g_tan[0][3]) { n++; if (k == near) *subject = 1; }
+            if (x > -tn[0] && x < tn[1] && y > -tn[2] && y < tn[3]) { n++; if (k == near) *subject = 1; }
         }
         if (k == near && *subject < 0) *subject = 0;
     }
