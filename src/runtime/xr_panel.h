@@ -19,9 +19,12 @@ void xp_matrix(const XpPanel *panel,float model[16]);
 int xp_menu_button(XpPanel *panel,int pressed,int previous);
 int xp_hold_button(XpPanel *panel,int pressed,int previous,int dual,int64_t time,int64_t *held_since);
 /* whether a game's panel shows an XP_ item: a lever cabinet (lever) has no gun rows; a game with
- * no_test_buttons (game_profile.h; Virtua Tennis 3) has no Arcade Test / Service rows. Items of
- * world-mode pages (XP_COUNT + XW_x) are shown. */
-int xp_row_shown(int item,int lever,int no_test_buttons);
+ * no_test_buttons (game_profile.h; Virtua Tennis 3) has no Arcade Test / Service rows; HUD position
+ * only while the HUD is head-locked (hud_locked: vr.hud_head_locked or LINDBERGH_XR_HUD_LOCK=1) - a
+ * HUD drawn on the game's screen goes where the screen goes and the row's tilt does nothing
+ * (it read "With the screen" and every pull changed only vr.cfg). Items of world-mode pages
+ * (XP_COUNT + XW_x) are shown. */
+int xp_row_shown(int item,int lever,int no_test_buttons,int hud_locked);
 #ifdef __cplusplus
 }
 #endif

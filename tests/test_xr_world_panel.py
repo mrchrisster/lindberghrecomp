@@ -280,7 +280,7 @@ int main(void) {
             xw_items(&pw, &pc, wall);
             for (int i = 0; i < pn; i++) {
                 const int id = pr[i];
-                if (!xp_row_shown(id, 1, 1)) continue;     /* VT3: a lever cabinet without Test / Service rows */
+                if (!xp_row_shown(id, 1, 1, 0)) continue;     /* VT3: a lever cabinet without Test / Service rows, HUD on the screen (no HUD position) */
                 rows[m++] = id < XP_COUNT ? all[id] : wall[id - XP_COUNT];
             }
             const char *page = getenv("LINDBERGH_TEST_PANEL_PAGE");

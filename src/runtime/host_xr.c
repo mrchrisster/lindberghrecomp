@@ -354,14 +354,14 @@ static void menu_world_state(void)
 }
 static void menu_rows(void)
 {
-    const int lever = game_profile()->joystick, no_test = game_profile()->no_test_buttons;
+    const int lever = game_profile()->joystick, no_test = game_profile()->no_test_buttons, hud_locked = stereo_hud_is_head_locked();
     int rows[XW_ROWS_MAX], n = 0;
     if (g_world_capable) { menu_world_state(); n = xw_page_rows(&wpanel, &cfg, rows); }
     else for (int i = 0; i < XP_COUNT; i++) rows[n++] = i;
     menu_n = 0;
     for (int r = 0; r < n; r++) {
         const int i = rows[r];
-        if (!xp_row_shown(i, lever, no_test)) continue;     /* gun rows on a lever cabinet; Test / Service when the game has none */
+        if (!xp_row_shown(i, lever, no_test, hud_locked)) continue;     /* gun rows on a lever cabinet; Test / Service when the game has none; HUD position unless head-locked */
         if ((i == XP_OVERLAYS || i == XW_ROW(XW_OVERLAYS)) && !g_arcade_overlay_hooks) continue;
         if ((i == XP_REPLAYS || i == XW_ROW(XW_REPLAYS)) && !g_replay_hook) continue;
         if (i == XW_ROW(XW_CUTAWAYS) && !g_cutaway_hook) continue;

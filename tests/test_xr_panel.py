@@ -56,11 +56,14 @@ int main(void) {
     xp_choose(&p,&cfg,&hand,XP_SERVICE,rates,3);assert(p.service_frames==12);
     /* per game rows: gun games keep everything; a lever cabinet drops the gun rows; no_test_buttons
      * (Virtua Tennis 3) drops Arcade Test / Service, nothing else */
-    for(int i=0;i<XP_COUNT;++i)assert(xp_row_shown(i,0,0));
-    assert(!xp_row_shown(XP_GUN,1,0)&&xp_row_shown(XP_TEST,1,0)&&xp_row_shown(XP_SERVICE,1,0));
-    assert(!xp_row_shown(XP_TEST,1,1)&&!xp_row_shown(XP_SERVICE,1,1)&&!xp_row_shown(XP_TEST,0,1));
-    for(int i=0;i<XP_COUNT;++i)if(i!=XP_TEST&&i!=XP_SERVICE)assert(xp_row_shown(i,0,1));
-    assert(xp_row_shown(XP_COUNT+3,1,1));
+    for(int i=0;i<XP_COUNT;++i)assert(xp_row_shown(i,0,0,1));
+    assert(!xp_row_shown(XP_GUN,1,0,1)&&xp_row_shown(XP_TEST,1,0,1)&&xp_row_shown(XP_SERVICE,1,0,1));
+    assert(!xp_row_shown(XP_TEST,1,1,1)&&!xp_row_shown(XP_SERVICE,1,1,1)&&!xp_row_shown(XP_TEST,0,1,1));
+    for(int i=0;i<XP_COUNT;++i)if(i!=XP_TEST&&i!=XP_SERVICE)assert(xp_row_shown(i,0,1,1));
+    assert(xp_row_shown(XP_COUNT+3,1,1,0));
+    /* HUD position only for a head-locked HUD (HOTD4SP); a HUD on the screen (VT3, both modes) has no row */
+    assert(!xp_row_shown(XP_HUD,0,0,0)&&!xp_row_shown(XP_HUD,1,1,0)&&xp_row_shown(XP_HUD,0,0,1));
+    for(int i=0;i<XP_COUNT;++i)if(i!=XP_HUD)assert(xp_row_shown(i,0,0,0));
     flags=xp_choose(&p,&cfg,&hand,XP_RESET,rates,3);assert(p.reset_armed&&!(flags&XP_RESTART));
     assert(!xp_choose(&p,&cfg,&hand,-1,rates,3)&&p.reset_armed);
     XmItem items[XP_COUNT];xp_items(&p,&cfg,hand,1,2280,2064,items);
