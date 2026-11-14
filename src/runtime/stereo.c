@@ -1154,8 +1154,20 @@ static void scale_target(GLenum textarget, GLuint tex, GLenum attachment)
     {   /* LINDBERGH_XR_TARGET_K=<k>: at most k times the game's size - fewer
          * pixels for a game that runs full-screen passes through its own
          * targets (Virtua Tennis 3's depth of field and glare) */
+        /* Classic's picture-sized eyes (stereo_classic_pic): at the game's own
+         * size (1). Its glare (a bright pass, a 4-level pyramid in one 1360x768
+         * target, blurs, the levels summed into a 680x384 one) takes its taps
+         * a game texel apart: at x1.5 they fell 1.5 texels apart and the
+         * bilinear reads left a 2-pixel ripple, which the upsampling of the
+         * small levels turned into a grid of stripes and blocks round every
+         * light in the sky (the owner's "sky texture weird" in the intro's
+         * fly-by on Flushing Meadows' night court and wherever the sun or the
+         * lights glare). LINDBERGH_XR_TARGET_K=0: scaled as before. */
         static float cap = -1;
-        if (cap < 0) { const char *v = getenv("LINDBERGH_XR_TARGET_K"); cap = v && *v ? (float)atof(v) : 0; }
+        if (cap < 0) { const char *v = getenv("LINDBERGH_XR_TARGET_K");
+                       cap = v && *v ? (float)atof(v) : stereo_classic_pic() > 0 ? 1.0f : 0;
+                       if (cap > 0) fprintf(stderr, "[stereo] render targets at most x%.2f the game's size (%s)\n", cap,
+                                            v && *v ? "LINDBERGH_XR_TARGET_K" : "Classic: the game's glare and depth of field as drawn; LINDBERGH_XR_TARGET_K=0 scales them"); }
         if (cap > 0) { if (kx > cap) kx = cap; if (ky > cap) ky = cap; }
     }
     if (fmt == GL_DEPTH_COMPONENT && tg == GL_TEXTURE_2D && !(w == g_pic_w && h == g_pic_h) && !(w == GAME_W && h == GAME_H)) {

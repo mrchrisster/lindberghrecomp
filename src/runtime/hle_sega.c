@@ -1533,6 +1533,38 @@ static void h_vt3_init_uva(CPU *c)
     if (g_vt3_log) fprintf(stderr, "[vt3] frame %u: intro fly-by camera skipped (camera mode %#x)\n", g_frame, mode);
     RET(0);
 }
+/* The match intro's walk-out (2026-11-13, owner: "sky texture weird on the first
+ * court 3D sequence ... only in some stadiums"). On London (Eng1F: the player
+ * walks out of the tunnel) and the SPT Final in Milan (Fin0E: a close-up of the
+ * player first) usrAcEntranceLoop is not ended by its fly-by: this+0x14 is set,
+ * and exec() counts this+0x40 to 0x1E1 (481 frames: the walk-out, then at 0xF0
+ * the stadium fly-by) instead of asking camera::isUvaFinished. With both
+ * fly-bys skipped the walk-out scene was drawn in the world from the court
+ * camera's pose for ~8 s - black with light streaks, the galleria seen from
+ * above and mirrored, the sky panorama on its own. Every other venue's intro
+ * lasts one frame in world mode. So in world mode, with the fly-by skip on, the
+ * count is taken to 0xF0 at the second exec() (the first does the loop's own
+ * start: fade, frame rate; 0xF0 swaps the walk-out's set for the stadium) and
+ * to 0x1E1 at the third, and the loop leaves through its own exit, as on the
+ * other venues (taken straight to 0x1E1, London kept the tunnel set on the
+ * court camera). LINDBERGH_VT3_SKIP_WALKOUT=0: the walk-out as before. */
+static void (*g_vt3_entrance_exec)(CPU *);
+static void h_vt3_entrance_exec(CPU *c)
+{
+    extern unsigned g_frame;
+    uint32_t self = A32(0);
+    if (self >= 0x08000000u && rd32(self + 0x14) != 0) {
+        int32_t n = (int32_t)rd32(self + 0x40);
+        /* to 0xF0 first: that exec() puts the stadium in place of the walk-out's
+         * set (playStageData) and starts the fly-by (skipped); the next one to 0x1E1 */
+        int32_t to = n >= 1 && n < 0xF0 ? 0xF0 : n > 0xF0 && n < 0x1E1 ? 0x1E1 : n;
+        if (to != n) {
+            wr32(self + 0x40, (uint32_t)to);
+            fprintf(stderr, "[vt3] frame %u: match intro walk-out left out (entrance type %u, count %d -> %d)\n", g_frame, rd32(self + 0x14), n, to);
+        }
+    }
+    push32(c, 0xDEADBEEFu); g_vt3_entrance_exec(c);
+}
 /* LINDBERGH_VT3_CAMFIELDS=<from>-<to>: during those frames, each small integer
  * field of the camera object (and the match manager at 0x85061a4) that changes,
  * logged per frame - finding the start-of-match camera's state */
@@ -2157,7 +2189,11 @@ static void vt3_jumps(void)
             { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA");
               int skip_uva = u && *u ? *u == '1' : world_mode_immersive();    /* default: on in world mode */
               if (skip_uva && vt3_wrap("_ZN6camera7initUvaEi", &g_vt3_init_uva, h_vt3_init_uva))
-                  fprintf(stderr, "[sega] Virtua Tennis 3: intro fly-by camera skipped\n"); }
+                  fprintf(stderr, "[sega] Virtua Tennis 3: intro fly-by camera skipped\n");
+              const char *w = getenv("LINDBERGH_VT3_SKIP_WALKOUT");
+              if (skip_uva && world_mode_immersive() && !(w && *w == '0') &&
+                  vt3_wrap("_ZN17usrAcEntranceLoop4execEv", &g_vt3_entrance_exec, h_vt3_entrance_exec))
+                  fprintf(stderr, "[sega] Virtua Tennis 3: match intro walk-out left out with the fly-by (LINDBERGH_VT3_SKIP_WALKOUT=0 keeps it)\n"); }
             const int im = world_mode_immersive();
             const char *cull = getenv("LINDBERGH_VT3_CULL");    /* 0 off, 1 the game's, 2 (default) widened to the eyes */
             const char *cm = getenv("LINDBERGH_VT3_CULL_MARGIN"), *cl = getenv("LINDBERGH_VT3_CULLLOG");
