@@ -106,6 +106,16 @@ set(LINDBERGH_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime"
 set(LINDBERGH_CPU_DIR "${CMAKE_CURRENT_SOURCE_DIR}/pcrecomp/runtime/recomp32_cpu"
     CACHE INTERNAL "")
 
+set(LINDBERGH_RECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "")
+option(LINDBERGH_FP_CONTRACT_OFF "No fused multiply-add anywhere (the same float results on every host: netplay)" ON)
+# The bundled maths of deterministic mode (det_math.c; third_party/fdlibm/README.md)
+set(LINDBERGH_FDLIBM_SOURCES "")
+foreach(f e_atan2 e_exp e_log e_log10 e_pow e_rem_pio2 k_cos k_rem_pio2 k_sin k_tan
+          s_atan s_copysign s_cos s_fabs s_floor s_scalbn s_sin s_tan)
+    list(APPEND LINDBERGH_FDLIBM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/fdlibm/${f}.c")
+endforeach()
+set(LINDBERGH_FDLIBM_SOURCES "${LINDBERGH_FDLIBM_SOURCES}" CACHE INTERNAL "")
+
 if(NOT EXISTS "${LINDBERGH_CPU_DIR}/cpu.h")
     message(FATAL_ERROR
         "pcrecomp submodule is missing (${LINDBERGH_CPU_DIR}/cpu.h).\n"
@@ -205,8 +215,28 @@ function(lindbergh_runtime target generated_dir)
         "${LINDBERGH_RUNTIME_DIR}/overrides.c"
         "${LINDBERGH_RUNTIME_DIR}/dispatch.c"
         "${LINDBERGH_RUNTIME_DIR}/crash_report.c"
+        "${LINDBERGH_RUNTIME_DIR}/netplay.c"
+        "${LINDBERGH_RUNTIME_DIR}/lockstep.c"
+        "${LINDBERGH_RUNTIME_DIR}/det_math.c"
+        ${LINDBERGH_FDLIBM_SOURCES}
         ${platform_sources}
     )
+    # The runtime's revision, for the netplay handshake and input recordings
+    # (lindbergh_version.h, rewritten at each build when it changes)
+    if(NOT TARGET lindbergh_version)
+        add_custom_target(lindbergh_version
+            COMMAND ${CMAKE_COMMAND} -DSRC=${LINDBERGH_RECOMP_ROOT} -DOUT=${CMAKE_BINARY_DIR}/lindbergh_version/lindbergh_version.h
+                    -P ${LINDBERGH_RECOMP_ROOT}/cmake/lindbergh_version.cmake
+            BYPRODUCTS ${CMAKE_BINARY_DIR}/lindbergh_version/lindbergh_version.h)
+    endif()
+    add_dependencies(${target} lindbergh_version)
+    target_include_directories(${target} PRIVATE "${CMAKE_BINARY_DIR}/lindbergh_version")
+    # One answer for a*b+c on every host and compiler: no fused multiply-add
+    # (Apple clang and the NDK's may contract differently) - the same bits on a
+    # Mac and a Quest are what netplay's lockstep needs
+    if(LINDBERGH_FP_CONTRACT_OFF AND NOT MSVC)
+        target_compile_options(${target} PRIVATE -ffp-contract=off)
+    endif()
     target_include_directories(${target} PRIVATE
         "${LINDBERGH_RUNTIME_DIR}"
         "${LINDBERGH_CPU_DIR}"

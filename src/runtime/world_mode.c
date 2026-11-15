@@ -16,6 +16,7 @@
  * (hle_register_sega -> vt3_jumps), before xr_init.
  */
 #include "world_mode.h"
+int netplay_active(void);     /* netplay.h (not included: it pulls in the CPU model) */
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -287,6 +288,11 @@ int world_mode_frame(unsigned frame)
         }
     const int t = atomic_load(&g_target);
     if (t == g_game) return g_game;
+    if (netplay_active()) {     /* the mode changes what the game computes: held while two copies play in lockstep */
+        static unsigned told;
+        if (!told++) fprintf(stderr, "[world] frame %u: mode change held - a netplay session is running\n", frame);
+        return g_game;
+    }
     pthread_mutex_lock(&g_lock);
     g_game = t;
     g_wm = g_by_mode[t];

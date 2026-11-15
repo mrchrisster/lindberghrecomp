@@ -23,6 +23,7 @@
 #endif
 
 #include "lindbergh_rt.h"
+#include "netplay.h"
 
 #define PT_LOAD   1
 #define PAGE      0x1000u
@@ -156,7 +157,10 @@ int guest_load(const char *elf_path, int argc, char **argv)
         memcpy(G2H(rd32le(ph + 8)),     /* p_vaddr  */
                img + rd32le(ph + 4),                  /* p_offset */
                rd32le(ph + 16));                      /* p_filesz */
+        if (rd32le(ph + 24) & 2)                      /* p_flags PF_W: the state hash's default */
+            netplay_add_image_rw(rd32le(ph + 8), rd32le(ph + 8) + rd32le(ph + 20));
     }
+    netplay_set_elf(img, (unsigned long)len);         /* its SHA-256, for the netplay version check */
     g_brk = hi;                                       /* the heap starts past the image */
     scan_copy_relocs(img, (size_t)len);
     free(img);

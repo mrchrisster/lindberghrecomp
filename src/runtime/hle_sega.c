@@ -24,6 +24,7 @@
 #include <zlib.h>
 
 #include "lindbergh_rt.h"
+#include "netplay.h"
 #if !defined(_WIN32)
 #include "host_settings.h"
 #ifndef _WIN32
@@ -203,7 +204,7 @@ static void jvs_command(const unsigned char *p)
          * first of those, bit 7 is start and bit 1 is the first push button,
          * which for a gun cabinet is the trigger. */
         CabinetInput in;
-        host_cabinet_input(&in);
+        cab_switch_read(&in);               /* netplay.c: the start of an input frame */
         unsigned players = p[1], bytes = p[2];
         {   /* Confirm the game is actually asking, and with what shape. */
             static int shown;
@@ -229,7 +230,7 @@ static void jvs_command(const unsigned char *p)
         /* Two bytes a slot: the top two bits are the mechanism's condition,
          * zero meaning normal, and the remaining fourteen are the count. */
         CabinetInput in;
-        host_cabinet_input(&in);
+        cab_input(&in);
         ack_report();
         for (unsigned slot = 0; slot < p[1]; slot++) {
             unsigned n = (slot < 2 ? in.coins[slot] : 0) & 0x3FFF;
@@ -240,7 +241,7 @@ static void jvs_command(const unsigned char *p)
     }
     case 0x22: {                                 /* analog: where the gun points */
         CabinetInput in;
-        host_cabinet_input(&in);
+        cab_input(&in);
         int w = in.screen_w > 0 ? in.screen_w : 1;
         int h = in.screen_h > 0 ? in.screen_h : 1;
         unsigned x = (unsigned)((long)in.gun_x * 65535 / w);
@@ -403,6 +404,8 @@ static void nvram_load(void)
     if (g_nvram_loaded) return;
     g_nvram_loaded = 1;
     nvram_read();
+    /* the store the game starts from is part of what it computes (netplay.h) */
+    netplay_setting("nvram", (long)(crc32(crc32(0L, g_sram, sizeof g_sram), g_eeprom, sizeof g_eeprom) & 0x7fffffff));
     if (g_sysdata_region) sysdata_apply_region();
 }
 
@@ -813,7 +816,7 @@ static void qte_log(const char *what, uint32_t q)
 {
     extern unsigned g_frame;
     CabinetInput in;
-    host_cabinet_input(&in);
+    cab_input(&in);
     char marks[256] = "";
     int n = (int)rd32(q + 0x38), len = 0;
     for (int i = 0; i < n && i < 8 && len < 200; i++) {
@@ -2105,6 +2108,99 @@ static void h_vt3_field_draw(CPU *c)
 /* the game can draw its match as a world (Virtua Tennis 3's camera symbols
  * resolve): the headset panel's Mode row and Advanced pages (host_xr.c) */
 int g_world_capable;
+/* Deterministic mode (netplay.h, for input replay and netplay): the game's
+ * clock reads that feed its state get the guest clock - a fixed date plus the
+ * input frames at 60 Hz - instead of the wall clock. _sSystem::getTime is the
+ * gettimeofday in milliseconds; by the caller (the return address):
+ *   _sSystem::execute          the frame's time, getFrameTime: uva animations
+ *                              (fly-bys, menus), the camera physics' dt
+ *   _sSceneDatabase::updateDatabase  the scene's animation clock
+ *   player::init / player_ai / player::initFootPrintConstructor  seeds of
+ *                              the players' and the AI's own random generators
+ * and getTimeHighPrec from backup::initRun_time / updateRun_time (the play
+ * time it books). The frame pacing (_sScene::waitFrame, waitMain, getFPS) and
+ * the timing statistics keep the wall clock. */
+static void (*g_vt3_get_time)(CPU *), (*g_vt3_get_time_hp)(CPU *);
+/* Counted by the calls themselves, not by the input frames: the frame's clock
+ * is read on the game's main thread, the switches on another, and the two
+ * do not keep one order from run to run. */
+static uint32_t g_vt3_det_frames, g_vt3_det_seeds;
+static uint64_t g_vt3_det_frame_us = 1167652800ull * 1000000ull;
+static void h_vt3_get_time(CPU *c)
+{
+    {   static int lg = -1, n; if (lg < 0) lg = getenv("LINDBERGH_DET_CLOCK_LOG") != NULL;
+        if (lg && n < 200) { n++; extern unsigned g_frame; fprintf(stderr, "[det] frame %u: getTime from %#x\n", g_frame, rd32(c->esp - 4)); } }
+    switch (rd32(c->esp - 4)) {         /* the return address, just popped */
+    case 0x082793B1u:                                           /* _sSystem::execute: a new frame */
+        g_vt3_det_frames++;
+        g_vt3_det_frame_us = 1167652800ull * 1000000ull + (uint64_t)g_vt3_det_frames * 1000000ull / 60ull;
+        RET((uint32_t)(g_vt3_det_frame_us / 1000u));
+        return;
+    case 0x0822F177u: case 0x0822F194u: case 0x0822F1AEu: case 0x0822F2B5u:   /* updateDatabase: this frame's */
+        RET((uint32_t)(g_vt3_det_frame_us / 1000u));
+        return;
+    case 0x0814FB50u: case 0x0814A21Du: case 0x080620A0u:       /* player::init, footprints, player_ai: a seed */
+        RET((uint32_t)(1167652800000ull + 7919ull * ++g_vt3_det_seeds));
+        return;
+    }
+    push32(c, 0xDEADBEEFu); g_vt3_get_time(c);
+}
+static void h_vt3_get_time_hp(CPU *c)
+{
+    uint32_t ra = rd32(c->esp - 4);
+    if (ra == 0x0809F12Fu || ra == 0x0809F15Au) { RET((uint32_t)g_vt3_det_frame_us); return; }   /* backup's run time */
+    push32(c, 0xDEADBEEFu); g_vt3_get_time_hp(c);
+}
+/* netplay's small hash of the match (netplay.h): the ball, each player's
+ * root and facing, the match record (score, server, events) and the global
+ * random generator's state and index - what a desync shows up in first */
+static uint64_t vt3_semantic_hash(char *what, unsigned cap)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+#define MIX(a, n) do { for (uint32_t _a = (a), _e = _a + (n); _a < _e; _a++) h = (h ^ rd8(_a)) * 0x100000001b3ull; } while (0)
+    uint32_t t = rd32(VT3_G_PTENNIS);
+    float bx = 0, by = 0, bz = 0;
+    int pts0 = -1, pts1 = -1;
+    if (t) {
+        uint32_t ball = rd32(t + 0x14), m = rd32(t + 0x1c), pl = rd32(t + 4);
+        unsigned np = rd32(t);
+        if (ball) { MIX(ball + 0x1c, 12); uint32_t w; w = rd32(ball + 0x1c); memcpy(&bx, &w, 4); w = rd32(ball + 0x20); memcpy(&by, &w, 4); w = rd32(ball + 0x24); memcpy(&bz, &w, 4); }
+        if (m) { MIX(m, 0x10); MIX(m + 0x60, 2); pts0 = rd8(m + 6); pts1 = rd8(m + 7); }
+        for (unsigned i = 0; pl && i < np && i < 4; i++) {
+            uint32_t p = rd32(pl + 4 * i);
+            if (p) { MIX(p + 0x18, 12); MIX(p + 0x68, 12); }
+        }
+        MIX(t + 0x24, 4);                       /* the game type */
+    }
+    MIX(0x0850E7E0u, 624 * 4);                  /* _sRandom's MT state */
+    MIX(0x08463F08u, 4);                        /* ...and its index */
+#undef MIX
+    snprintf(what, cap, "ball %.3f,%.3f,%.3f points %d-%d mt %u", bx, by, bz, pts0, pts1, rd32(0x08463F08u));
+    return h;
+}
+
+/* What changes Virtua Tennis 3's simulation, for an input recording's header
+ * and the netplay handshake (two copies with different flow settings would
+ * play different matches) */
+static int g_vt3_set_round = -1, g_vt3_set_win, g_vt3_set_lose, g_vt3_set_force_replay;
+static void vt3_sim_settings(void)
+{
+    netplay_setting("vt3.round", g_vt3_set_round);
+    netplay_setting("vt3.points", g_vt3_pts[0] * 16 + g_vt3_pts[1]);
+    netplay_setting("vt3.win", g_vt3_set_win);
+    netplay_setting("vt3.lose", g_vt3_set_lose);
+    netplay_setting("vt3.split", g_vt3_split);
+    netplay_setting("vt3.force_replay", g_vt3_set_force_replay);
+    netplay_setting("vt3.replays", g_replays);
+    netplay_setting("vt3.cutaways", g_cutaways);
+    netplay_setting("vt3.overlays", g_arcade_overlays);
+    netplay_setting("vt3.immersive", world_mode_immersive());
+    netplay_setting("vt3.save", world_mode_save());
+    { const char *u = getenv("LINDBERGH_VT3_SKIP_UVA"); netplay_setting("vt3.skip_uva", u && *u ? *u == '1' : world_mode_immersive()); }
+    { const char *u = getenv("LINDBERGH_VT3_CULL"); netplay_setting("vt3.cull", u && *u ? atoi(u) : 2); }
+    netplay_setting("vt3.hold", vt3_hold_on());
+}
+
 static void vt3_jumps(void)
 {
     /* Classic or Immersive, and the values that go with the mode (env >
@@ -2122,6 +2218,22 @@ static void vt3_jumps(void)
     const char *r = getenv("LINDBERGH_VT3_ROUND"), *p = getenv("LINDBERGH_VT3_POINTS"), *l = getenv("LINDBERGH_VT3_LOG");
     g_vt3_log = l && *l == '1';
     if (r && *r) g_vt3_round = atoi(r);
+    g_vt3_set_round = g_vt3_round;
+    if (guest_symbol("_ZN8_sSystem7getTimeEv")) {   /* Virtua Tennis 3 */
+        netplay_settings_source(vt3_sim_settings);
+        netplay_semantic_hash(vt3_semantic_hash);
+        if (lg_deterministic() && vt3_wrap("_ZN8_sSystem7getTimeEv", &g_vt3_get_time, h_vt3_get_time) &&
+            vt3_wrap("_ZN8_sSystem15getTimeHighPrecEv", &g_vt3_get_time_hp, h_vt3_get_time_hp))
+            fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - the frame clock, the scene clock and the players' seeds from the guest clock\n");
+        /* ...and one worker for the job pool (_sSystem::nWorkerThreads, 4): a
+         * job runs on whichever worker is free, and what it allocates lands in
+         * that thread's heap (guest_mem.c) - with one, every run alike */
+        if (lg_deterministic()) {
+            const uint32_t a = 0x08464220u;     /* _sSystem::nWorkerThreads (data: not in the symbol table guest_symbol reads) */
+            fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - job pool workers %u -> 1\n", rd32(a));
+            wr32(a, 1);
+        }
+    }
     if (p && *p && sscanf(p, "%d,%d", &g_vt3_pts[0], &g_vt3_pts[1]) != 2) g_vt3_pts[0] = g_vt3_pts[1] = -1;
     if ((g_vt3_round >= 0 || g_vt3_log) && vt3_wrap("_ZN5match11setMatchingEv", &g_vt3_set_matching, h_vt3_set_matching))
         fprintf(stderr, "[sega] Virtua Tennis 3: %s%d\n", g_vt3_round >= 0 ? "the run starts at round " : "rounds logged ", g_vt3_round);
@@ -2226,6 +2338,7 @@ static void vt3_jumps(void)
         const char *w = getenv("LINDBERGH_VT3_WIN"), *lo = getenv("LINDBERGH_VT3_LOSE");
         const int lose = lo && *lo == '1' && !(w && *w == '1');     /* WIN wins if both are set */
         g_vt3_point_to = lose ? 1 : 0;
+    g_vt3_set_win = w && *w == '1'; g_vt3_set_lose = lose;
         if (((w && *w == '1') || lose) && vt3_wrap("_ZN5match9calcPointEv", &g_vt3_calc_point, h_vt3_calc_point))
             fprintf(stderr, "[sega] Virtua Tennis 3: %s every point\n", lose ? "1P loses" : "1P wins");
         const char *sp = getenv("LINDBERGH_VT3_SPLIT");
@@ -2249,9 +2362,12 @@ static void vt3_jumps(void)
         fprintf(stderr, "[sega] Virtua Tennis 3: every game starts at points %d-%d\n", g_vt3_pts[0], g_vt3_pts[1]);
 }
 
+static void sega_sim_settings(void) { nvram_load(); }   /* registers the store's checksum (netplay.h) */
+
 void hle_register_sega(void)
 {
     int n = 0;
+    netplay_settings_source(sega_sim_settings);
     if (watch_route()) fprintf(stderr, "[sega] route log/jump on\n");
     vt3_jumps();
     if (watch_qte()) fprintf(stderr, "[sega] sniping events watched%s\n", g_qte_log ? ", CQC and sniping logged" : "");
@@ -2266,6 +2382,7 @@ void hle_register_sega(void)
         /* LINDBERGH_FORCE_REPLAY=1: every point earns a replay - the replay
          * camera reached in seconds, for tests nobody watches */
         const char *r = getenv("LINDBERGH_FORCE_REPLAY");
+        g_vt3_set_force_replay = r && *r == '1';
         if (r && *r == '1') {
             if (guest_override("_ZN6replay14isReplay_pointEv", h_true))
                 fprintf(stderr, "[sega] every point is replayed (LINDBERGH_FORCE_REPLAY)\n");

@@ -17,7 +17,12 @@
  * Layout, chosen to match where Linux/i386 puts things:
  *   0x00000000..0x0000FFFF   never mapped: a null dereference faults
  *   0x08048000..             the ELF image, then its brk heap
- *   0x20000000..0xB0000000   guest_alloc() heap (dlmalloc mspace, 2.25 GB)
+ *   0x20000000..0xB0000000   guest_alloc() heap (dlmalloc mspace, 2.25 GB);
+ *                            in deterministic mode (netplay.h) the game's own
+ *                            malloc/new get 0x20000000..0x98000000 to
+ *                            themselves, a heap per thread (guest_alloc_game),
+ *                            and the runtime's allocations take the rest, so
+ *                            the game's heap layout depends on the game alone
  *   0xBF7F0000..0xBFFF0000   the main thread's stack (guest.c)
  */
 
@@ -32,6 +37,7 @@
 #endif
 
 #include "lindbergh_rt.h"
+#include "netplay.h"
 
 #ifdef _WIN32
 #define FORCEINLINE inline
@@ -52,6 +58,41 @@
 
 uint8_t *g_guest_base;
 static mspace g_heap;
+/* Deterministic mode: the game's malloc alone, and one heap per guest thread -
+ * the loading threads allocate while the game's main thread does, and in one
+ * shared heap the order (and so every address) changed from run to run. Each
+ * thread's own sequence of requests is the same every run, so its heap is.
+ * Heap 0 is the main thread's, 1..15 the threads the game creates in that
+ * order, the last one the rest (host threads calling in) and any overflow.
+ * A job pool hands its jobs to whichever worker is free, so the game's pool
+ * gets one worker in deterministic mode (hle_sega.c: VT3's nWorkerThreads). */
+#define GAME_HEAP_HI 0x98000000u        /* the runtime's heap above: 384 MB */
+#define GH_N         17
+#define GH_OTHER     16
+/* the game's main thread (the first to allocate) 256 MB; the first four
+ * threads it makes (its job pool's workers and the loaders: one of them reads
+ * every asset) 352 MB each; the next eleven (the sound and movie library's)
+ * 8 MB each; the rest 168 MB */
+static uint32_t gh_lo(int i)
+{
+    return i == 0 ? HEAP_LO : i <= 4 ? 0x30000000u + (uint32_t)(i - 1) * 0x16000000u
+         : i < GH_OTHER ? 0x88000000u + (uint32_t)(i - 5) * 0x00800000u : 0x8D800000u;
+}
+static uint32_t gh_hi(int i)
+{
+    return i == 0 ? 0x30000000u : i <= 4 ? gh_lo(i) + 0x16000000u : i < GH_OTHER ? gh_lo(i) + 0x00800000u : GAME_HEAP_HI;
+}
+static mspace g_gh[GH_N];
+static mspace g_game_heap;              /* set when the heaps are split: the main thread's */
+static int g_zero_fill;
+static __thread int t_heap = -1;
+static int gh_of(const void *p)
+{
+    uint32_t a = (uint32_t)((const uint8_t *)p - g_guest_base);
+    for (int i = 0; i < GH_N; i++) if (a >= gh_lo(i) && a < gh_hi(i)) return i;
+    return -1;
+}
+void guest_heap_thread(int n) { t_heap = n > 0 && n < GH_OTHER ? n : GH_OTHER; }
 
 #ifdef _WIN32
 /* Reserve without charging 4 GB against the Windows commit limit. Commit a
@@ -103,6 +144,14 @@ int guest_mem_init(void)
     mprotect(p, GUARD, PROT_NONE);    /* guest null page */
 #endif
 
+    if (lg_deterministic()) {
+        for (int i = 0; i < GH_N; i++) g_gh[i] = create_mspace_with_base(g_guest_base + gh_lo(i), gh_hi(i) - gh_lo(i), 1);
+        g_game_heap = g_gh[0];
+        g_heap = create_mspace_with_base(g_guest_base + GAME_HEAP_HI, HEAP_HI - GAME_HEAP_HI, 1);
+        g_zero_fill = 1;
+        if (g_game_heap) fprintf(stderr, "[mem] deterministic: the game's heaps %#x..%#x (one per thread, zero-filled), the runtime's %#x..%#x\n",
+                                 HEAP_LO, GAME_HEAP_HI, GAME_HEAP_HI, HEAP_HI);
+    } else
     g_heap = create_mspace_with_base(g_guest_base + HEAP_LO, HEAP_HI - HEAP_LO, 1);
     if (!g_heap) {
         fprintf(stderr, "[mem] cannot create the guest heap\n");
@@ -132,9 +181,39 @@ void *guest_alloc(size_t n, size_t align)
     return p;
 }
 
+
+/* The game's own malloc / operator new (hle_libc.c). Normally guest_alloc;
+ * in deterministic mode a heap of its own, zero-filled, so neither the
+ * runtime's allocations nor leftovers of freed blocks change what it sees. */
+void *guest_alloc_game(size_t n, size_t align)
+{
+    if (!g_game_heap) return guest_alloc(n, align);
+    if (t_heap < 0) {       /* not a thread the game made: the first such to allocate is the game's main thread */
+        static int main_taken;
+        t_heap = __atomic_exchange_n(&main_taken, 1, __ATOMIC_ACQ_REL) ? GH_OTHER : 0;
+    }
+    void *p = NULL;
+    for (int i = t_heap; ; i = GH_OTHER) {
+        p = align > 16 ? mspace_memalign(g_gh[i], align, n ? n : 1) : mspace_malloc(g_gh[i], n ? n : 1);
+        if (p || i == GH_OTHER) break;
+        static int told[GH_N];
+        if (!told[i]++) fprintf(stderr, "[mem] deterministic: thread heap %d is full (%zu bytes asked) - the shared one from here (addresses may differ between runs)\n", i, n);
+    }
+    if (!p) {
+        fprintf(stderr, "[mem] the game's heap is exhausted: %zu bytes (align %zu); in use per heap (MB):", n, align);
+        for (int i = 0; i < GH_N; i++) { struct mallinfo m = mspace_mallinfo(g_gh[i]); fprintf(stderr, " %d:%zu/%u", i, (size_t)m.uordblks >> 20, (gh_hi(i) - gh_lo(i)) >> 20); }
+        fprintf(stderr, "\n"); fflush(stderr); return NULL;
+    }
+    if (g_zero_fill) memset(p, 0, n);
+    return p;
+}
+
 void guest_free(void *p)
 {
-    if (p) mspace_free(g_heap, p);
+    if (!p) return;
+    int i = g_game_heap ? gh_of(p) : -1;
+    if (i >= 0) mspace_free(g_gh[i], p);
+    else mspace_free(g_heap, p);
 }
 
 size_t guest_alloc_size(void *p)

@@ -44,6 +44,7 @@
 #endif
 
 #include "lindbergh_rt.h"
+#include "netplay.h"
 
 /* ---- memory ----
  *
@@ -110,7 +111,7 @@ static void *gmalloc(size_t n, size_t align)
         const char *v = getenv("LINDBERGH_HEAP_SLACK");
         slack = (v && *v) ? (size_t)strtoul(v, NULL, 0) : 0;
     }
-    void *base = guest_alloc(n + align + hdr + slack, 16);
+    void *base = guest_alloc_game(n + align + hdr + slack, 16);
     if (!base) {
         /* The guest has no way to report this and will dereference the null it
          * gets back, several frames later, as a fault with nothing to say what
@@ -239,12 +240,13 @@ static void h_assert_fail(CPU *c)
 static double guest_arg_d(CPU *c, unsigned i);
 static float  guest_arg_f(CPU *c, unsigned i);
 
-static void h_atan2(CPU *c)  { RETF(atan2(guest_arg_d(c, 0), guest_arg_d(c, 2))); }
-static void h_atan2f(CPU *c) { RETF(atan2f(guest_arg_f(c, 0), guest_arg_f(c, 1))); }
+static void h_atan2(CPU *c)  { RETF(lg_m_atan2(guest_arg_d(c, 0), guest_arg_d(c, 2))); }
+static void h_atan2f(CPU *c) { RETF(lg_m_atan2f(guest_arg_f(c, 0), guest_arg_f(c, 1))); }
 static void h_fmodf(CPU *c)  { RETF(fmodf(guest_arg_f(c, 0), guest_arg_f(c, 1))); }
 static void h_sqrt(CPU *c)   { RETF(sqrt(guest_arg_d(c, 0))); }
 static void h_sqrtf(CPU *c)  { RETF(sqrtf(guest_arg_f(c, 0))); }
-static void h_srand(CPU *c)  { srand(A32(0)); RET(0); }
+/* deterministic mode (netplay.h): our own generator, glibc's, the same on every host */
+static void h_srand(CPU *c)  { if (lg_deterministic()) lg_det_srand(A32(0)); else srand(A32(0)); RET(0); }
 /* Guest pointers are checked before they reach a CRT function. A null here
  * is not a crash in the guest's world - it is on Windows, and a silent one. */
 static void h_clearerr(CPU *c) { if (AFILE(0)) clearerr(AFILE(0)); RET(0); }
@@ -308,8 +310,8 @@ static void h_qsort(CPU *c)
     RET(0);
 }
 
-static void h_atanf(CPU *c) { RETF(atanf(guest_arg_f(c, 0))); }
-static void h_powf(CPU *c)  { RETF(powf(guest_arg_f(c, 0), guest_arg_f(c, 1))); }
+static void h_atanf(CPU *c) { RETF(lg_m_atanf(guest_arg_f(c, 0))); }
+static void h_powf(CPU *c)  { RETF(lg_m_powf(guest_arg_f(c, 0), guest_arg_f(c, 1))); }
 static void h_rewind(CPU *c) { if (AFILE(0)) rewind(AFILE(0)); RET(0); }
 static void h_isdigit(CPU *c){ uint32_t ch = A32(0); RET(ch >= '0' && ch <= '9'); }
 
@@ -738,7 +740,7 @@ static void h_getenv(CPU *c)
     RET(guest_strdup_static(v));
 }
 static void h_getpid(CPU *c) { (void)c; RET(1); }
-static void h_rand  (CPU *c) { (void)c; RET(rand()); }
+static void h_rand  (CPU *c) { (void)c; RET(lg_deterministic() ? lg_det_rand() : rand()); }
 
 static void h_abort(CPU *c)
 {
@@ -748,7 +750,8 @@ static void h_abort(CPU *c)
 }
 static void h_time(CPU *c)
 {
-    uint32_t t = (uint32_t)time(NULL);
+    /* deterministic mode: the guest's clock, a fixed date plus the frames (netplay.h) */
+    uint32_t t = lg_deterministic() ? (uint32_t)(lg_det_time_us() / 1000000u) : (uint32_t)time(NULL);
     if (A32(0)) wr32(A32(0), t);
     RET(t);
 }
@@ -811,26 +814,27 @@ static float guest_arg_f(CPU *c, unsigned i)
 #define MATH1(nm, fn)  static void h_##nm(CPU *c) { RETF(fn(guest_arg_d(c, 0))); }
 #define MATH1F(nm, fn) static void h_##nm(CPU *c) { RETF(fn(guest_arg_f(c, 0))); }
 
-MATH1(acos, acos)    MATH1F(acosf, acosf)
-MATH1(asin, asin)    MATH1F(asinf, asinf)
-MATH1(cos,  cos)     MATH1F(cosf,  cosf)
-MATH1(sin,  sin)     MATH1F(sinf,  sinf)
-MATH1(tan,  tan)     MATH1F(tanf,  tanf)
-MATH1(cosh, cosh)    MATH1(sinh, sinh)    MATH1(tanh, tanh)
+/* lg_m_*: the host's libm, or the bundled one in deterministic mode (det_math.c) */
+MATH1(acos, lg_m_acos)    MATH1F(acosf, lg_m_acosf)
+MATH1(asin, lg_m_asin)    MATH1F(asinf, lg_m_asinf)
+MATH1(cos,  lg_m_cos)     MATH1F(cosf,  lg_m_cosf)
+MATH1(sin,  lg_m_sin)     MATH1F(sinf,  lg_m_sinf)
+MATH1(tan,  lg_m_tan)     MATH1F(tanf,  lg_m_tanf)
+MATH1(cosh, lg_m_cosh)    MATH1(sinh, lg_m_sinh)    MATH1(tanh, lg_m_tanh)
 static void h_exp(CPU *c)
 {
-    double x = guest_arg_d(c, 0), r = exp(x);
+    double x = guest_arg_d(c, 0), r = lg_m_exp(x);
     static int n;
     if (getenv("LINDBERGH_MATHLOG") && n++ < 20) fprintf(stderr, "[math] exp(%g) = %g\n", x, r);
     RETF(r);
 }
-MATH1F(expf,  expf)
-MATH1(log,  log)     MATH1F(logf,  logf)
-MATH1(log10, log10)
+MATH1F(expf,  lg_m_expf)
+MATH1(log,  lg_m_log)     MATH1F(logf,  lg_m_logf)
+MATH1(log10, lg_m_log10)
 
 static void h_pow(CPU *c)
 {
-    double x = guest_arg_d(c, 0), y = guest_arg_d(c, 2), r = pow(x, y);
+    double x = guest_arg_d(c, 0), y = guest_arg_d(c, 2), r = lg_m_pow(x, y);
     static int n;
     if (getenv("LINDBERGH_MATHLOG") && n++ < 20) fprintf(stderr, "[math] pow(%g, %g) = %g\n", x, y, r);
     RETF(r);
@@ -1931,10 +1935,10 @@ static void h_strpbrk(CPU *c) { RET(strpbrk(ASTR(0), ASTR(1))); }
 static void h_strtok(CPU *c)  { RET(strtok(A32(0) ? ASTR(0) : NULL, ASTR(1))); }
 static float af(CPU *c, int n) { uint32_t b = A32(n); float f; memcpy(&f, &b, 4); return f; }
 static double ad(CPU *c, int n) { uint64_t b = (uint64_t)A32(n) | (uint64_t)A32(n + 1) << 32; double d; memcpy(&d, &b, 8); return d; }
-static void h_sinhf(CPU *c) { RETF(sinhf(af(c, 0))); }
-static void h_coshf(CPU *c) { RETF(coshf(af(c, 0))); }
-static void h_tanhf(CPU *c) { RETF(tanhf(af(c, 0))); }
-static void h_log10f(CPU *c) { RETF(log10f(af(c, 0))); }
+static void h_sinhf(CPU *c) { RETF(lg_m_sinhf(af(c, 0))); }
+static void h_coshf(CPU *c) { RETF(lg_m_coshf(af(c, 0))); }
+static void h_tanhf(CPU *c) { RETF(lg_m_tanhf(af(c, 0))); }
+static void h_log10f(CPU *c) { RETF(lg_m_log10f(af(c, 0))); }
 static void h_hypot(CPU *c) { RETF(hypot(ad(c, 0), ad(c, 2))); }
 static void h_finite(CPU *c) { RET(isfinite(ad(c, 0)) ? 1 : 0); }
 static void h_isinf(CPU *c)  { double d = ad(c, 0); RET(isinf(d) ? (d < 0 ? -1 : 1) : 0); }

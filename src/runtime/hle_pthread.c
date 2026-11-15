@@ -594,6 +594,7 @@ typedef struct {
     uint32_t  stacksize;
     uint32_t  retval;
     pthread_t handle;
+    int       heap;     /* its own heap in deterministic mode: the creation order (guest_mem.c) */
 } GuestThread;
 
 /* Host stack for a guest thread. Every guest call is a host call, so deep guest
@@ -621,6 +622,7 @@ static void *thread_trampoline(void *p)
 {
     GuestThread *t = (GuestThread *)p;
     g_self = H2G(t);
+    guest_heap_thread(t->heap);
     {
         unsigned i = __atomic_fetch_add(&g_nthreads, 1, __ATOMIC_ACQ_REL);
         if (i < 64) g_threads[i] = pthread_self(); else g_nthreads = 64;
@@ -644,6 +646,7 @@ static void h_pthread_create(CPU *c)
     memset(t, 0, sizeof *t);
     t->start     = A32(2);
     t->arg       = A32(3);
+    {   static int seq; t->heap = __atomic_add_fetch(&seq, 1, __ATOMIC_ACQ_REL); }   /* 1, 2, ... as the game creates them */
     t->stacksize = attr ? attr_of(attr)->stacksize : GUEST_STACK_DEFAULT;
     if (t->stacksize < (256u << 10)) t->stacksize = 256u << 10;
     t->stack = guest_alloc(t->stacksize, 64);

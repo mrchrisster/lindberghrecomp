@@ -550,6 +550,85 @@ static void cabinet_p2_test(void)
     } else if (g_frame % 40u < 20u) g_auto |= CAB_P2_TRIGGER;
 }
 
+/* LINDBERGH_KEYS2="frame:key[*frames],...": player 2's switches by frame -
+ * a second, scripted player for two-player tests (Virtua Tennis 3's versus):
+ * z x c its buttons 1-3, ^ _ < > its lever, 2 its Start, 6 a coin in chute 2
+ * and 5 one in chute 1. Held for 4 frames, or *frames. Unlike LINDBERGH_KEYS
+ * (real key events, player 1's keys) these are the cabinet's bits directly,
+ * and LINDBERGH_SCRIPT does not mask them. */
+static unsigned cabinet_keys2(void)
+{
+    static int n = -1;
+    static struct { unsigned at, hold; char k; } ev[512];
+    if (n < 0) {
+        n = 0;
+        for (const char *p = getenv("LINDBERGH_KEYS2"); p && *p && n < 512; ) {
+            char *e; unsigned f = (unsigned)strtoul(p, &e, 10);
+            if (*e != ':' || !e[1]) break;
+            ev[n].at = f; ev[n].k = e[1]; ev[n].hold = 4; p = e + 2;
+            if (*p == '*') { ev[n].hold = (unsigned)strtoul(p + 1, &e, 10); p = e; }
+            n++;
+            while (*p == ',') p++;
+        }
+        if (n) fprintf(stderr, "[cab] player 2 script: %d presses (LINDBERGH_KEYS2)\n", n);
+    }
+    unsigned b = 0;
+    static unsigned coined_at[512];
+    for (int i = 0; i < n; i++) {
+        if (g_frame < ev[i].at || g_frame >= ev[i].at + ev[i].hold) continue;
+        switch (ev[i].k) {
+        case 'z': b |= CAB_P2_TRIGGER; break;
+        case 'x': b |= CAB_P2_BUTTON2; break;
+        case 'c': b |= CAB_P2_BUTTON3; break;
+        case '^': b |= CAB_P2_UP; break;
+        case '_': b |= CAB_P2_DOWN; break;
+        case '<': b |= CAB_P2_LEFT; break;
+        case '>': b |= CAB_P2_RIGHT; break;
+        case '2': b |= CAB_P2_START; break;
+        case '5': case '6':
+            if (coined_at[i] != ev[i].at + 1) {     /* once, however often the board is read */
+                coined_at[i] = ev[i].at + 1;
+                g_cab.coins[ev[i].k == '6'] += 1;
+                fprintf(stderr, "[cab] player 2 script: a coin in chute %d at frame %u\n", ev[i].k == '6' ? 2 : 1, g_frame);
+            }
+            break;
+        }
+    }
+    return b;
+}
+
+/* LINDBERGH_BOT=<from frame>[,<players: 1 P1, 2 P2, 3 both>]: from that
+ * frame on, a player that moves its lever about and swings - fixed patterns
+ * by frame, different for each player, so a two-player match plays itself
+ * (versus tests, netplay tests). On a netplay joiner "P1" is its own side. */
+static unsigned cabinet_bot(void)
+{
+    static int from = -2, who;
+    if (from == -2) {
+        const char *v = getenv("LINDBERGH_BOT");
+        from = -1; who = 3;
+        if (v && *v) { from = atoi(v); const char *c = strchr(v, ','); if (c) who = atoi(c + 1); }
+        if (from >= 0) fprintf(stderr, "[cab] bot from frame %d (players %d)\n", from, who);
+    }
+    if (from < 0 || g_frame < (unsigned)from) return 0;
+    unsigned b = 0, f = g_frame - (unsigned)from;
+    for (int pl = 0; pl < 2; pl++) {
+        if (!(who & (1 << pl))) continue;
+        unsigned t = f + (pl ? 97u : 0u), lev = 0, shot = 0;
+        switch ((t / 37u) % 6u) {               /* the lever: left, nothing, right, up-left, nothing, down-right */
+        case 0: lev = CAB_P1_LEFT; break;
+        case 2: lev = CAB_P1_RIGHT; break;
+        case 3: lev = CAB_P1_UP | CAB_P1_LEFT; break;
+        case 5: lev = CAB_P1_DOWN | CAB_P1_RIGHT; break;
+        }
+        unsigned ph = t % (pl ? 53u : 47u);     /* a swing every 47 / 53 frames, held 6; a slice every third */
+        if (ph < 6) shot = (t / (pl ? 53u : 47u)) % 3u == 2 ? CAB_P1_BUTTON2 : CAB_P1_TRIGGER;
+        unsigned m = lev | shot;
+        b |= pl ? as_p2(m) : m;
+    }
+    return b;
+}
+
 void host_cabinet_input(CabinetInput *out)
 {
     cabinet_autostart();
@@ -569,7 +648,7 @@ void host_cabinet_input(CabinetInput *out)
 #endif
     g_cab.screen_w = (int)w;
     g_cab.screen_h = (int)h;
-    g_cab.buttons = g_auto | (g_scripted ? 0 : g_held | g_pad_held);
+    g_cab.buttons = g_auto | (g_scripted ? 0 : g_held | g_pad_held) | cabinet_keys2() | cabinet_bot();
     *out = g_cab;
     if (!g_scripted) out->buttons |= g_cab_latch;
     {   /* What the board reports, whenever it changes - and the gun, at most

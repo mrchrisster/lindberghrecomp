@@ -19,6 +19,7 @@ class WorldPanelTests(unittest.TestCase):
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+int netplay_active(void) { return 0; }   /* netplay.c's: no session in this test */
 static int has(const int *r, int n, int id) { for (int i = 0; i < n; i++) if (r[i] == id) return 1; return 0; }
 static int find(const XwState *w, const LgXrSettings *c, int id) { int r[XW_ROWS_MAX]; int n = xw_page_rows(w, c, r);
     for (int i = 0; i < n; i++) if (r[i] == id) return i; return -1; }

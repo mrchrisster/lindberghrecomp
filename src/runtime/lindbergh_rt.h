@@ -177,6 +177,8 @@ uint32_t guest_addr_of(const void *p, const char *file, int line);
 /* Memory the guest can see: the guest heap, in the window. Thread stacks,
  * strings handed to the game and its malloc all come from here. */
 void    *guest_alloc(size_t n, size_t align);
+void    *guest_alloc_game(size_t n, size_t align);   /* the game's malloc: its own heap in deterministic mode */
+void     guest_heap_thread(int n);                    /* a guest thread's heap: the n-th thread the game made */
 void     guest_free(void *p);
 size_t   guest_alloc_size(void *p);
 /* A copy of a host string in guest memory, interned: the same text returns the
@@ -344,6 +346,24 @@ void       lindbergh_window_size(int *w, int *h);
  * exits - never returns, because the guest state after a skipped instruction
  * is wrong in a way that shows up much later as something else. */
 
+/* det_math.c: the guest's elementary maths - the host's libm, or in
+ * deterministic mode (netplay.h) the bundled fdlibm, the same bits on every
+ * host. The lifted code's x87 transcendentals (fpatan, fsin, fcos, fptan,
+ * fsincos) are routed there too. */
+double lg_m_sin(double), lg_m_cos(double), lg_m_tan(double), lg_m_atan(double);
+double lg_m_asin(double), lg_m_acos(double), lg_m_exp(double), lg_m_log(double), lg_m_log10(double);
+double lg_m_sinh(double), lg_m_cosh(double), lg_m_tanh(double);
+double lg_m_atan2(double, double), lg_m_pow(double, double);
+float  lg_m_sinf(float), lg_m_cosf(float), lg_m_tanf(float), lg_m_atanf(float);
+float  lg_m_asinf(float), lg_m_acosf(float), lg_m_expf(float), lg_m_logf(float), lg_m_log10f(float);
+float  lg_m_sinhf(float), lg_m_coshf(float), lg_m_tanhf(float);
+float  lg_m_atan2f(float, float), lg_m_powf(float, float);
+#if defined(RECOMP_LIFTED)
+#define sin(x)      lg_m_sin(x)
+#define cos(x)      lg_m_cos(x)
+#define tan(x)      lg_m_tan(x)
+#define atan2(y, x) lg_m_atan2((y), (x))
+#endif
 
 #ifdef __cplusplus
 }

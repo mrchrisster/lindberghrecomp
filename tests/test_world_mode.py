@@ -27,6 +27,7 @@ class WorldModeTests(unittest.TestCase):
 #include <stdlib.h>
 #include <string.h>
 static int calls;
+int netplay_active(void) { return 0; }   /* netplay.c's: no session in this test */
 static void on_switch(int im) { calls++; printf(" cb%d", im); }
 int main(int argc, char **argv) {
     /* "cb": a switch callback registered - what makes switching live (none is, in the game yet) */
