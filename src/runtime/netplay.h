@@ -53,6 +53,12 @@ void     netplay_settings_source(void (*report)(void));
  * compares the memory hash instead). */
 void     netplay_semantic_hash(uint64_t (*fn)(char *what, unsigned cap));
 
+/* Deterministic mode: called at the start of each input frame, before the
+ * hash and the input - a game waits here until its loading threads have
+ * finished what they were given, so a load completes at the same frame on
+ * every machine however fast its disk is (VT3: hle_sega.c). */
+void     netplay_frame_barrier(void (*fn)(void));
+
 /* the session is running (stalls, hashes, locked settings) */
 int      netplay_active(void);
 /* the game's executable, for the version check (guest.c hands it over) */

@@ -745,6 +745,8 @@ static void first_tick(void)
 #endif
 }
 
+static void (*g_barrier)(void);
+void netplay_frame_barrier(void (*fn)(void)) { g_barrier = fn; }
 static uint64_t (*g_shash)(char *, unsigned);
 void netplay_semantic_hash(uint64_t (*fn)(char *what, unsigned cap)) { g_shash = fn; }
 
@@ -756,6 +758,7 @@ void cab_switch_read(CabinetInput *out)
     g_tick++;
     if (g_tick_log && (g_tick < 5 || g_tick % 600 == 0))
         fprintf(stderr, "[tick] input frame %u at display frame %u (thread %lu)\n", g_tick, g_frame, (unsigned long)(uintptr_t)pthread_self());
+    if (g_det && g_barrier) g_barrier();
     /* the state at the start of this frame, before its input */
     if (g_hash_every && g_tick % g_hash_every == 0) {
         uint64_t h = state_hash(g_tick), sh = 0;

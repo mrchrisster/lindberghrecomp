@@ -2179,6 +2179,43 @@ static uint64_t vt3_semantic_hash(char *what, unsigned cap)
     return h;
 }
 
+/* Deterministic mode: loads finish at the same frame on every machine. The
+ * game's loading runs on candy::ThreadPool workers (its job pool and the file
+ * manager's) and assam's decoder; the game polls for completion each frame,
+ * so a faster disk finished a load frames earlier and the match's random
+ * draws moved (seen: the global MT index 259 vs 267 at frame 1680 of a
+ * versus load, the same again 60 frames later). At each input frame we wait
+ * until every pool is idle (candy::ThreadPool::waitDone's own test: queued
+ * +0x44 and running +0x4c both 0) and nothing is being decoded - as if every
+ * disk were infinitely fast. */
+static uint32_t g_vt3_pools[8]; static int g_vt3_npools;
+static void (*g_vt3_pool_init)(CPU *);
+static void h_vt3_pool_init(CPU *c)
+{
+    uint32_t self = A32(0);
+    if (g_vt3_npools < 8) g_vt3_pools[g_vt3_npools++] = self;
+    push32(c, 0xDEADBEEFu); g_vt3_pool_init(c);
+}
+static void vt3_load_barrier(void)
+{
+    double t0 = 0;
+    for (int spins = 0; ; spins++) {
+        int busy = rd32(0x088D4B2Cu) != 0;                     /* assam::Decoder::_nDecodingCount */
+        for (int i = 0; i < g_vt3_npools && !busy; i++)
+            busy = rd32(g_vt3_pools[i] + 0x44) || rd32(g_vt3_pools[i] + 0x4c);
+        if (!busy) return;
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        double now = ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+        if (!spins) t0 = now;
+        else if (now - t0 > 3000) {
+            static int told;
+            if (told++ < 5) { extern unsigned g_frame; fprintf(stderr, "[det] frame %u: the loaders still busy after 3 s - going on\n", g_frame); }
+            return;
+        }
+        usleep(100);
+    }
+}
+
 /* What changes Virtua Tennis 3's simulation, for an input recording's header
  * and the netplay handshake (two copies with different flow settings would
  * play different matches) */
@@ -2222,6 +2259,10 @@ static void vt3_jumps(void)
     if (guest_symbol("_ZN8_sSystem7getTimeEv")) {   /* Virtua Tennis 3 */
         netplay_settings_source(vt3_sim_settings);
         netplay_semantic_hash(vt3_semantic_hash);
+        if (lg_deterministic() && vt3_wrap("_ZN5candy10ThreadPool10initializeEl", &g_vt3_pool_init, h_vt3_pool_init)) {
+            netplay_frame_barrier(vt3_load_barrier);
+            fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - each frame waits for the loading threads\n");
+        }
         if (lg_deterministic() && vt3_wrap("_ZN8_sSystem7getTimeEv", &g_vt3_get_time, h_vt3_get_time) &&
             vt3_wrap("_ZN8_sSystem15getTimeHighPrecEv", &g_vt3_get_time_hp, h_vt3_get_time_hp))
             fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - the frame clock, the scene clock and the players' seeds from the guest clock\n");
