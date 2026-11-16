@@ -688,7 +688,8 @@ static void np_net_init(void)
     char host[128] = "";
     if (!strncmp(spec, "online-host", 11) || !strncmp(spec, "online-join:", 12)) {   /* over the Internet, through the WebSocket relay */
         N.host = spec[7] == 'h'; N.ws = N.relay = 1; g_ws_mode = 1; N.have_peer = 1;
-        if (N.host) {
+        if (N.host && spec[11] == ':' && spec[12]) snprintf(N.code, sizeof N.code, "%.4s", spec + 12);    /* online-host:CODE (the panel chose and showed it) */
+        else if (N.host) {
             struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
             snprintf(N.code, sizeof N.code, "%04u", (unsigned)((t.tv_nsec / 1000 ^ t.tv_sec * 7919u ^ (unsigned)getpid() * 31u) % 10000u));
         } else snprintf(N.code, sizeof N.code, "%.4s", spec + 12);

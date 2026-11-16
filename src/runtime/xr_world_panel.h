@@ -66,6 +66,7 @@ typedef struct {
     int vs_online;              /* a meeting server is set: the online rows */
     int vs_net, vs_relay; char vs_code[5];   /* this session is online (through the relay); the room's code */
     int vs_digits[4];           /* the code being entered (each row: next digit) */
+    int vs_starting;            /* Host an online match chosen: vs_code shown, the game restarts in a moment */
 } XwState;
 
 /* The rows of the current page, in order (XP_ ids or XW_ROW(x)); returns the

@@ -365,7 +365,8 @@ static void menu_world_state(void)
     wpanel.vs_phase = st.phase; wpanel.vs_is_host = st.host;
     wpanel.vs_delay = st.delay; wpanel.vs_rtt = (float)st.rtt_ms; wpanel.vs_sync = st.in_sync;
     snprintf(wpanel.vs_note, sizeof wpanel.vs_note, "%s", st.why);
-    wpanel.vs_net = st.online; wpanel.vs_relay = st.relay; snprintf(wpanel.vs_code, sizeof wpanel.vs_code, "%s", st.code);
+    wpanel.vs_net = st.online; wpanel.vs_relay = st.relay;
+    if (!wpanel.vs_starting) snprintf(wpanel.vs_code, sizeof wpanel.vs_code, "%s", st.code);
     {   const char *rl = getenv("LINDBERGH_NETPLAY_RELAY"); wpanel.vs_online = rl && *rl; }
     NetplayHost h[XW_VS_HOSTS];
     wpanel.vs_n = netplay_hosts(h, XW_VS_HOSTS);
@@ -387,14 +388,15 @@ static void versus_start(int host, const char *ip, const char *code)
 {
     FILE *f = fopen("../netplay.txt", "w");
     if (!f) { fprintf(stderr, "[xr] versus: cannot write ../netplay.txt\n"); return; }
-    if (host == 2) fprintf(f, "LINDBERGH_NETPLAY=online-host\n");          /* through the relay (LINDBERGH_NETPLAY_RELAY, env.txt) */
+    if (host == 2) fprintf(f, "LINDBERGH_NETPLAY=online-host:%s\n", code);  /* through the relay (LINDBERGH_NETPLAY_RELAY, env.txt); the code shown first */
     else if (host) fprintf(f, "LINDBERGH_NETPLAY=host:47100\n");
     else if (code) fprintf(f, "LINDBERGH_NETPLAY=online-join:%s\n", code);
     else fprintf(f, "LINDBERGH_NETPLAY=join:%s:47100\n", ip);
     fprintf(f, "LINDBERGH_NETPLAY_WAIT=600\nLINDBERGH_NETPLAY_NVRAM=netplay_nvram.bin\nLINDBERGH_VT3_SAVE=0\n");
     fclose(f);
-    fprintf(stderr, "[xr] versus: %s - the game starts again\n", host == 2 ? "hosting online" : host ? "hosting" : code ? code : ip);
+    fprintf(stderr, "[xr] versus: %s%s - the game starts again\n", host == 2 ? "hosting online, room " : host ? "hosting" : "", host == 2 ? code : host ? "" : code ? code : ip);
     netplay_scan(0);
+    if (host == 2) { g_vs_restart_at = g_frame + 240; return; }    /* the room code on the panel for 4 s first */
     reset_game();
 }
 /* every frame: look for hosts while the Versus page shows (and this copy is
@@ -405,6 +407,7 @@ static void menu_versus_frame(void)
     NetplayStatus st; if (on) netplay_status(&st);
     netplay_scan(on && !(st.phase >= 1 && st.phase <= 3));
     if (on && g_frame % 30 == 0) menu.dirty = 1;
+    if (g_vs_restart_at && g_frame >= g_vs_restart_at) { g_vs_restart_at = 0; reset_game(); }
 }
 static void menu_rows(void)
 {
@@ -576,7 +579,12 @@ static void menu_choose(int row)
         if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); }
         if (effects & XW_VS_FX) {
             if (wpanel.vs_action == XW_VS_DO_HOST) versus_start(1, NULL, NULL);
-            else if (wpanel.vs_action == XW_VS_DO_HOST_NET) versus_start(2, NULL, NULL);
+            else if (wpanel.vs_action == XW_VS_DO_HOST_NET) {
+                struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+                snprintf(wpanel.vs_code, sizeof wpanel.vs_code, "%04u", (unsigned)((t.tv_nsec / 1000 ^ t.tv_sec * 7919u) % 10000u));
+                wpanel.vs_starting = 1; menu.hover = -1;
+                versus_start(2, NULL, wpanel.vs_code);
+            }
             else if (wpanel.vs_action == XW_VS_DO_JOIN && wpanel.vs_join < wpanel.vs_n) versus_start(0, wpanel.vs_ip[wpanel.vs_join], NULL);
             else if (wpanel.vs_action == XW_VS_DO_JOIN_NET) {
                 char code[5]; snprintf(code, sizeof code, "%d%d%d%d", wpanel.vs_digits[0] % 10, wpanel.vs_digits[1] % 10, wpanel.vs_digits[2] % 10, wpanel.vs_digits[3] % 10);

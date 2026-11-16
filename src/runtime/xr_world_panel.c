@@ -92,6 +92,11 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_VERSUS:
+        if (w->vs_starting) {       /* the code, before the restart */
+            rows[n++] = XW_ROW(XW_VS_CODE);
+            rows[n++] = XW_ROW(XW_VS_STATUS);
+            break;
+        }
         if (w->vs_online && !(w->vs_phase >= 1 && w->vs_phase <= 3)) rows[n++] = XW_ROW(XW_VS_HOST_NET);   /* first: the usual choice */
         rows[n++] = XW_ROW(XW_BACK);
         if (w->vs_phase == 1 || w->vs_phase == 2 || w->vs_phase == 3) {
@@ -215,8 +220,9 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
         }
     }
     it[XW_VS_SEARCH].label = "Looking for a host on this network...";
-    it[XW_VS_STATUS].label = w->vs_phase == 1 ? "Waiting for player 2" : w->vs_phase == 2 ? "Joining" : w->vs_phase == 3 ? "Connected" : "Session ended";
-    if (w->vs_phase == 3) snprintf(it[XW_VS_STATUS].value, 40, "%s, %u frame%s, %.0f ms%s", w->vs_sync ? "in sync" : "OUT OF SYNC",
+    it[XW_VS_STATUS].label = w->vs_starting ? "The game restarts into the online room..." : w->vs_phase == 1 ? "Waiting for player 2" : w->vs_phase == 2 ? "Joining" : w->vs_phase == 3 ? "Connected" : "Session ended";
+    if (w->vs_starting) it[XW_VS_STATUS].value[0] = 0;
+    else if (w->vs_phase == 3) snprintf(it[XW_VS_STATUS].value, 40, "%s, %u frame%s, %.0f ms%s", w->vs_sync ? "in sync" : "OUT OF SYNC",
                                    w->vs_delay, w->vs_delay == 1 ? "" : "s", w->vs_rtt, w->vs_net ? (w->vs_relay ? ", relay" : ", direct") : "");
     else if (w->vs_phase == 1 && w->vs_net) snprintf(it[XW_VS_STATUS].value, 40, "%s", w->vs_code[0] ? "online room open" : "asking the server...");
     else if (w->vs_phase == 4) snprintf(it[XW_VS_STATUS].value, 40, "%.39s", w->vs_note);
@@ -372,6 +378,7 @@ const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg)
 const char *xw_hint(const XwState *w)
 {
     const int m = page_mode(w);
+    if (w->page == XW_PAGE_VERSUS && w->vs_starting) return "Tell player 2 the room code.";
     if (w->page == XW_PAGE_VERSUS)
         return w->vs_phase == 3 ? "Player 2: Start during a match." : "Same Wi-Fi. Joiner takes the host's mode.";
     if (w->vs_phase >= 1 && w->vs_phase <= 3 && m >= 0) return "In a match: mode and replays are locked.";
