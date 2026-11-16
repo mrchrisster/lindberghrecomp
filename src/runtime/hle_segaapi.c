@@ -258,6 +258,7 @@ static int    g_det_audio = -1;
 static float  g_fifo[2 * DET_CAP];
 static int    g_fifo_rd, g_fifo_n, g_fifo_primed;
 static double g_fifo_frac;              /* playback between two FIFO frames (the rate steering) */
+static int    g_fifo_min = 1 << 30, g_fifo_max; static double g_rate_min = 9, g_rate_max;
 static unsigned g_det_drop, g_det_under;
 static int det_audio(void)
 {
@@ -407,6 +408,10 @@ static void mix(void *ud, Uint8 *stream, int len)
             double rate = 1.0 + (k < 0 ? 0.15 * k : 0.03 * k);
             if (rate < 0.85) rate = 0.85;
             if (rate > 1.03) rate = 1.03;
+            if (g_fifo_n < g_fifo_min) g_fifo_min = g_fifo_n;
+            if (g_fifo_n > g_fifo_max) g_fifo_max = g_fifo_n;
+            if (rate < g_rate_min) g_rate_min = rate;
+            if (rate > g_rate_max) g_rate_max = rate;
             int i = 0;
             for (; i < frames && g_fifo_n >= 2; i++) {
                 int a = g_fifo_rd, b = (g_fifo_rd + 1) % DET_CAP;
@@ -461,7 +466,9 @@ static void mix(void *ud, Uint8 *stream, int len)
         if (meter)
             fprintf(stderr, "[sega-api] mix peak %.3f%s, %d of %d voices playing\n", peak, st->muted ? " (muted)" : "", playing, made);
         if (det && (g_det_drop || g_det_under)) {
-            fprintf(stderr, "[sega-api] deterministic audio: %u frames dropped (game ahead of the card), %u underruns (game behind: a stall or a slow frame)\n", g_det_drop, g_det_under);
+            fprintf(stderr, "[sega-api] deterministic audio: %u frames dropped (game ahead of the card), %u underruns (game behind: a stall or a slow frame); fill %d..%d, rate %.3f..%.3f\n",
+                    g_det_drop, g_det_under, g_fifo_min, g_fifo_max, g_rate_min, g_rate_max);
+            g_fifo_min = 1 << 30; g_fifo_max = 0; g_rate_min = 9; g_rate_max = 0;
             g_det_drop = g_det_under = 0;
         }
         int bad = g_h.starved_events || g_h.late;

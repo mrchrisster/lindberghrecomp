@@ -382,6 +382,7 @@ static void menu_world_state(void)
  * session runs on the game's factory NVRAM (netplay_nvram.bin, made fresh);
  * the joiner takes the host's settings before its game starts. */
 static void reset_game(void);
+static unsigned g_vs_restart_at;    /* Host an online match: the restart, after the code has been shown */
 /* host 1: here, 2: online (a room on the relay, LINDBERGH_NETPLAY_RELAY); 0: join ip,
  * or with code the online room */
 static void versus_start(int host, const char *ip, const char *code)
