@@ -504,6 +504,23 @@ static void reset_game(void)
 #endif
 }
 
+/* the Versus page opened: the activity asks for the microphone (voice chat),
+ * once per run and only if it is not given yet (askForMic) */
+static void ask_for_mic(void)
+{
+#ifdef __ANDROID__
+    static int asked; if (asked++) return;
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    if (!env || !activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID m = (*env)->GetMethodID(env, cls, "askForMic", "()V");
+    if (m) (*env)->CallVoidMethod(env, activity, m); else (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+#endif
+}
+
 /* the panel's title: LINDBERGH_XR_TITLE, which the game's profile sets (game_profile.h) */
 static const char *app_title(void)
 {
@@ -603,7 +620,7 @@ static void menu_choose(int row)
         if (cfg.world_mode != mode_before)
             fprintf(stderr, "[xr] mode %s saved (running %s)%s\n", cfg.world_mode ? "immersive" : "classic",
                     wpanel.running ? "immersive" : "classic", cfg.world_mode != wpanel.running ? " - applies on restart" : "");
-        if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); }
+        if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); if (wpanel.page == XW_PAGE_VERSUS) ask_for_mic(); }
         if (effects & XW_VS_FX) {
             if (wpanel.vs_action == XW_VS_DO_HOST) versus_start(1, NULL, NULL);
             else if (wpanel.vs_action == XW_VS_DO_HOST_NET) {
