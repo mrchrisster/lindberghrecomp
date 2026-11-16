@@ -283,6 +283,26 @@ static PFN_xrRequestDisplayRefreshRateFB request_rate;
 static PFN_xrPerfSettingsSetPerformanceLevelEXT set_perf_level;
 static PFN_xrEnumerateDisplayRefreshRatesFB enumerate_rates;
 
+/* A Versus or online match runs the display at 90 Hz at most: at 120 Hz VR
+ * mode manages only ~53 fps, and a lockstep session plays its audio at the
+ * game's pace, so the voices slowed down.  90 Hz holds ~59 fps.  The player's
+ * own rate is untouched and comes back when the session ends (the game
+ * restarts without LINDBERGH_NETPLAY).  LINDBERGH_NETPLAY_HZ overrides. */
+static int session_refresh(void)
+{
+    int hz = cfg.refresh;
+    const char *np = getenv("LINDBERGH_NETPLAY");
+    if (!np || !*np || !strcmp(np, "0")) return hz;
+    const char *o = getenv("LINDBERGH_NETPLAY_HZ");
+    int cap = o && *o ? atoi(o) : 90;
+    if (cap > 0 && (hz == 0 || hz > cap)) {
+        static int said;
+        if (!said++) fprintf(stderr, "[xr] Versus session: display at %d Hz (your setting %d returns afterwards)\n", cap, hz);
+        hz = cap;
+    }
+    return hz;
+}
+
 #define XRCHECK(call) do { XrResult r_ = (call); if (XR_FAILED(r_)) { \
     char s_[64] = ""; if (instance) xrResultToString(instance, r_, s_); \
     fprintf(stderr, "[xr] %s failed: %d %s\n", #call, (int)r_, s_); return 0; } } while (0)
@@ -613,7 +633,7 @@ static void menu_choose(int row)
     if(effects&XP_CROSSHAIR_CHANGED)stereo_show_game_sight(cfg.crosshair && !game_profile()->joystick);
     if(effects&XP_SCREEN_CHANGED){stereo_set_screen_distance(cfg.screen*cfg.scale);stereo_set_screen_size(xr_settings_screen_scale(cfg.screen_size));}
     if(effects&XP_HUD_CHANGED)stereo_set_hud_pitch((float)cfg.hud_pitch);
-    if((effects&XP_RATE_CHANGED)&&request_rate)request_rate(session,(float)cfg.refresh);
+    if((effects&XP_RATE_CHANGED)&&request_rate)request_rate(session,(float)session_refresh());
     if(effects&XP_RECENTER)anchor_pending=1;
     if(effects&XP_SAVE)cfg_save();
     if(effects&XW_RESET_SAVE_FX){int n=vt3_save_reset();fprintf(stderr,"[xr] Reset save: %d file(s) moved aside - a fresh save at the next character select\n",n);}
@@ -993,9 +1013,9 @@ static int poll_events(void)
                             fprintf(stderr, "\n");
                         }
                     }
-                    if (request_rate && cfg.refresh) {
-                        XrResult r = request_rate(session, (float)cfg.refresh);
-                        fprintf(stderr, "[xr] asked for %d Hz: %d\n", cfg.refresh, (int)r);
+                    if (request_rate && session_refresh()) {
+                        XrResult r = request_rate(session, (float)session_refresh());
+                        fprintf(stderr, "[xr] asked for %d Hz: %d\n", session_refresh(), (int)r);
                     }
                 }
             } else if (state == XR_SESSION_STATE_STOPPING && running) {
