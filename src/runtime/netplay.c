@@ -15,6 +15,7 @@
  */
 #include "netplay.h"
 #include "lockstep.h"
+#include "netws.h"
 #include "game_profile.h"
 
 #include <errno.h>
@@ -391,6 +392,7 @@ static struct {
      * the meeting server, the room, the peer's public address from it, and
      * whether the packets go through its relay */
     int      inet, relay, peer_direct; struct sockaddr_in server; char code[5];
+    int      ws;              /* through the WebSocket relay (LINDBERGH_NETPLAY=online-host | online-join:CODE) */
     double   last_server_ms, peer_at_ms;
 } N = { .fd = -1, .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
 
@@ -426,8 +428,18 @@ static size_t rv_packet(uint8_t *o, int type, const char *code, const uint8_t *p
     return k;
 }
 static int rv_type(const uint8_t *b, size_t n) { return n >= 5 && b[0] == 0x4C && b[1] == 0x47 && b[2] == 0x52 && b[3] == 0x56 ? b[4] : 0; }
+/* the WebSocket relay: [role u8 (0 host, 1 joiner)][a netplay packet] */
+static void ws_send_role(int role, const uint8_t *b, size_t n)
+{
+    uint8_t o[LS_PACKET_MAX + 1];
+    if (n > LS_PACKET_MAX) return;
+    o[0] = (uint8_t)role; memcpy(o + 1, b, n);
+    lgws_send(o, n + 1);
+}
+static int g_ws_mode;       /* set before N exists (netplay_before_start) */
 static void relay_send(int fd, const struct sockaddr_in *server, const char *code, int role, const uint8_t *b, size_t n)
 {
+    if (g_ws_mode) { ws_send_role(role, b, n); return; }
     uint8_t o[LS_PACKET_MAX + 32];
     if (n > LS_PACKET_MAX) return;
     size_t k = rv_packet(o, RV_RELAY, code, b, n, role);
@@ -435,6 +447,7 @@ static void relay_send(int fd, const struct sockaddr_in *server, const char *cod
 }
 static void raw_send(const uint8_t *b, size_t n)
 {
+    if (N.ws) { if (N.have_peer) ws_send_role(N.host ? 0 : 1, b, n); return; }
     if (N.fd < 0 || !N.have_peer) return;
     if (N.relay) { relay_send(N.fd, &N.server, N.code, N.host ? 0 : 1, b, n); return; }
     sendto(N.fd, b, n, 0, (struct sockaddr *)&N.peer, N.peer_len);
@@ -491,7 +504,7 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
 {
     int type = ls_type(b, n);
     if (!type) return;
-    if (N.host && type == LS_QUERY && N.fd >= 0) {     /* a joiner looking for a host (or for our settings) */
+    if (N.host && type == LS_QUERY && (N.fd >= 0 || N.ws)) {     /* a joiner looking for a host (or for our settings) */
         char name[48], lines[440] = "";
         np_name(name, sizeof name - 12);
         if (N.phase == NP_RUN) strncat(name, " (playing)", sizeof name - strlen(name) - 1);
@@ -591,6 +604,19 @@ static void *net_thread(void *arg)
         int phase = N.phase;
         pthread_mutex_unlock(&N.lock);
         if (phase == NP_ENDED || phase == NP_OFF) break;
+        if (N.ws) {            /* the WebSocket relay: drain its messages, then a millisecond's nap */
+            uint8_t b[LS_PACKET_MAX + 8]; int n, any = 0;
+            while ((n = lgws_recv(b, sizeof b)) > 1) {
+                any = 1;
+                if (b[0] == (N.host ? 0 : 1)) continue;            /* (our own, should the relay echo) */
+                struct sockaddr_storage none; memset(&none, 0, sizeof none);
+                pthread_mutex_lock(&N.lock);
+                g_via_relay = 1; handle_packet(b + 1, (size_t)n - 1, &none, sizeof none); g_via_relay = 0;
+                pthread_mutex_unlock(&N.lock);
+            }
+            if (!any) usleep(1000);
+            continue;
+        }
         int timeout = next < 5 ? (int)next : 5;
         struct pollfd p = { N.fd, POLLIN, 0 };
         if (poll(&p, 1, timeout) > 0 && (p.revents & POLLIN)) {
@@ -652,7 +678,7 @@ static int inet_spec(const char *spec, struct sockaddr_in *server, char code[5])
     return 1;
 }
 /* a joiner's socket from netplay_before_start, kept for the session */
-static struct { int fd, direct, relay; struct sockaddr_in peer; } g_keep = { -1, 0, 0, { 0 } };
+static struct { int fd, direct, relay, ws; struct sockaddr_in peer; } g_keep = { -1, 0, 0, 0, { 0 } };
 
 static void np_net_init(void)
 {
@@ -660,7 +686,24 @@ static void np_net_init(void)
     char spec[256]; snprintf(spec, sizeof spec, "%s", g_net);
     int port = 47100;
     char host[128] = "";
-    if (!strncmp(spec, "host@", 5) || !strncmp(spec, "join@", 5)) {      /* over the Internet, through a meeting server */
+    if (!strncmp(spec, "online-host", 11) || !strncmp(spec, "online-join:", 12)) {   /* over the Internet, through the WebSocket relay */
+        N.host = spec[7] == 'h'; N.ws = N.relay = 1; g_ws_mode = 1; N.have_peer = 1;
+        if (N.host) {
+            struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+            snprintf(N.code, sizeof N.code, "%04u", (unsigned)((t.tv_nsec / 1000 ^ t.tv_sec * 7919u ^ (unsigned)getpid() * 31u) % 10000u));
+        } else snprintf(N.code, sizeof N.code, "%.4s", spec + 12);
+        if (!g_keep.ws) {
+            const char *base = getenv("LINDBERGH_NETPLAY_RELAY");
+            char url[512];
+            if (!base || !*base) { fprintf(stderr, "[net] online play needs LINDBERGH_NETPLAY_RELAY (the relay's wss:// address) - netplay off\n"); return; }
+            snprintf(url, sizeof url, "%s/room/%s", base, N.code);
+            if (lgws_open(url) < 0) { fprintf(stderr, "[net] no WebSocket on this platform - netplay off\n"); return; }
+            double t0 = now_ms();
+            while (lgws_state() == 0 && now_ms() - t0 < 15000) usleep(10000);
+            if (lgws_state() != 1) { fprintf(stderr, "[net] cannot reach the relay %s - netplay off\n", base); return; }
+        }
+        g_keep.ws = 0;
+    } else if (!strncmp(spec, "host@", 5) || !strncmp(spec, "join@", 5)) {      /* over the Internet, through a meeting server */
         N.host = spec[0] == 'h'; N.inet = 1;
         if (!inet_spec(spec, &N.server, N.code)) { fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: cannot find the meeting server - netplay off\n", g_net); return; }
         port = env_num("LINDBERGH_NETPLAY_PORT", N.host ? 47100 : 0);
@@ -673,7 +716,7 @@ static void np_net_init(void)
         if (c) { *c = 0; port = atoi(c + 1); }
         snprintf(host, sizeof host, "%s", a);
     } else {
-        fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: want host[:port], join:<ip>[:port], host@<server>[:port] or join@<server>[:port]/<code> - netplay off\n", g_net);
+        fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: want host[:port], join:<ip>[:port], online-host, online-join:<code>, host@<server>[:port] or join@<server>[:port]/<code> - netplay off\n", g_net);
         return;
     }
     N.timeout_ms = env_num("LINDBERGH_NETPLAY_TIMEOUT", 10000);
@@ -693,7 +736,9 @@ static void np_net_init(void)
         fprintf(stderr, "[net] network simulator: %.0f ms delay, %.0f ms jitter, %.1f%% loss, %.1f%% reordered%s\n",
                 S.delay, S.jitter, S.loss, S.reorder, S.stall_len > 0 ? ", one stall" : "");
     }
-    if (N.inet && !N.host && g_keep.fd >= 0) {          /* the socket the settings came on: the routers know it */
+    if (N.ws) {
+        /* no UDP socket: the WebSocket carries everything */
+    } else if (N.inet && !N.host && g_keep.fd >= 0) {          /* the socket the settings came on: the routers know it */
         N.fd = g_keep.fd; g_keep.fd = -1;
         fcntl(N.fd, F_SETFL, fcntl(N.fd, F_GETFL) | O_NONBLOCK);
         if (g_keep.direct) { memcpy(&N.peer, &g_keep.peer, sizeof g_keep.peer); N.peer_len = sizeof g_keep.peer; N.have_peer = 1; N.peer_direct = 1; N.peer_at_ms = now_ms(); }
@@ -721,9 +766,11 @@ static void np_net_init(void)
         N.nonce = (uint32_t)(t.tv_nsec ^ (t.tv_sec << 12) ^ (uint32_t)getpid());
         if (!N.nonce) N.nonce = 1;
         N.phase = NP_HOSTING;
-        fprintf(stderr, "[net] hosting on UDP port %d: waiting up to %.0f s for player 2 (settings %s)\n", port, N.wait_ms / 1000, N.hello.settings);
+        if (N.ws) fprintf(stderr, "[net] hosting online: waiting up to %.0f s for player 2 (settings %s)\n", N.wait_ms / 1000, N.hello.settings);
+        else fprintf(stderr, "[net] hosting on UDP port %d: waiting up to %.0f s for player 2 (settings %s)\n", port, N.wait_ms / 1000, N.hello.settings);
         if (N.inet) fprintf(stderr, "[net] asking the meeting server for a room\n");
-    } else if (N.inet) {
+        if (N.ws) fprintf(stderr, "[net] room code %s (online, through the relay)\n", N.code);
+    } else if (N.inet || N.ws) {
         N.phase = NP_JOINING;
         fprintf(stderr, "[net] joining room %s as player 2 (settings %s)\n", N.code, N.hello.settings);
     } else {
@@ -841,6 +888,38 @@ static void before_start_inet(const char *np)
     }
     close(fd);
 }
+/* online-join:CODE: into the relay's room, the host's settings asked for
+ * there; the WebSocket stays open for the session */
+static void before_start_ws(const char *code)
+{
+    const char *base = getenv("LINDBERGH_NETPLAY_RELAY");
+    char url[512];
+    if (!base || !*base) { fprintf(stderr, "[net] online play needs LINDBERGH_NETPLAY_RELAY\n"); return; }
+    snprintf(url, sizeof url, "%s/room/%.8s", base, code);
+    if (lgws_open(url) < 0) { fprintf(stderr, "[net] no WebSocket on this platform\n"); return; }
+    g_ws_mode = 1;
+    double wait = env_num("LINDBERGH_NETPLAY_WAIT", 120) * 1000.0, t0 = now_ms(), last = -1e9;
+    fprintf(stderr, "[net] room %s at the relay %s (up to %.0f s)\n", code, base, wait / 1000);
+    while (now_ms() - t0 < wait) {
+        int st = lgws_state();
+        if (st < 0) { fprintf(stderr, "[net] the relay closed - trying again\n"); usleep(500000); lgws_open(url); continue; }
+        if (st == 1 && now_ms() - last > 250) {
+            uint8_t q[64]; size_t qn = ls_write_query(q, sizeof q);
+            ws_send_role(1, q, qn); last = now_ms();
+        }
+        uint8_t b[LS_PACKET_MAX + 8]; int n = lgws_recv(b, sizeof b);
+        if (n <= 1) { usleep(5000); continue; }
+        char name[48], lines[440];
+        if (b[0] == 0 && ls_type(b + 1, (size_t)n - 1) == LS_SETTINGS && ls_read_settings(b + 1, (size_t)n - 1, name, sizeof name, lines, sizeof lines)) {
+            fprintf(stderr, "[net] the host \"%s\" answered after %.0f ms\n", name, now_ms() - t0);
+            adopt_lines(lines);
+            g_keep.ws = 1;
+            return;
+        }
+    }
+    fprintf(stderr, "[net] room %s: no host - its settings not taken\n", code);
+    g_keep.ws = lgws_state() == 1;
+}
 void netplay_before_start(void)
 {
     const char *nv = getenv("LINDBERGH_NETPLAY_NVRAM"), *np = getenv("LINDBERGH_NETPLAY");
@@ -852,6 +931,7 @@ void netplay_before_start(void)
     }
     if (getenv("LINDBERGH_NETPLAY_ADOPT") && *getenv("LINDBERGH_NETPLAY_ADOPT") == '0') return;
     if (!strncmp(np, "join@", 5)) { before_start_inet(np); return; }
+    if (!strncmp(np, "online-join:", 12)) { before_start_ws(np + 12); return; }
     if (strncmp(np, "join:", 5)) return;
     char spec[256]; snprintf(spec, sizeof spec, "%s", np + 5);
     int port = 47100; char *c = strrchr(spec, ':');
@@ -946,7 +1026,7 @@ void netplay_status(NetplayStatus *st)
         st->in_sync = !N.s.desync_tick; st->hashes = N.s.hashes_compared;
     }
     snprintf(st->why, sizeof st->why, "%s", N.end_why[0] ? N.end_why : N.refused);
-    st->online = N.inet; st->relay = N.relay; snprintf(st->code, sizeof st->code, "%s", N.code);
+    st->online = N.inet || N.ws; st->relay = N.relay; snprintf(st->code, sizeof st->code, "%s", N.code);
     pthread_mutex_unlock(&N.lock);
 }
 

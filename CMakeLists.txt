@@ -216,6 +216,7 @@ function(lindbergh_runtime target generated_dir)
         "${LINDBERGH_RUNTIME_DIR}/dispatch.c"
         "${LINDBERGH_RUNTIME_DIR}/crash_report.c"
         "${LINDBERGH_RUNTIME_DIR}/netplay.c"
+        "${LINDBERGH_RUNTIME_DIR}/netws.c"
         "${LINDBERGH_RUNTIME_DIR}/lockstep.c"
         "${LINDBERGH_RUNTIME_DIR}/det_math.c"
         ${LINDBERGH_FDLIBM_SOURCES}
@@ -366,7 +367,9 @@ function(lindbergh_runtime target generated_dir)
                 target_link_libraries(${target} PRIVATE "-framework OpenGL")
             endif()
             # the menu bar (Controls, Aim, Sound, Language)
-            target_sources(${target} PRIVATE "${LINDBERGH_RUNTIME_DIR}/host_menu_mac.m")
+            target_sources(${target} PRIVATE "${LINDBERGH_RUNTIME_DIR}/host_menu_mac.m" "${LINDBERGH_RUNTIME_DIR}/netws_apple.m")
+            set_source_files_properties("${LINDBERGH_RUNTIME_DIR}/netws_apple.m" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+            target_link_libraries(${target} PRIVATE "-framework Network" "-framework Foundation")
             set_source_files_properties("${LINDBERGH_RUNTIME_DIR}/host_menu_mac.m"
                 PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
             # Every guest call is a host call: give the main thread room.

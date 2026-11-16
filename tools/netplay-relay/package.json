@@ -1,0 +1,6 @@
+{
+  "name": "lindbergh-netplay-relay",
+  "private": true,
+  "scripts": { "dev": "wrangler dev", "deploy": "wrangler deploy", "test": "node test-room.mjs" },
+  "devDependencies": { "wrangler": "4.42.0" }
+}

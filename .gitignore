@@ -81,3 +81,6 @@ lindbergh_nvram.bin
 # The disc's own config and launcher, if a tree is dropped in whole.
 lgjrc
 vt3rc
+tools/netplay-relay/node_modules/
+tools/netplay-relay/.wrangler/
+tools/netplay-relay/package-lock.json

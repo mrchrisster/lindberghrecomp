@@ -366,7 +366,7 @@ static void menu_world_state(void)
     wpanel.vs_delay = st.delay; wpanel.vs_rtt = (float)st.rtt_ms; wpanel.vs_sync = st.in_sync;
     snprintf(wpanel.vs_note, sizeof wpanel.vs_note, "%s", st.why);
     wpanel.vs_net = st.online; wpanel.vs_relay = st.relay; snprintf(wpanel.vs_code, sizeof wpanel.vs_code, "%s", st.code);
-    {   const char *sv = getenv("LINDBERGH_NETPLAY_SERVER"); wpanel.vs_online = sv && *sv; }
+    {   const char *rl = getenv("LINDBERGH_NETPLAY_RELAY"); wpanel.vs_online = rl && *rl; }
     NetplayHost h[XW_VS_HOSTS];
     wpanel.vs_n = netplay_hosts(h, XW_VS_HOSTS);
     for (int i = 0; i < wpanel.vs_n; i++) {
@@ -381,18 +381,16 @@ static void menu_world_state(void)
  * session runs on the game's factory NVRAM (netplay_nvram.bin, made fresh);
  * the joiner takes the host's settings before its game starts. */
 static void reset_game(void);
-/* host 1: here, 2: online (a room on LINDBERGH_NETPLAY_SERVER); 0: join ip,
+/* host 1: here, 2: online (a room on the relay, LINDBERGH_NETPLAY_RELAY); 0: join ip,
  * or with code the online room */
 static void versus_start(int host, const char *ip, const char *code)
 {
-    const char *sv = getenv("LINDBERGH_NETPLAY_SERVER");
     FILE *f = fopen("../netplay.txt", "w");
     if (!f) { fprintf(stderr, "[xr] versus: cannot write ../netplay.txt\n"); return; }
-    if (host == 2) fprintf(f, "LINDBERGH_NETPLAY=host@%s\n", sv ? sv : "");
+    if (host == 2) fprintf(f, "LINDBERGH_NETPLAY=online-host\n");          /* through the relay (LINDBERGH_NETPLAY_RELAY, env.txt) */
     else if (host) fprintf(f, "LINDBERGH_NETPLAY=host:47100\n");
-    else if (code) fprintf(f, "LINDBERGH_NETPLAY=join@%s/%s\n", sv ? sv : "", code);
+    else if (code) fprintf(f, "LINDBERGH_NETPLAY=online-join:%s\n", code);
     else fprintf(f, "LINDBERGH_NETPLAY=join:%s:47100\n", ip);
-    if (sv && *sv) fprintf(f, "LINDBERGH_NETPLAY_SERVER=%s\n", sv);
     fprintf(f, "LINDBERGH_NETPLAY_WAIT=600\nLINDBERGH_NETPLAY_NVRAM=netplay_nvram.bin\nLINDBERGH_VT3_SAVE=0\n");
     fclose(f);
     fprintf(stderr, "[xr] versus: %s - the game starts again\n", host == 2 ? "hosting online" : host ? "hosting" : code ? code : ip);
