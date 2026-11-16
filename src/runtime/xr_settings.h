@@ -58,6 +58,8 @@ typedef struct LgXrSettings {
                                  * from its "screen" distance (xr_settings_screen_size_from) */
     int imm_msaa;               /* "immersive.msaa 0|2|4": anti-aliasing samples of the eyes' framebuffer
                                  * in VR mode (0 off; VT3's default 2x); applies on the next start */
+    int voice_off;              /* "voice on|off": voice chat in Versus matches (voice.c); the Versus page's
+                                 * Voice chat row. Off: the microphone is never asked for nor opened */
 } LgXrSettings;
 /* Screen size Small / Medium / Big: the flat picture's width in degrees (Medium = the arcade's
  * picture as it always was: lens 1.732, 60 degrees across) */

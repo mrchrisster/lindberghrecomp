@@ -48,6 +48,7 @@ static int render(const LgXrSettings *c, char *b, size_t n)
             xr_settings_aniso(c->aniso), c->save_name[0] ? c->save_name : LG_XR_SAVE_NAME_DEFAULT);
     if (c->screen_size >= 0 && k >= 0 && (size_t)k < n)     /* a game with a Screen size row (VT3) */
         k += snprintf(b + k, n - (size_t)k, "screen_size %s\n", SCREEN_SIZE_NAME[c->screen_size > 2 ? 2 : c->screen_size]);
+    if (c->voice_off && k >= 0 && (size_t)k < n) k += snprintf(b + k, n - (size_t)k, "voice off\n");
     return k;
 }
 
@@ -245,6 +246,7 @@ void xr_settings_set(LgXrSettings *c,const char *key,const char *val)
         else if (!strcmp(key, "save")) c->save = !strcmp(val, "on");
         else if (!strcmp(key, "aniso")) c->aniso = atoi(val);
         else if (!strcmp(key, "screen_size")) c->screen_size = !strcmp(val, "small") ? 0 : !strcmp(val, "big") ? 2 : !strcmp(val, "medium") ? 1 : -2;
+        else if (!strcmp(key, "voice")) c->voice_off = !strcmp(val, "off");
         else if (!strcmp(key, "save_name")) snprintf(c->save_name, sizeof c->save_name, "%s", val);   /* checked at load */
         else if (!strcmp(key, "foveation")) {
             for (int i = 0; i < 4; i++) if (!strcmp(val, FOVEATION_NAME[i])) c->foveation = i;

@@ -20,7 +20,7 @@ enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPL
        XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_ANISO, XW_RESET_SAVE,
        XW_VERSUS, XW_VS_HOST, XW_VS_JOIN0, XW_VS_JOIN1, XW_VS_JOIN2, XW_VS_JOIN3, XW_VS_STATUS, XW_VS_LEAVE, XW_VS_SEARCH,
        XW_VS_HOST_NET, XW_VS_CODE, XW_VS_DIG0, XW_VS_DIG1, XW_VS_DIG2, XW_VS_DIG3, XW_VS_JOIN_NET,
-       XW_VS_MIC,
+       XW_VS_MIC, XW_VS_VOICE,
        XW_COUNT };
 #define XW_VS_HOSTS 4
 /* the main page's Language; both Advanced pages' Anti-aliasing (per mode),
@@ -34,7 +34,7 @@ enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGE_VERSUS, XW_PAGE
  * vs_action and returns XW_VS_FX; the host (host_xr.c) starts or ends the
  * session - a restart. While a session runs the simulation's settings (mode,
  * replays and cams, overlays, save) do not change. */
-enum { XW_VS_NONE, XW_VS_DO_HOST, XW_VS_DO_JOIN, XW_VS_DO_LEAVE, XW_VS_DO_HOST_NET, XW_VS_DO_JOIN_NET, XW_VS_DO_MIC };
+enum { XW_VS_NONE, XW_VS_DO_HOST, XW_VS_DO_JOIN, XW_VS_DO_LEAVE, XW_VS_DO_HOST_NET, XW_VS_DO_JOIN_NET, XW_VS_DO_MIC, XW_VS_DO_VOICE };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */
        XW_PAGE_CHANGED = 1 << 17,      /* the page or its rows changed */

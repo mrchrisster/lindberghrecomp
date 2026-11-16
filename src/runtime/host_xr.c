@@ -420,6 +420,7 @@ static void versus_start(int host, const char *ip, const char *code)
     /* the session's inputs, both players, every frame (~1 MB an hour): a
      * desync is then replayed on the Mac to find what went apart */
     fprintf(f, "LINDBERGH_INPUT_REC=netplay_session.lgin\n");
+    if (cfg.voice_off) fprintf(f, "LINDBERGH_VOICE=0\n");      /* the Versus page's Voice chat Off */
     fclose(f);
     fprintf(stderr, "[xr] versus: %s%s - the game starts again\n", host == 2 ? "hosting online, room " : host ? "hosting" : "", host == 2 ? code : host ? "" : code ? code : ip);
     netplay_scan(0);
@@ -509,7 +510,8 @@ static void reset_game(void)
 static void ask_for_mic(void)
 {
 #ifdef __ANDROID__
-    static int asked; if (asked++) return;
+    static int asked; if (asked) return;
+    asked = 1;
     JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
     jobject activity = (jobject)SDL_AndroidGetActivity();
     if (!env || !activity) return;
@@ -620,7 +622,7 @@ static void menu_choose(int row)
         if (cfg.world_mode != mode_before)
             fprintf(stderr, "[xr] mode %s saved (running %s)%s\n", cfg.world_mode ? "immersive" : "classic",
                     wpanel.running ? "immersive" : "classic", cfg.world_mode != wpanel.running ? " - applies on restart" : "");
-        if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); if (wpanel.page == XW_PAGE_VERSUS) ask_for_mic(); }
+        if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); if (wpanel.page == XW_PAGE_VERSUS && !cfg.voice_off) ask_for_mic(); }
         if (effects & XW_VS_FX) {
             if (wpanel.vs_action == XW_VS_DO_HOST) versus_start(1, NULL, NULL);
             else if (wpanel.vs_action == XW_VS_DO_HOST_NET) {
@@ -635,6 +637,11 @@ static void menu_choose(int row)
                 versus_start(0, NULL, code);
             }
             else if (wpanel.vs_action == XW_VS_DO_MIC) voice_set_mic(!voice_mic());
+            else if (wpanel.vs_action == XW_VS_DO_VOICE) {
+                cfg_save();
+                fprintf(stderr, "[xr] versus: voice chat %s for the next match\n", cfg.voice_off ? "off" : "on");
+                if (!cfg.voice_off) ask_for_mic();
+            }
             else if (wpanel.vs_action == XW_VS_DO_LEAVE) { remove("../netplay.txt"); fprintf(stderr, "[xr] versus: leaving - the game starts again\n"); reset_game(); }
             wpanel.vs_action = XW_VS_NONE;
             return;
