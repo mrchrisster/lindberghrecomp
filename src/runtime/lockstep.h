@@ -28,7 +28,9 @@
 #define LS_HASHES       4u              /* state hashes carried per packet */
 #define LS_PACKET_MAX   512u
 
-enum { LS_HELLO = 1, LS_WELCOME = 2, LS_REFUSE = 3, LS_INPUT = 4, LS_BYE = 5 };
+enum { LS_HELLO = 1, LS_WELCOME = 2, LS_REFUSE = 3, LS_INPUT = 4, LS_BYE = 5,
+       LS_QUERY = 6,        /* "who hosts here, and with what?" (unicast or broadcast) - before the game starts */
+       LS_SETTINGS = 7 };   /* the host's answer: its name and the NAME=value lines a joiner adopts */
 enum { LS_BYE_QUIT = 1, LS_BYE_DESYNC = 2, LS_BYE_TIMEOUT = 3 };
 
 /* One side's cabinet input for one frame. Buttons are already in their final
@@ -101,6 +103,9 @@ void     ls_merge(const LsInput *p1, const LsInput *p2, LsInput *out);
 size_t   ls_write_hello(uint8_t *buf, size_t cap, const LsHello *h);
 size_t   ls_write_welcome(uint8_t *buf, size_t cap, uint32_t nonce, unsigned delay, uint32_t start_tick);
 size_t   ls_write_refuse(uint8_t *buf, size_t cap, const char *why);
+size_t   ls_write_query(uint8_t *buf, size_t cap);
+size_t   ls_write_settings(uint8_t *buf, size_t cap, const char *name, const char *lines);
+int      ls_read_settings(const uint8_t *buf, size_t len, char *name, size_t ncap, char *lines, size_t lcap);
 size_t   ls_write_bye(uint8_t *buf, size_t cap, uint32_t nonce, int reason);
 size_t   ls_write_input(LsSession *s, uint8_t *buf, size_t cap, uint32_t now_us, uint32_t my_tick);
 int      ls_type(const uint8_t *buf, size_t len);         /* LS_* or 0 for not ours */

@@ -17,16 +17,27 @@ extern "C" {
  * XW_MODE (a toggle), XW_DOLLY and XW_STEPBACK are no rows any more (T12). */
 enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPLAYS, XW_CUTAWAYS,
        XW_OVERLAYS, XW_SKY, XW_SHADOW, XW_RESTORE, XW_HEIGHT, XW_MODE_CLASSIC, XW_MODE_VR,
-       XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_ANISO, XW_RESET_SAVE, XW_COUNT };
+       XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_ANISO, XW_RESET_SAVE,
+       XW_VERSUS, XW_VS_HOST, XW_VS_JOIN0, XW_VS_JOIN1, XW_VS_JOIN2, XW_VS_JOIN3, XW_VS_STATUS, XW_VS_LEAVE, XW_VS_SEARCH,
+       XW_COUNT };
+#define XW_VS_HOSTS 4
 /* the main page's Language; both Advanced pages' Anti-aliasing (per mode),
  * Save progress and Texture filtering (one value each for both modes) - all
  * on restart. Reset save (both Advanced pages, below Save progress): pull
  * twice, like Restore defaults - returns XW_RESET_SAVE */
-enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGES };
+enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGE_VERSUS, XW_PAGES };
+/* Versus (netplay, two players on two machines): the main page's "Versus -
+ * two players >" opens a page with Host a match, the hosts found on the
+ * network (Join), and in a session its status and Leave. Choosing one sets
+ * vs_action and returns XW_VS_FX; the host (host_xr.c) starts or ends the
+ * session - a restart. While a session runs the simulation's settings (mode,
+ * replays and cams, overlays, save) do not change. */
+enum { XW_VS_NONE, XW_VS_DO_HOST, XW_VS_DO_JOIN, XW_VS_DO_LEAVE };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */
        XW_PAGE_CHANGED = 1 << 17,      /* the page or its rows changed */
-       XW_RESET_SAVE_FX = 1 << 18 };   /* Reset save confirmed: the host moves the save aside (vt3_save_reset) */
+       XW_RESET_SAVE_FX = 1 << 18,      /* Reset save confirmed: the host moves the save aside (vt3_save_reset) */
+       XW_VS_FX = 1 << 19 };            /* a Versus action: vs_action (and vs_join) */
 /* a page's row, as host_xr.c's menu_ids hold them: an XP_ item, or XP_COUNT + an XW_ item */
 #define XW_ROW(x) (XP_COUNT + (x))
 #define XW_ROWS_MAX (XP_COUNT + XW_COUNT)
@@ -41,6 +52,16 @@ typedef struct {
     WmValues eff;               /* the running values (world_mode_values) */
     int live;                   /* the mode switches live (world_mode_live): no Restart now, no
                                  * "(on restart)", Mode returns XW_LIVE_CHANGED. 0: on restart */
+    /* Versus: filled by the host before the rows are built */
+    int vs_able;                /* netplay is built in: the main page shows Versus */
+    int vs_phase;               /* 0 none, 1 hosting (waiting for player 2), 2 joining, 3 playing, 4 ended */
+    int vs_is_host;
+    unsigned vs_delay; float vs_rtt; int vs_sync;
+    char vs_note[48];           /* why a session ended, or "" */
+    int vs_n;                   /* hosts found */
+    char vs_name[XW_VS_HOSTS][48]; char vs_ip[XW_VS_HOSTS][32]; int vs_imm[XW_VS_HOSTS];
+    int vs_action, vs_join;     /* set by xw_choose with XW_VS_FX: XW_VS_DO_*, the host's index */
+    int vs_leave_armed;
 } XwState;
 
 /* The rows of the current page, in order (XP_ ids or XW_ROW(x)); returns the

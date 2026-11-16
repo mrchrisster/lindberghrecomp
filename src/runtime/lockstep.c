@@ -262,6 +262,39 @@ int ls_read_refuse(const uint8_t *buf, size_t len, char *why, size_t cap)
     snprintf(why, cap, "%s", tmp);
     return !r.bad;
 }
+size_t ls_write_query(uint8_t *buf, size_t cap)
+{
+    W w = { buf, 0, cap, 0 };
+    header(&w, LS_QUERY);
+    w32(&w, LS_PROTO);
+    return finish(&w);
+}
+size_t ls_write_settings(uint8_t *buf, size_t cap, const char *name, const char *lines)
+{
+    W w = { buf, 0, cap, 0 };
+    header(&w, LS_SETTINGS);
+    w32(&w, LS_PROTO);
+    size_t n = strlen(name); if (n > 40) n = 40;
+    w8(&w, (uint32_t)n); wbytes(&w, name, n);
+    n = strlen(lines); if (n > 420) n = 420;
+    w16(&w, (uint32_t)n); wbytes(&w, lines, n);
+    return finish(&w);
+}
+int ls_read_settings(const uint8_t *buf, size_t len, char *name, size_t ncap, char *lines, size_t lcap)
+{
+    R r = open_packet(buf, len, LS_SETTINGS);
+    if (r32(&r) != LS_PROTO) return 0;
+    char tmp[421];
+    size_t n = r8(&r);
+    if (n > 40) { r.bad = 1; n = 0; }
+    rbytes(&r, tmp, n); tmp[n] = 0;
+    snprintf(name, ncap, "%s", tmp);
+    n = r16(&r);
+    if (n > 420) { r.bad = 1; n = 0; }
+    rbytes(&r, tmp, n); tmp[n] = 0;
+    snprintf(lines, lcap, "%s", tmp);
+    return !r.bad;
+}
 size_t ls_write_bye(uint8_t *buf, size_t cap, uint32_t nonce, int reason)
 {
     W w = { buf, 0, cap, 0 };

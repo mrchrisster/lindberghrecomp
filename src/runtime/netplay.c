@@ -359,6 +359,18 @@ static int play_read(uint32_t tick, CabinetInput *c)
     return 1;
 }
 
+/* What a joiner adopts from the host (netplay_adopt_source): NAME=value lines */
+static void (*g_adopt)(char *out, size_t cap);
+void netplay_adopt_source(void (*fn)(char *out, size_t cap)) { g_adopt = fn; }
+static void np_name(char *out, size_t cap)
+{
+    const char *v = getenv("LINDBERGH_NETPLAY_NAME");
+    if (v && *v) { snprintf(out, cap, "%s", v); return; }
+    char h[64] = "";
+    if (gethostname(h, sizeof h) || !h[0] || !strcmp(h, "localhost")) snprintf(h, sizeof h, "%s", "Quest");
+    snprintf(out, cap, "%s", h);
+}
+
 /* ================= netplay: the session over UDP ================= */
 enum { NP_OFF, NP_HOSTING, NP_JOINING, NP_RUN, NP_ENDED };
 static struct {
@@ -452,6 +464,15 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
 {
     int type = ls_type(b, n);
     if (!type) return;
+    if (N.host && type == LS_QUERY && N.fd >= 0) {     /* a joiner looking for a host (or for our settings) */
+        char name[48], lines[440] = "";
+        np_name(name, sizeof name - 12);
+        if (N.phase == NP_RUN) strncat(name, " (playing)", sizeof name - strlen(name) - 1);
+        if (g_adopt) g_adopt(lines, sizeof lines);
+        uint8_t out[LS_PACKET_MAX]; size_t on = ls_write_settings(out, sizeof out, name, lines);
+        if (on) sendto(N.fd, out, on, 0, (const struct sockaddr *)from, flen);
+        return;
+    }
     if (N.phase == NP_HOSTING && type == LS_HELLO) {
         LsHello theirs; char why[512];
         if (!ls_read_hello(b, n, &theirs)) return;
@@ -636,6 +657,142 @@ static void np_net_init(void)
     pthread_mutex_unlock(&N.lock);
 }
 
+/* ---- before the game starts (host.c main): the session's own NVRAM, and a
+ * joiner adopts the host's simulation settings ----
+ * LINDBERGH_NETPLAY_NVRAM=<file>: this session's NVRAM - removed now, so both
+ * copies start from the game's factory NVRAM (two machines' own NVRAMs have
+ * their own credits, rankings and cabinet settings; the handshake compares
+ * them). A joiner then asks the host (LS_QUERY, up to LINDBERGH_NETPLAY_WAIT)
+ * for the lines its game registered with netplay_adopt_source and sets them
+ * in its environment, before anything reads them: the joiner plays with the
+ * host's mode, replays and the like, and the handshake at the first frame
+ * agrees. */
+static int resolve(const char *host, int port, struct sockaddr_in *out)
+{
+    struct addrinfo hints, *res = NULL; memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+    char ps[16]; snprintf(ps, sizeof ps, "%d", port);
+    if (getaddrinfo(host, ps, &hints, &res) || !res) return 0;
+    memcpy(out, res->ai_addr, sizeof *out); freeaddrinfo(res);
+    return 1;
+}
+static void adopt_lines(const char *lines)
+{
+    char buf[440]; snprintf(buf, sizeof buf, "%s", lines);
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        char *eq = strchr(l, '=');
+        if (!eq || strncmp(l, "LINDBERGH_", 10)) continue;
+        *eq = 0;
+        setenv(l, eq + 1, 1);
+        fprintf(stderr, "[net] from the host: %s=%s\n", l, eq + 1);
+    }
+}
+void netplay_before_start(void)
+{
+    const char *nv = getenv("LINDBERGH_NETPLAY_NVRAM"), *np = getenv("LINDBERGH_NETPLAY");
+    if (!np || !*np) return;
+    if (nv && *nv) {
+        unlink(nv);
+        setenv("LINDBERGH_NVRAM", nv, 1);
+        fprintf(stderr, "[net] this session's NVRAM: %s (the game's factory settings)\n", nv);
+    }
+    if (strncmp(np, "join:", 5) || (getenv("LINDBERGH_NETPLAY_ADOPT") && *getenv("LINDBERGH_NETPLAY_ADOPT") == '0')) return;
+    char spec[256]; snprintf(spec, sizeof spec, "%s", np + 5);
+    int port = 47100; char *c = strrchr(spec, ':');
+    if (c) { *c = 0; port = atoi(c + 1); }
+    struct sockaddr_in to;
+    if (!resolve(spec, port, &to)) { fprintf(stderr, "[net] cannot find the host '%s'\n", spec); return; }
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    double wait = env_num("LINDBERGH_NETPLAY_WAIT", 120) * 1000.0, t0 = now_ms(), last = -1e9;
+    fprintf(stderr, "[net] asking %s:%d for its settings (up to %.0f s)\n", spec, port, wait / 1000);
+    for (;;) {
+        if (now_ms() - t0 > wait) { fprintf(stderr, "[net] no answer from the host - its settings not taken\n"); break; }
+        if (now_ms() - last > 250) {
+            uint8_t q[64]; size_t qn = ls_write_query(q, sizeof q);
+            sendto(fd, q, qn, 0, (struct sockaddr *)&to, sizeof to); last = now_ms();
+        }
+        struct pollfd p = { fd, POLLIN, 0 };
+        if (poll(&p, 1, 50) <= 0) continue;
+        uint8_t b[LS_PACKET_MAX + 16]; ssize_t n = recv(fd, b, sizeof b, 0);
+        char name[48], lines[440];
+        if (n > 0 && ls_type(b, (size_t)n) == LS_SETTINGS && ls_read_settings(b, (size_t)n, name, sizeof name, lines, sizeof lines)) {
+            fprintf(stderr, "[net] the host \"%s\" answered after %.0f ms\n", name, now_ms() - t0);
+            adopt_lines(lines);
+            break;
+        }
+    }
+    close(fd);
+}
+
+/* ---- finding hosts (the headset's Versus page): LS_QUERY to the LAN's
+ * broadcast address once a second, the answers kept for 3 s ---- */
+static struct {
+    pthread_mutex_t lock; pthread_t thread; int on, stop;
+    NetplayHost h[8]; double seen[8]; int n;
+} F = { .lock = PTHREAD_MUTEX_INITIALIZER };
+static void *scan_thread(void *arg)
+{
+    (void)arg;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0), one = 1;
+    if (fd < 0) return NULL;
+    setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
+    struct sockaddr_in to; memset(&to, 0, sizeof to);
+    to.sin_family = AF_INET; to.sin_port = htons((uint16_t)env_num("LINDBERGH_NETPLAY_PORT", 47100));
+    to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    double last = -1e9;
+    while (!F.stop) {
+        if (now_ms() - last > 1000) {
+            uint8_t q[64]; size_t qn = ls_write_query(q, sizeof q);
+            sendto(fd, q, qn, 0, (struct sockaddr *)&to, sizeof to); last = now_ms();
+        }
+        struct pollfd p = { fd, POLLIN, 0 };
+        if (poll(&p, 1, 100) > 0) {
+            uint8_t b[LS_PACKET_MAX + 16]; struct sockaddr_in from; socklen_t fl = sizeof from;
+            ssize_t n = recvfrom(fd, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
+            char name[48], lines[440];
+            if (n > 0 && ls_type(b, (size_t)n) == LS_SETTINGS && ls_read_settings(b, (size_t)n, name, sizeof name, lines, sizeof lines)) {
+                char ip[32]; inet_ntop(AF_INET, &from.sin_addr, ip, sizeof ip);
+                pthread_mutex_lock(&F.lock);
+                int i = 0; while (i < F.n && strcmp(F.h[i].ip, ip)) i++;
+                if (i == F.n && F.n < 8) F.n++;
+                if (i < 8) { snprintf(F.h[i].ip, sizeof F.h[i].ip, "%s", ip); snprintf(F.h[i].name, sizeof F.h[i].name, "%s", name);
+                             F.h[i].immersive = strstr(lines, "IMMERSIVE=1") != NULL; F.seen[i] = now_ms(); }
+                pthread_mutex_unlock(&F.lock);
+            }
+        }
+    }
+    close(fd);
+    return NULL;
+}
+void netplay_scan(int on)
+{
+    if (on && !F.on) { F.stop = 0; F.n = 0; if (pthread_create(&F.thread, NULL, scan_thread, NULL) == 0) F.on = 1; }
+    if (!on && F.on) { F.stop = 1; pthread_join(F.thread, NULL); F.on = 0; }
+}
+int netplay_hosts(NetplayHost *out, int max)
+{
+    pthread_mutex_lock(&F.lock);
+    int k = 0;
+    for (int i = 0; i < F.n; i++) if (now_ms() - F.seen[i] < 3500 && k < max) out[k++] = F.h[i];
+    pthread_mutex_unlock(&F.lock);
+    return k;
+}
+/* the session as the Versus page shows it */
+void netplay_status(NetplayStatus *st)
+{
+    memset(st, 0, sizeof *st);
+    pthread_mutex_lock(&N.lock);
+    st->phase = N.phase == NP_HOSTING ? 1 : N.phase == NP_JOINING ? 2 : N.phase == NP_RUN ? 3 : N.phase == NP_ENDED ? 4 : 0;
+    st->host = N.host;
+    if (N.phase == NP_RUN) {
+        st->delay = ls_delay(&N.s, g_tick); st->rtt_ms = N.s.srtt_ms;
+        st->in_sync = !N.s.desync_tick; st->hashes = N.s.hashes_compared;
+    }
+    snprintf(st->why, sizeof st->why, "%s", N.end_why[0] ? N.end_why : N.refused);
+    pthread_mutex_unlock(&N.lock);
+}
+
 static void side_input(const CabinetInput *c, LsInput *o, int host)
 {
     const unsigned p2 = CAB_P2_START | CAB_P2_TRIGGER | CAB_P2_RELOAD | CAB_P2_ACTION | CAB_P2_FIREMODE |
@@ -738,6 +895,10 @@ static void net_tick(CabinetInput *c) { (void)c; }
 static void net_hash(uint32_t t, uint64_t h) { (void)t; (void)h; }
 static void net_check_desync(void) {}
 static void np_net_init(void) { if (g_net[0]) fprintf(stderr, "[net] netplay is not built for this platform\n"); }
+void netplay_before_start(void) {}
+void netplay_scan(int on) { (void)on; }
+int netplay_hosts(NetplayHost *out, int max) { (void)out; (void)max; return 0; }
+void netplay_status(NetplayStatus *st) { memset(st, 0, sizeof *st); }
 #endif
 
 /* ================= the cabinet ================= */

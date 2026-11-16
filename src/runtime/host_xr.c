@@ -81,6 +81,7 @@
 #include "xr_overlay.h"
 #include "xr_menu.h"
 #include "xr_world_panel.h"
+#include "netplay.h"
 #include "world_mode.h"
 #include "vt3_save.h"
 
@@ -356,6 +357,48 @@ static void menu_world_state(void)
     for (int k = 0; k < WM_COUNT; k++) if (world_mode_pinned(k)) wpanel.pins |= 1u << k;
     wpanel.eff = *world_mode_values();
     wpanel.live = 0;            /* the Mode row applies on restart (live switching: world_mode_live, a later step) */
+    /* Versus: the session and the hosts found (netplay.c) */
+#ifdef __ANDROID__
+    wpanel.vs_able = 1;
+#endif
+    NetplayStatus st; netplay_status(&st);
+    wpanel.vs_phase = st.phase; wpanel.vs_is_host = st.host;
+    wpanel.vs_delay = st.delay; wpanel.vs_rtt = (float)st.rtt_ms; wpanel.vs_sync = st.in_sync;
+    snprintf(wpanel.vs_note, sizeof wpanel.vs_note, "%s", st.why);
+    NetplayHost h[XW_VS_HOSTS];
+    wpanel.vs_n = netplay_hosts(h, XW_VS_HOSTS);
+    for (int i = 0; i < wpanel.vs_n; i++) {
+        snprintf(wpanel.vs_name[i], sizeof wpanel.vs_name[i], "%s", h[i].name);
+        snprintf(wpanel.vs_ip[i], sizeof wpanel.vs_ip[i], "%s", h[i].ip);
+        wpanel.vs_imm[i] = h[i].immersive;
+    }
+}
+/* Versus: a session starts at the game's first frame, so Host / Join / Leave
+ * write ../netplay.txt (the game folder, beside env.txt; android_main.c reads
+ * it once at the next start and removes it) and restart the game. Each
+ * session runs on the game's factory NVRAM (netplay_nvram.bin, made fresh);
+ * the joiner takes the host's settings before its game starts. */
+static void reset_game(void);
+static void versus_start(int host, const char *ip)
+{
+    FILE *f = fopen("../netplay.txt", "w");
+    if (!f) { fprintf(stderr, "[xr] versus: cannot write ../netplay.txt\n"); return; }
+    if (host) fprintf(f, "LINDBERGH_NETPLAY=host:47100\n");
+    else fprintf(f, "LINDBERGH_NETPLAY=join:%s:47100\n", ip);
+    fprintf(f, "LINDBERGH_NETPLAY_WAIT=600\nLINDBERGH_NETPLAY_NVRAM=netplay_nvram.bin\nLINDBERGH_VT3_SAVE=0\n");
+    fclose(f);
+    fprintf(stderr, "[xr] versus: %s - the game starts again\n", host ? "hosting" : ip);
+    netplay_scan(0);
+    reset_game();
+}
+/* every frame: look for hosts while the Versus page shows (and this copy is
+ * not in a session), and repaint it once a second for the list and status */
+static void menu_versus_frame(void)
+{
+    const int on = menu.open && g_world_capable && wpanel.page == XW_PAGE_VERSUS;
+    NetplayStatus st; if (on) netplay_status(&st);
+    netplay_scan(on && !(st.phase >= 1 && st.phase <= 3));
+    if (on && g_frame % 30 == 0) menu.dirty = 1;
 }
 static void menu_rows(void)
 {
@@ -524,6 +567,13 @@ static void menu_choose(int row)
             fprintf(stderr, "[xr] mode %s saved (running %s)%s\n", cfg.world_mode ? "immersive" : "classic",
                     wpanel.running ? "immersive" : "classic", cfg.world_mode != wpanel.running ? " - applies on restart" : "");
         if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); }
+        if (effects & XW_VS_FX) {
+            if (wpanel.vs_action == XW_VS_DO_HOST) versus_start(1, NULL);
+            else if (wpanel.vs_action == XW_VS_DO_JOIN && wpanel.vs_join < wpanel.vs_n) versus_start(0, wpanel.vs_ip[wpanel.vs_join]);
+            else if (wpanel.vs_action == XW_VS_DO_LEAVE) { remove("../netplay.txt"); fprintf(stderr, "[xr] versus: leaving - the game starts again\n"); reset_game(); }
+            wpanel.vs_action = XW_VS_NONE;
+            return;
+        }
     } else {
         if (menu_pinned_xp(item)) { fprintf(stderr, "[xr] panel row %d: no change (pinned by env.txt)\n", row); return; }
         wpanel.restore_armed = 0;
@@ -581,7 +631,7 @@ static int fake_placed;
 static void menu_page_start(void)
 {
     const char *v = getenv("LINDBERGH_XR_MENU_PAGE");
-    wpanel.page = g_world_capable && v && *v >= '0' && *v <= '2' ? *v - '0' : XW_PAGE_MAIN;
+    wpanel.page = g_world_capable && v && *v >= '0' && *v <= '3' ? *v - '0' : XW_PAGE_MAIN;
     v = getenv("LINDBERGH_XR_MENU_HOVER");      /* tests: a row shown highlighted */
     if (v && *v) menu.hover = atoi(v);
 }
@@ -1580,6 +1630,7 @@ void xr_frame_begin(void)
     }
 #endif
     menu_test_frame();
+    menu_versus_frame();
     poll_events();
     if (!running) { views_ok = 0; if (fixed_head()) set_eyes(); return; }
     XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };

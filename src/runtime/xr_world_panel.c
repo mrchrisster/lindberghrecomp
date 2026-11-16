@@ -90,9 +90,23 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
                                  XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_MSAA), XW_ROW(XW_ANISO), XW_ROW(XW_RESTORE), XP_CLOSE };
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
+    case XW_PAGE_VERSUS:
+        rows[n++] = XW_ROW(XW_BACK);
+        if (w->vs_phase == 1 || w->vs_phase == 2 || w->vs_phase == 3) {
+            rows[n++] = XW_ROW(XW_VS_STATUS);
+            rows[n++] = XW_ROW(XW_VS_LEAVE);
+        } else {
+            rows[n++] = XW_ROW(XW_VS_HOST);
+            for (int i = 0; i < w->vs_n && i < XW_VS_HOSTS; i++) rows[n++] = XW_ROW(XW_VS_JOIN0 + i);
+            if (!w->vs_n) rows[n++] = XW_ROW(XW_VS_SEARCH);
+            if (w->vs_phase == 4) rows[n++] = XW_ROW(XW_VS_STATUS);
+        }
+        rows[n++] = XP_CLOSE;
+        break;
     default:
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
+        if (w->vs_able) rows[n++] = XW_ROW(XW_VERSUS);
         rows[n++] = XW_ROW(XW_LANGUAGE);
         for (int i = 0; i < XP_COUNT; i++)
             if (i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
@@ -174,6 +188,27 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
                  !pinned(w, XW_LANGUAGE) && lang != w->eff.language ? " (on restart)" : "");
     }
     it[XW_RESTORE].label = im ? "Restore VR defaults" : "Restore Classic defaults";
+    /* Versus */
+    it[XW_VERSUS].label = "Versus - two players >";
+    if (w->vs_phase == 3) snprintf(it[XW_VERSUS].value, 40, "Playing");
+    else if (w->vs_phase == 1) snprintf(it[XW_VERSUS].value, 40, "Waiting for player 2");
+    else if (w->vs_phase == 2) snprintf(it[XW_VERSUS].value, 40, "Joining");
+    it[XW_VS_HOST].label = "Host a match (restarts the game)";
+    for (int i = 0; i < XW_VS_HOSTS; i++) {
+        it[XW_VS_JOIN0 + i].label = i < w->vs_n ? w->vs_name[i] : "";
+        if (i < w->vs_n) {
+            const int busy = strstr(w->vs_name[i], "(playing)") != NULL;
+            snprintf(it[XW_VS_JOIN0 + i].value, 40, "%s", busy ? "Busy" : w->vs_imm[i] ? "Join (VR)" : "Join (Classic)");
+        }
+    }
+    it[XW_VS_SEARCH].label = "Looking for a host on this network...";
+    it[XW_VS_STATUS].label = w->vs_phase == 1 ? "Waiting for player 2" : w->vs_phase == 2 ? "Joining" : w->vs_phase == 3 ? "Connected" : "Session ended";
+    if (w->vs_phase == 3) snprintf(it[XW_VS_STATUS].value, 40, "%s, %u frame%s, %.0f ms", w->vs_sync ? "in sync" : "OUT OF SYNC",
+                                   w->vs_delay, w->vs_delay == 1 ? "" : "s", w->vs_rtt);
+    else if (w->vs_phase == 4) snprintf(it[XW_VS_STATUS].value, 40, "%.39s", w->vs_note);
+    else snprintf(it[XW_VS_STATUS].value, 40, "%s", w->vs_is_host ? "host, player 1" : "player 2");
+    it[XW_VS_LEAVE].label = "Leave the match (restarts the game)";
+    if (w->vs_leave_armed) snprintf(it[XW_VS_LEAVE].value, 40, "Pull again to leave");
     /* the page's stored values; a pinned row the run's own */
     const WmValues *e = &w->eff;
     int replays = im ? cfg->imm_replays : cfg->replays, cut = im ? cfg->imm_cutaways : cfg->classic_cutaways;
@@ -231,6 +266,23 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     if (item < 0 || item >= XW_COUNT) return 0;
     const int armed = w->restore_armed, save_armed = w->reset_save_armed;
     w->restore_armed = 0; w->reset_save_armed = 0;
+    const int leave_armed = w->vs_leave_armed; w->vs_leave_armed = 0;
+    switch (item) {                     /* Versus: actions, nothing stored */
+    case XW_VERSUS: w->page = XW_PAGE_VERSUS; return XW_PAGE_CHANGED;
+    case XW_VS_HOST: w->vs_action = XW_VS_DO_HOST; return XW_VS_FX;
+    case XW_VS_JOIN0: case XW_VS_JOIN1: case XW_VS_JOIN2: case XW_VS_JOIN3: {
+        const int i = item - XW_VS_JOIN0;
+        if (i >= w->vs_n || strstr(w->vs_name[i], "(playing)")) return 0;
+        w->vs_action = XW_VS_DO_JOIN; w->vs_join = i; return XW_VS_FX; }
+    case XW_VS_LEAVE:
+        if (!leave_armed) { w->vs_leave_armed = 1; return XW_PAGE_CHANGED; }
+        w->vs_action = XW_VS_DO_LEAVE; return XW_VS_FX;
+    case XW_VS_STATUS: case XW_VS_SEARCH: return 0;
+    }
+    /* in a session the simulation's settings stay as they are (both copies must agree) */
+    if (w->vs_phase >= 1 && w->vs_phase <= 3 &&
+        (item == XW_MODE || item == XW_MODE_CLASSIC || item == XW_MODE_VR || item == XW_RESTART || item == XW_REPLAYS ||
+         item == XW_CUTAWAYS || item == XW_OVERLAYS || item == XW_SAVE || item == XW_RESET_SAVE || item == XW_RESTORE)) return 0;
     if (item == XW_RESET_SAVE) {        /* an action, not a setting: nothing stored, no env pin */
         if (page_mode(w) < 0) return 0;
         if (!save_armed) { w->reset_save_armed = 1; return XW_PAGE_CHANGED; }
@@ -287,7 +339,8 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
 const char *xw_title(const XwState *w)
 {
     return w->page == XW_PAGE_CLASSIC ? "Classic mode - advanced settings"
-         : w->page == XW_PAGE_IMMERSIVE ? "VR mode - advanced settings" : NULL;
+         : w->page == XW_PAGE_IMMERSIVE ? "VR mode - advanced settings"
+         : w->page == XW_PAGE_VERSUS ? "Versus - two players, two headsets" : NULL;
 }
 
 const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg)
@@ -301,6 +354,9 @@ const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg)
 const char *xw_hint(const XwState *w)
 {
     const int m = page_mode(w);
+    if (w->page == XW_PAGE_VERSUS)
+        return w->vs_phase == 3 ? "Player 2: Start during a match." : "Same Wi-Fi. Joiner takes the host's mode.";
+    if (w->vs_phase >= 1 && w->vs_phase <= 3 && m >= 0) return "In a match: mode and replays are locked.";
     if (m >= 0 && m != w->running)
         return m ? "Applies when VR mode runs." : "Applies when Classic mode runs.";
     return "Point and pull the trigger. Menu: close.";    /* 42 characters fit */

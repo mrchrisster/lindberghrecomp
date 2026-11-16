@@ -2405,6 +2405,23 @@ static void vt3_sim_settings(void)
     netplay_setting("vt3.hold", vt3_hold_on());
 }
 
+/* What a netplay joiner takes from the host (netplay_before_start): the
+ * settings vt3_sim_settings reports, as the variables that set them, and the
+ * replay / cutaway views, so both copies show the same thing */
+static void vt3_adopt(char *out, size_t cap)
+{
+    static const char *const view[] = { "flat", "flat", "world", "camera" };
+    int im = world_mode_immersive(), rv = world_mode_replay_view(), cv = world_mode_cutaway_view();
+    const char *u = getenv("LINDBERGH_VT3_SKIP_UVA"), *k = getenv("LINDBERGH_VT3_CULL");
+    snprintf(out, cap,
+             "LINDBERGH_VT3_IMMERSIVE=%d\nLINDBERGH_REPLAYS=%d\nLINDBERGH_VT3_CUTAWAYS=%d\nLINDBERGH_ARCADE_OVERLAYS=%d\n"
+             "LINDBERGH_VT3_SAVE=%d\nLINDBERGH_VT3_SKIP_UVA=%d\nLINDBERGH_VT3_CULL=%d\nLINDBERGH_VT3_HOLD=%d\n%s%s%s%s%s%s",
+             im, g_replays, g_cutaways, g_arcade_overlays, world_mode_save(),
+             u && *u ? *u == '1' : im, k && *k ? atoi(k) : 2, vt3_hold_on(),
+             im && g_replays ? "LINDBERGH_VT3_REPLAY_VIEW=" : "", im && g_replays ? view[rv & 3] : "", im && g_replays ? "\n" : "",
+             im && g_cutaways ? "LINDBERGH_VT3_CUTAWAY_VIEW=" : "", im && g_cutaways ? view[cv & 3] : "", im && g_cutaways ? "\n" : "");
+}
+
 static void vt3_jumps(void)
 {
     /* Classic or Immersive, and the values that go with the mode (env >
@@ -2425,6 +2442,7 @@ static void vt3_jumps(void)
     g_vt3_set_round = g_vt3_round;
     if (guest_symbol("_ZN8_sSystem7getTimeEv")) {   /* Virtua Tennis 3 */
         netplay_settings_source(vt3_sim_settings);
+        netplay_adopt_source(vt3_adopt);
         netplay_semantic_hash(vt3_semantic_hash);
         if (lg_deterministic() && vt3_wrap("_ZN8_sRandom13getRandMT_U32Ev", &g_vt3_det_u32, h_vt3_det_u32) &&
             vt3_wrap("_ZN8_sRandom13getRandMT_F32Ev", &g_vt3_det_f32, h_vt3_det_f32))

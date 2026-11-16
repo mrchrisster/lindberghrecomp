@@ -17,6 +17,7 @@
 #ifndef NETPLAY_H
 #define NETPLAY_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "lindbergh_rt.h"
 
@@ -65,5 +66,21 @@ int      netplay_take_stalled(void);   /* 1 once after a frame that waited for t
 /* the game's executable, for the version check (guest.c hands it over) */
 void     netplay_set_elf(const void *img, unsigned long len);
 void     netplay_add_image_rw(uint32_t lo, uint32_t hi);   /* a writable PT_LOAD segment: hashed by default */
+
+/* Netplay from a menu (the headset's Versus page) and before the game:
+ *   netplay_before_start   host.c main, before the game profile: the
+ *                          session's fresh NVRAM; a joiner takes the host's
+ *                          settings (LS_QUERY, netplay_adopt_source)
+ *   netplay_adopt_source   a game: the NAME=value lines a joiner adopts
+ *   netplay_scan/_hosts    look for hosts on the LAN (broadcast)
+ *   netplay_status         the running session, for a status line */
+typedef struct { char ip[32]; char name[48]; int immersive; } NetplayHost;
+typedef struct { int phase;  /* 0 off, 1 hosting (waiting), 2 joining, 3 running, 4 ended */
+                 int host; unsigned delay; double rtt_ms; int in_sync; unsigned hashes; char why[160]; } NetplayStatus;
+void netplay_before_start(void);
+void netplay_adopt_source(void (*fn)(char *out, size_t cap));
+void netplay_scan(int on);
+int  netplay_hosts(NetplayHost *out, int max);
+void netplay_status(NetplayStatus *st);
 
 #endif
