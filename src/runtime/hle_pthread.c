@@ -238,6 +238,9 @@ static DWORD WINAPI thread_trampoline(LPVOID p)
     return 0;
 }
 
+/* the calling guest thread's start routine: not tracked in this build */
+uint32_t guest_thread_start(void) { return 0; }
+
 static void h_pthread_create(CPU *c)
 {
     uint32_t out = A32(0), attr = A32(1);
@@ -627,6 +630,8 @@ static void *thread_trampoline(void *p)
         unsigned i = __atomic_fetch_add(&g_nthreads, 1, __ATOMIC_ACQ_REL);
         if (i < 64) g_threads[i] = pthread_self(); else g_nthreads = 64;
     }
+    if (getenv("LINDBERGH_THREAD_LOG"))
+        fprintf(stderr, "[pthread] guest thread %d (start %#010x) is host thread %lu\n", t->heap, t->start, (unsigned long)(uintptr_t)pthread_self());
     CPU cpu;
     memset(&cpu, 0, sizeof cpu);
     guest_set_current_cpu(&cpu);
@@ -636,6 +641,12 @@ static void *thread_trampoline(void *p)
     uint32_t args[1] = { t->arg };
     t->retval = guest_call(&cpu, t->start, args, 1);
     return NULL;
+}
+
+/* the start routine of the calling guest thread (0: not a guest thread) */
+uint32_t guest_thread_start(void)
+{
+    return g_self && g_self < 0xFFF00000u ? ((GuestThread *)GP(g_self))->start : 0;
 }
 
 static void h_pthread_create(CPU *c)

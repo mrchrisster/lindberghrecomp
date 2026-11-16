@@ -633,11 +633,21 @@ FILE *guest_fopen(const char *path, const char *mode)
     return f;
 }
 
+/* LINDBERGH_SLOW_IO=<ms>[,<from input frame>]: every guest fopen/open/read/fread takes that much
+ * longer (test only: the Quest's slower storage on the Mac) */
+static void slow_io(void)
+{
+    static int ms = -1; static unsigned from;
+    if (ms < 0) { const char *v = getenv("LINDBERGH_SLOW_IO"); ms = 0; if (v) sscanf(v, "%d,%u", &ms, &from); }
+    extern uint32_t lg_input_tick(void);
+    if (ms > 0 && lg_input_tick() >= from) usleep((useconds_t)ms * 1000);
+}
 static void h_fopen (CPU *c)
 {
+    slow_io();
     FILE *f = host_device_refused(ASTR(0)) ? NULL : guest_fopen(ASTR(0), ASTR(1));
     if (getenv("LINDBERGH_OPENS") || !f)
-        fprintf(stderr, "[open] fopen(%s, %s) -> %s\n", ASTR(0), ASTR(1), f ? "ok" : "FAILED");
+        { extern uint32_t lg_input_tick(void); fprintf(stderr, "[open] tick %u thread %lu: fopen(%s, %s) -> %s (from %#x)\n", lg_input_tick(), (unsigned long)(uintptr_t)pthread_self(), ASTR(0), ASTR(1), f ? "ok" : "FAILED", rd32(c->esp - 4u)); }
     RET(guest_file_wrap(f));
 }
 static void h_fclose(CPU *c)
@@ -701,6 +711,7 @@ static void io_end(double t0, size_t bytes, const char *what) { (void)t0; (void)
 
 static void h_fread (CPU *c)
 {
+    slow_io();
     size_t want = (size_t)A32(1) * A32(2);
     double t0 = io_begin(want);
     size_t r = fread(APTR(0), A32(1), A32(2), AFILE(3));
@@ -1306,6 +1317,7 @@ static int host_device_refused(const char *path)
 
 static void h_open(CPU *c)
 {
+    slow_io();
     int fd = rideboard_open(ASTR(0));
     if (fd < 0 && host_device_refused(ASTR(0))) {
         if (g_guest_errno) *g_guest_errno = 2;     /* ENOENT: no such device here */
@@ -1319,7 +1331,7 @@ static void h_open(CPU *c)
      * hangs off a serial port, and a game that cannot open it stops at an
      * error screen instead of running its attract mode. */
     if (getenv("LINDBERGH_OPENS"))
-        fprintf(stderr, "[open] %s -> %d\n", ASTR(0), fd);
+        { extern uint32_t lg_input_tick(void); fprintf(stderr, "[open] tick %u thread %lu: %s -> %d\n", lg_input_tick(), (unsigned long)(uintptr_t)pthread_self(), ASTR(0), fd); }
     RET(fd);
 }
 static void h_close(CPU *c)
@@ -1329,6 +1341,7 @@ static void h_close(CPU *c)
 }
 static void h_read(CPU *c)
 {
+    slow_io();
     if (rideboard_is(AI32(0))) { RET(rideboard_read(APTR(1), A32(2))); return; }
     double t0 = io_begin(A32(2));
     long r = (long)_read(AI32(0), APTR(1), A32(2));

@@ -25,6 +25,7 @@
 
 #include "lindbergh_rt.h"
 #include "netplay.h"
+#include <pthread.h>
 #if !defined(_WIN32)
 #include "host_settings.h"
 #ifndef _WIN32
@@ -2134,6 +2135,13 @@ static void h_vt3_get_time(CPU *c)
     case 0x082793B1u:                                           /* _sSystem::execute: a new frame */
         g_vt3_det_frames++;
         g_vt3_det_frame_us = 1167652800ull * 1000000ull + (uint64_t)g_vt3_det_frames * 1000000ull / 60ull;
+        {   /* LINDBERGH_DET_FRAMELOG=<n>: game frame vs input frame every n;
+             * LINDBERGH_DET_HITCH=<frame>,<ms>: the main thread sleeps there once (test: a slow frame) */
+            static int lg = -1, hf = -1, hms; if (lg < 0) { const char *v = getenv("LINDBERGH_DET_FRAMELOG"); lg = v ? atoi(v) : 0;
+                v = getenv("LINDBERGH_DET_HITCH"); if (!v || sscanf(v, "%d,%d", &hf, &hms) != 2) hf = 0; }
+            if (lg > 0 && g_vt3_det_frames % (unsigned)lg == 0) fprintf(stderr, "[det] game frame %u, input frame %u\n", g_vt3_det_frames, lg_input_tick());
+            if (hf > 0 && g_vt3_det_frames == (unsigned)hf) { fprintf(stderr, "[det] game frame %u: hitch %d ms (test)\n", hf, hms); usleep((useconds_t)hms * 1000); }
+        }
         RET((uint32_t)(g_vt3_det_frame_us / 1000u));
         return;
     case 0x0822F177u: case 0x0822F194u: case 0x0822F1AEu: case 0x0822F2B5u:   /* updateDatabase: this frame's */
@@ -2196,8 +2204,76 @@ static void h_vt3_pool_init(CPU *c)
     if (g_vt3_npools < 8) g_vt3_pools[g_vt3_npools++] = self;
     push32(c, 0xDEADBEEFu); g_vt3_pool_init(c);
 }
+/* Deterministic mode: CRI's middleware (the ADX sound and the file system
+ * under assam::FileManager - text databases, models) runs its server on a
+ * "vsync" of its own: lxsync_thrd_proc broadcasts a condition every 16.666 ms
+ * of wall clock (usleep), adxm_vsync_proc wakes on it (LXSYNC_WaitSync ->
+ * lxsync_wait_cond) and runs SVM_ExecSvrVsync, and blocking reads are handed
+ * to the CRIDLG delegate thread. On a slower disk a read finished vsyncs
+ * later, and the boot's warning screen (waiting for its text) ended at a
+ * different frame (Quest vs Mac: 30-120 frames; LINDBERGH_SLOW_IO=2,350 on
+ * the Mac showed the same). Here every waiter of the CRI vsync wakes once
+ * per input frame (from the load barrier, which then waits until each is
+ * back waiting), and a delegate runs at once in its caller - the server pass
+ * is done, reads included, before the frame starts.
+ * LINDBERGH_DET_CRI=0: the wall-clock vsync. */
+static pthread_mutex_t g_cri_m = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_cri_c = PTHREAD_COND_INITIALIZER;
+static uint32_t g_cri_tick, g_cri_waiters, g_cri_caught;
+static int g_cri_on;
+static __thread uint32_t g_cri_seen; static __thread int g_cri_known;
+static void h_vt3_lxsync_wait(CPU *c)
+{
+    extern uint32_t guest_thread_start(void);
+    pthread_mutex_lock(&g_cri_m);
+    if (!g_cri_tick || guest_thread_start() != 0x083546CCu) {
+        /* before the first frame, or not adxm_vsync_proc: the old 60 Hz
+         * (the next frame's vsync or 16.7 ms, whichever comes first) */
+        uint32_t t = g_cri_tick;
+        struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl);
+        dl.tv_nsec += 16666667; if (dl.tv_nsec >= 1000000000) { dl.tv_nsec -= 1000000000; dl.tv_sec++; }
+        while (g_cri_tick == t && !pthread_cond_timedwait(&g_cri_c, &g_cri_m, &dl)) ;
+        pthread_mutex_unlock(&g_cri_m);
+        RET(0);
+        return;
+    }
+    if (!g_cri_known) { g_cri_known = 1; g_cri_waiters++; g_cri_seen = g_cri_tick; }
+    g_cri_caught++;                                     /* this tick's pass is done */
+    pthread_cond_broadcast(&g_cri_c);
+    while (g_cri_tick == g_cri_seen) pthread_cond_wait(&g_cri_c, &g_cri_m);
+    g_cri_seen = g_cri_tick;
+    pthread_mutex_unlock(&g_cri_m);
+    RET(0);
+}
+static void (*g_vt3_dlg_begin)(CPU *);
+static void h_vt3_dlg_begin(CPU *c)
+{
+    uint32_t dlg = A32(0);
+    push32(c, 0xDEADBEEFu); g_vt3_dlg_begin(c);
+    uint32_t r = c->eax;
+    if (r != 0xFFFFFFFFu && dlg) { uint32_t a[1] = { dlg }; guest_call(c, 0x08368F5Bu, a, 1); }   /* cridlg_delegate_proc: run it here */
+    c->eax = r;
+}
+/* one CRI vsync for this input frame; then wait (3 s cap) until every waiter
+ * has finished its pass and waits again */
+static void vt3_cri_frame(void)
+{
+    if (!g_cri_on) return;
+    struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += 3;
+    pthread_mutex_lock(&g_cri_m);
+    g_cri_tick++; g_cri_caught = 0;
+    pthread_cond_broadcast(&g_cri_c);
+    while (g_cri_caught < g_cri_waiters)
+        if (pthread_cond_timedwait(&g_cri_c, &g_cri_m, &dl)) {
+            static int told;
+            if (told++ < 5) { extern unsigned g_frame; fprintf(stderr, "[det] frame %u: CRI's vsync pass not done after 3 s - going on\n", g_frame); }
+            break;
+        }
+    pthread_mutex_unlock(&g_cri_m);
+}
 static void vt3_load_barrier(void)
 {
+    vt3_cri_frame();
     double t0 = 0;
     for (int spins = 0; ; spins++) {
         int busy = rd32(0x088D4B2Cu) != 0;                     /* assam::Decoder::_nDecodingCount */
@@ -2271,9 +2347,19 @@ static uint32_t vt3_fx_rand(void)
     return (uint32_t)((z ^ (z >> 31)) >> 32);
 }
 static void h_vt3_rand(CPU *c);
+/* LINDBERGH_DET_MTLOG=<from>-<to>: each draw from the match's MT in that
+ * range of game frames, with its caller and thread (test only) */
+static void vt3_mt_log(CPU *c, const char *k)
+{
+    static int on = -1; static unsigned lo, hi;
+    if (on < 0) { const char *v = getenv("LINDBERGH_DET_MTLOG"); on = v && sscanf(v, "%u-%u", &lo, &hi) == 2; }
+    if (on && g_vt3_det_frames >= lo && g_vt3_det_frames <= hi)
+        fprintf(stderr, "[mt] game frame %u tick %u: %s from %#x (thread %lu)\n", g_vt3_det_frames, lg_input_tick(), k, rd32(c->esp - 4), (unsigned long)(uintptr_t)pthread_self());
+}
 static void h_vt3_det_u32(CPU *c)
 {
     if (vt3_fx_caller(rd32(c->esp - 4))) { RET(vt3_fx_rand()); return; }
+    vt3_mt_log(c, "u32");
     if (g_vt3_rand) { h_vt3_rand(c); return; }              /* the close-up's split-screen pick, if hooked */
     push32(c, 0xDEADBEEFu); g_vt3_det_u32(c);
 }
@@ -2284,6 +2370,7 @@ static void h_vt3_det_f32(CPU *c)
         RETF((float)((double)vt3_fx_rand() * k));
         return;
     }
+    vt3_mt_log(c, "f32");
     push32(c, 0xDEADBEEFu); g_vt3_det_f32(c);
 }
 
@@ -2336,6 +2423,12 @@ static void vt3_jumps(void)
         if (lg_deterministic() && vt3_wrap("_ZN5candy10ThreadPool10initializeEl", &g_vt3_pool_init, h_vt3_pool_init)) {
             netplay_frame_barrier(vt3_load_barrier);
             fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - each frame waits for the loading threads\n");
+            const char *v = getenv("LINDBERGH_DET_CRI");
+            if (!(v && *v == '0') && guest_override("lxsync_wait_cond", h_vt3_lxsync_wait) &&
+                vt3_wrap("CRIDLG_TryBeginInvoke", &g_vt3_dlg_begin, h_vt3_dlg_begin)) {
+                g_cri_on = 1;
+                fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - CRI's vsync once per frame, its delegates run in place\n");
+            }
         }
         if (lg_deterministic() && vt3_wrap("_ZN8_sSystem7getTimeEv", &g_vt3_get_time, h_vt3_get_time) &&
             vt3_wrap("_ZN8_sSystem15getTimeHighPrecEv", &g_vt3_get_time_hp, h_vt3_get_time_hp))
