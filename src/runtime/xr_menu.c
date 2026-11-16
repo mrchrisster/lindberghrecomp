@@ -4,6 +4,7 @@
  * when something on it changes.
  */
 #include <string.h>
+#include <math.h>
 
 #include "xr_font.h"
 #include "xr_menu.h"
@@ -239,13 +240,45 @@ void xm_paint_code(unsigned char *img, const char *title, const char *code, cons
     textn(img, W, H, (W - text_w(line)) / 2, H - FONT_H - 24, line, grey, 1);
 }
 
-void xm_paint_badge(unsigned char *img, const char *s)
+void xm_paint_speaker(unsigned char *img)
 {
-    static const unsigned char bg[4] = { 18, 22, 28, 220 }, edge[4] = { 250, 200, 90, 255 };
-    static const unsigned char gold[3] = { 250, 200, 90 };
-    const int W = XM_BADGE_W, H = XM_BADGE_H, n = 2, tw = n * (FONT_W - 3) * (int)strlen(s);
-    for (int i = 0; i < W * H; i++) memcpy(img + (size_t)i * 4, bg, 4);
-    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
-        if (x < 3 || y < 3 || x >= W - 3 || y >= H - 3) memcpy(img + ((size_t)y * W + x) * 4, edge, 4);
-    textn(img, W, H, (W - tw) / 2 > 4 ? (W - tw) / 2 : 4, (H - n * FONT_H) / 2, s, gold, n);
+    const int N = XM_ICON; const float c = N / 2.0f;
+    for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
+        /* 4x4 samples a pixel: the shape's coverage is its alpha */
+        int in = 0, ring = 0;
+        for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
+            float u = (x + (sx + 0.5f) / 4) / N, v = (y + (sy + 0.5f) / 4) / N;   /* 0..1, v down */
+            float dv = v - 0.5f, ad = dv < 0 ? -dv : dv;
+            int body = u >= 0.10f && u <= 0.28f && ad <= 0.13f;                     /* the box */
+            int cone = u > 0.28f && u <= 0.50f && ad <= 0.13f + (u - 0.28f) * 1.15f;  /* the cone, flaring out */
+            float du = u - 0.50f, r = sqrtf(du * du + dv * dv);
+            int wave = du > 0 && (ad < du * 1.3f) &&
+                       ((r > 0.13f && r < 0.20f) || (r > 0.27f && r < 0.34f) || (r > 0.41f && r < 0.48f));
+            if (body || cone) in++;
+            else if (wave) ring++;
+        }
+        unsigned char *p = img + ((size_t)y * N + x) * 4;
+        int a = (in + ring) * 255 / 16;
+        p[0] = 250; p[1] = 200; p[2] = 90; p[3] = (unsigned char)a;   /* the menu's gold */
+        (void)c;
+    }
+    /* a dark outline under the gold, so it reads on a bright court */
+    static unsigned char out[XM_ICON * XM_ICON * 4];
+    memcpy(out, img, sizeof out);
+    for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
+        unsigned char *p = out + ((size_t)y * N + x) * 4;
+        if (p[3] > 200) continue;
+        int m = 0;
+        for (int j = -3; j <= 3; j++) for (int i = -3; i <= 3; i++) {
+            int xx = x + i, yy = y + j;
+            if (xx < 0 || yy < 0 || xx >= N || yy >= N) continue;
+            int q = img[((size_t)yy * N + xx) * 4 + 3]; if (q > m) m = q;
+        }
+        if (m > p[3]) {   /* blend gold over a dark edge */
+            float ga = p[3] / 255.0f;
+            p[0] = (unsigned char)(250 * ga + 15 * (1 - ga)); p[1] = (unsigned char)(200 * ga + 18 * (1 - ga)); p[2] = (unsigned char)(90 * ga + 24 * (1 - ga));
+            p[3] = (unsigned char)(m * 0.85f > p[3] ? m * 0.85f : p[3]);
+        }
+    }
+    memcpy(img, out, sizeof out);
 }

@@ -1517,7 +1517,7 @@ static int splash_init(void)
     return 1;
 }
 
-/* Voice chat: a small badge low in view while the other player talks
+/* Voice chat: a small speaker in the view's bottom-right corner while the other player talks
  * (voice.c), made the first time it is needed */
 static XrSwapchain vb_chain; static XrSpace vb_view; static int vb_state;   /* 0 not made, 1 ready, -1 failed */
 static void voice_badge_make(void)
@@ -1529,14 +1529,14 @@ static void voice_badge_make(void)
     XrSwapchainCreateInfo ci = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
     ci.createFlags = XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT;
     ci.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-    ci.format = color_format; ci.sampleCount = 1; ci.width = XM_BADGE_W; ci.height = XM_BADGE_H;
+    ci.format = color_format; ci.sampleCount = 1; ci.width = XM_ICON; ci.height = XM_ICON;
     ci.faceCount = 1; ci.arraySize = 1; ci.mipCount = 1;
     XR_GL_IMAGE img[4]; uint32_t ni = 0;
     for (int k = 0; k < 4; k++) img[k].type = XR_GL_IMAGE_TYPE;
     if (XR_FAILED(xrCreateSwapchain(session, &ci, &vb_chain)) ||
         XR_FAILED(xrEnumerateSwapchainImages(vb_chain, 4, &ni, (XrSwapchainImageBaseHeader *)img)) || !ni) { fprintf(stderr, "[voice] no swapchain for the badge\n"); return; }
-    static unsigned char px[XM_BADGE_W * XM_BADGE_H * 4];
-    xm_paint_badge(px, "Player 2 talking");
+    static unsigned char px[XM_ICON * XM_ICON * 4];
+    xm_paint_speaker(px);
     uint32_t at = 0;
     XrSwapchainImageAcquireInfo ai = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     XrSwapchainImageWaitInfo wi = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO }; wi.timeout = XR_INFINITE_DURATION;
@@ -1544,14 +1544,14 @@ static void voice_badge_make(void)
     xrWaitSwapchainImage(vb_chain, &wi);
     GLint was = 0; gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &was);
     gl.BindTexture(GL_TEXTURE_2D, img[at].image);
-    for (int y = 0; y < XM_BADGE_H; y++)
-        gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, XM_BADGE_H - 1 - y, XM_BADGE_W, 1, GL_RGBA, GL_UNSIGNED_BYTE, px + (size_t)y * XM_BADGE_W * 4);
+    for (int y = 0; y < XM_ICON; y++)
+        gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, XM_ICON - 1 - y, XM_ICON, 1, GL_RGBA, GL_UNSIGNED_BYTE, px + (size_t)y * XM_ICON * 4);
     gl.BindTexture(GL_TEXTURE_2D, (GLuint)was);
     gl.Finish();
     XrSwapchainImageReleaseInfo ri = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
     xrReleaseSwapchainImage(vb_chain, &ri);
     vb_state = 1;
-    fprintf(stderr, "[voice] talking badge ready\n");
+    fprintf(stderr, "[voice] speaker icon ready\n");
 }
 static int voice_badge_layer(XrCompositionLayerQuad *q)
 {
@@ -1563,10 +1563,10 @@ static int voice_badge_layer(XrCompositionLayerQuad *q)
     q->layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
     q->space = vb_view; q->eyeVisibility = XR_EYE_VISIBILITY_BOTH;
     q->subImage.swapchain = vb_chain;
-    q->subImage.imageRect.extent.width = XM_BADGE_W; q->subImage.imageRect.extent.height = XM_BADGE_H;
-    q->pose.orientation.w = 1;
-    q->pose.position.x = 0; q->pose.position.y = -0.24f; q->pose.position.z = -1.0f;
-    q->size.width = 0.26f; q->size.height = 0.26f * XM_BADGE_H / XM_BADGE_W;
+    q->subImage.imageRect.extent.width = XM_ICON; q->subImage.imageRect.extent.height = XM_ICON;
+    q->pose.orientation.w = 1;          /* the bottom-right corner of the view, 1 m out */
+    q->pose.position.x = 0.30f; q->pose.position.y = -0.26f; q->pose.position.z = -1.0f;
+    q->size.width = 0.06f; q->size.height = 0.06f;
     return 1;
 }
 
