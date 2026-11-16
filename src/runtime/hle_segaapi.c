@@ -397,14 +397,15 @@ static void mix(void *ud, Uint8 *stream, int len)
         /* The game's frames are not the card's clock: a frame late or a
          * few frames under 60 fps (the headset's own pacing) would run the
          * FIFO dry - a click and a gap each time. The playback rate follows
-         * the fill instead: up to 7% slower when it runs low, 3% faster
-         * when it piles up (a pitch change hard to hear), read between
-         * frames; only a real stall still runs it dry. */
+         * the fill instead: up to 15% slower when it runs low (the Quest at
+         * 120 Hz in VR mode runs the game at 50-55 fps: the sound then plays
+         * as slow as the game does), 3% faster when it piles up, read
+         * between frames; only a real stall still runs it dry. */
         if (!g_fifo_primed && g_fifo_n >= DET_PRIME) g_fifo_primed = 1;
         if (g_fifo_primed) {
             double k = (g_fifo_n - DET_TARGET) / (double)DET_TARGET;
-            double rate = 1.0 + (k < 0 ? 0.07 * k : 0.03 * k);
-            if (rate < 0.93) rate = 0.93;
+            double rate = 1.0 + (k < 0 ? 0.15 * k : 0.03 * k);
+            if (rate < 0.85) rate = 0.85;
             if (rate > 1.03) rate = 1.03;
             int i = 0;
             for (; i < frames && g_fifo_n >= 2; i++) {
