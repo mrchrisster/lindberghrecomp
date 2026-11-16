@@ -45,6 +45,13 @@ int  xm_row_at(float u, float v, int n);
 #define XM_MODE_ROWS 18         /* rows that fit below the band, the buttons counted */
 void xm_paint_modes(unsigned char *rgba, const char *title, const XmItem *items, int n, int hover, const char *note, const char *hint);
 int  xm_row_at_modes(float u, float v, int n);
+/* With a wide button (xm_modes_wide(1)): items[2] is drawn as a third big
+ * button across the panel, under the note (Virtua Tennis 3's Versus), its
+ * value (if any) in small letters inside; the rows start at items[3], and
+ * XM_WIDE_ROWS fit. xm_row_at_modes returns 2 for it. */
+#define XM_WIDE_H 76            /* the wide button and its gap */
+#define XM_WIDE_ROWS 16
+void xm_modes_wide(int on);
 
 #ifdef __cplusplus
 }

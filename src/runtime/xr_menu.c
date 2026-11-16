@@ -143,6 +143,10 @@ static void text2(unsigned char *img, int x, int y, const char *s, const unsigne
             }
     }
 }
+static int g_wide;
+void xm_modes_wide(int on) { g_wide = on != 0; }
+#define WIDE_TOP (TITLE_H + XM_BAR_H + 4)
+#define WIDE_BH (XM_WIDE_H - 12)
 void xm_paint_modes(unsigned char *img, const char *title, const XmItem *items, int n, int hover, const char *note, const char *hint)
 {
     static const unsigned char bg[4] = { 18, 22, 28, 235 }, bar[4] = { 40, 70, 52, 255 },
@@ -165,8 +169,21 @@ void xm_paint_modes(unsigned char *img, const char *title, const XmItem *items, 
         text2(img, x0 + (bw - 2 * text_w(l)) / 2, y0 + (BTN_H - 2 * FONT_H) / 2, l, chosen ? white : dim);
     }
     if (note) text(img, (XM_W - text_w(note)) / 2, BAR_TOP + BTN_H + 6, note, gold);
-    for (int i = 2; i < n && i < XM_MODE_ROWS; i++) {
-        int y = TITLE_H + XM_BAR_H + 8 + (i - 2) * ROW_H;
+    const int first = g_wide ? 3 : 2, top = TITLE_H + XM_BAR_H + (g_wide ? XM_WIDE_H : 0), cap = g_wide ? XM_WIDE_ROWS + 1 : XM_MODE_ROWS;
+    if (g_wide && n > 2) {      /* the wide button */
+        const int x0 = MARGIN, x1 = XM_W - MARGIN, y0 = WIDE_TOP, y1 = WIDE_TOP + WIDE_BH;
+        const int active = items[2].value[0] != 0;
+        fill(img, x0, y0, x1, y1, active ? on : off);
+        if (active) frame(img, x0, y0, x1, y1, 4, ring);
+        if (hover == 2) frame(img, x0 + (active ? 4 : 0), y0 + (active ? 4 : 0), x1 - (active ? 4 : 0), y1 - (active ? 4 : 0), 4, hover_ring);
+        const char *l = items[2].label;
+        if (active) {
+            text2(img, x0 + 24, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white);
+            text(img, x1 - 24 - text_w(items[2].value), y0 + (WIDE_BH - FONT_H) / 2, items[2].value, white);
+        } else text2(img, x0 + ((x1 - x0) - 2 * text_w(l)) / 2, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white);
+    }
+    for (int i = first; i < n && i < cap; i++) {
+        int y = top + 8 + (i - first) * ROW_H;
         if (i == hover) fill(img, 8, y, XM_W - 8, y + ROW_H - 2, hi);
         else fill(img, MARGIN, y + ROW_H - 2, XM_W - MARGIN, y + ROW_H - 1, line);
         int action = !items[i].value[0];
@@ -185,8 +202,10 @@ int xm_row_at_modes(float u, float v, int n)
         if (x >= MARGIN + bw + BTN_GAP && x < XM_W - MARGIN) return n > 1 ? 1 : -1;
         return -1;
     }
-    int r = y - TITLE_H - XM_BAR_H - 8;
+    if (g_wide && n > 2 && y >= WIDE_TOP && y < WIDE_TOP + WIDE_BH) return x >= MARGIN && x < XM_W - MARGIN ? 2 : -1;
+    const int first = g_wide ? 3 : 2, cap = g_wide ? XM_WIDE_ROWS + 1 : XM_MODE_ROWS;
+    int r = y - TITLE_H - XM_BAR_H - (g_wide ? XM_WIDE_H : 0) - 8;
     if (r < 0) return -1;
-    r = 2 + r / ROW_H;
-    return r < n && r < XM_MODE_ROWS ? r : -1;
+    r = first + r / ROW_H;
+    return r < n && r < cap ? r : -1;
 }

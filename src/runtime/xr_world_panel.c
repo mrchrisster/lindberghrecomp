@@ -78,6 +78,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     int n = 0;
     rows[n++] = XW_ROW(XW_MODE_CLASSIC);        /* the mode buttons, first on every page */
     rows[n++] = XW_ROW(XW_MODE_VR);
+    if (w->page == XW_PAGE_MAIN && w->vs_able) rows[n++] = XW_ROW(XW_VERSUS);   /* the main page: Versus, a wide button under them */
     switch (w->page) {
     case XW_PAGE_CLASSIC: {
         static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS),
@@ -112,7 +113,6 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     default:
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
         rows[n++] = XW_ROW(XW_ADVANCED);
-        if (w->vs_able) rows[n++] = XW_ROW(XW_VERSUS);
         rows[n++] = XW_ROW(XW_LANGUAGE);
         for (int i = 0; i < XP_COUNT; i++)
             if (i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
@@ -195,7 +195,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     }
     it[XW_RESTORE].label = im ? "Restore VR defaults" : "Restore Classic defaults";
     /* Versus */
-    it[XW_VERSUS].label = "Versus - two players >";
+    it[XW_VERSUS].label = "Versus";
     if (w->vs_phase == 3) snprintf(it[XW_VERSUS].value, 40, "Playing");
     else if (w->vs_phase == 1) snprintf(it[XW_VERSUS].value, 40, "Waiting for player 2");
     else if (w->vs_phase == 2) snprintf(it[XW_VERSUS].value, 40, "Joining");

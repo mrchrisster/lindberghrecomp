@@ -419,8 +419,9 @@ static void menu_rows(void)
         if ((i == XP_OVERLAYS || i == XW_ROW(XW_OVERLAYS)) && !g_arcade_overlay_hooks) continue;
         if ((i == XP_REPLAYS || i == XW_ROW(XW_REPLAYS)) && !g_replay_hook) continue;
         if (i == XW_ROW(XW_CUTAWAYS) && !g_cutaway_hook) continue;
-        if (menu_n < (g_world_capable ? XM_MODE_ROWS : XM_ROWS)) menu_ids[menu_n++] = i;
+        if (menu_n < (g_world_capable ? (menu_n > 2 && menu_ids[2] == XW_ROW(XW_VERSUS) ? XM_WIDE_ROWS + 1 : XM_MODE_ROWS) : XM_ROWS)) menu_ids[menu_n++] = i;
     }
+    xm_modes_wide(g_world_capable && menu_n > 2 && menu_ids[2] == XW_ROW(XW_VERSUS));    /* Versus: the wide button under Classic / VR */
 }
 /* a run's env variable pins Arcade overlays / Replays (games without pages):
  * the row shows the run's value and ignores clicks */
