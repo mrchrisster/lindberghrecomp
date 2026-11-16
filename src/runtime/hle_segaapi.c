@@ -251,11 +251,13 @@ static int g_interp = -1;
  * A stall (netplay waiting for the other player) is silence.
  * LINDBERGH_DET_AUDIO=0: the card's clock even in deterministic mode. */
 #define DET_FRAME (OUT_RATE / 60)
-#define DET_CAP   (OUT_RATE / 8)          /* 125 ms: beyond it the oldest is dropped */
-#define DET_PRIME (2048)                  /* the card starts playing at this much */
+#define DET_CAP   (OUT_RATE / 4)          /* 250 ms: beyond it the oldest is dropped */
+#define DET_PRIME (1024)                  /* the card (re)starts playing at this much */
+#define DET_TARGET (3600)                 /* 75 ms: the fill the playback rate steers towards */
 static int    g_det_audio = -1;
 static float  g_fifo[2 * DET_CAP];
 static int    g_fifo_rd, g_fifo_n, g_fifo_primed;
+static double g_fifo_frac;              /* playback between two FIFO frames (the rate steering) */
 static unsigned g_det_drop, g_det_under;
 static int det_audio(void)
 {
@@ -392,15 +394,28 @@ static void mix(void *ud, Uint8 *stream, int len)
     if (lw > g_h.lockwait_max_ms) g_h.lockwait_max_ms = lw;
     if (!det) mix_voices(out, sfr ? sout : NULL, frames);
     else {
+        /* The game's frames are not the card's clock: a frame late or a
+         * few frames under 60 fps (the headset's own pacing) would run the
+         * FIFO dry - a click and a gap each time. The playback rate follows
+         * the fill instead: up to 7% slower when it runs low, 3% faster
+         * when it piles up (a pitch change hard to hear), read between
+         * frames; only a real stall still runs it dry. */
         if (!g_fifo_primed && g_fifo_n >= DET_PRIME) g_fifo_primed = 1;
         if (g_fifo_primed) {
-            int n = frames < g_fifo_n ? frames : g_fifo_n;
-            for (int i = 0; i < n; i++) {
-                out[2 * i] = g_fifo[2 * g_fifo_rd]; out[2 * i + 1] = g_fifo[2 * g_fifo_rd + 1];
-                g_fifo_rd = (g_fifo_rd + 1) % DET_CAP;
+            double k = (g_fifo_n - DET_TARGET) / (double)DET_TARGET;
+            double rate = 1.0 + (k < 0 ? 0.07 * k : 0.03 * k);
+            if (rate < 0.93) rate = 0.93;
+            if (rate > 1.03) rate = 1.03;
+            int i = 0;
+            for (; i < frames && g_fifo_n >= 2; i++) {
+                int a = g_fifo_rd, b = (g_fifo_rd + 1) % DET_CAP;
+                float t = (float)g_fifo_frac;
+                out[2 * i] = g_fifo[2 * a] + (g_fifo[2 * b] - g_fifo[2 * a]) * t;
+                out[2 * i + 1] = g_fifo[2 * a + 1] + (g_fifo[2 * b + 1] - g_fifo[2 * a + 1]) * t;
+                g_fifo_frac += rate;
+                while (g_fifo_frac >= 1.0 && g_fifo_n > 1) { g_fifo_frac -= 1.0; g_fifo_rd = b; b = (b + 1) % DET_CAP; g_fifo_n--; }
             }
-            g_fifo_n -= n;
-            if (n < frames) { g_det_under++; g_fifo_primed = 0; }
+            if (i < frames) { g_det_under++; g_fifo_primed = 0; }
         }
     }
     UNLOCK();
