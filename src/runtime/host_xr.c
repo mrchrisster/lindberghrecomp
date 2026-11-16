@@ -100,6 +100,11 @@ extern int (*g_host_takes_coin_requests)(void);
 #endif
 
 /* ---- raw GLES, past gl4es ---- */
+#ifdef __ANDROID__
+static int sp_on, sp_thread_on;            /* the start-up splash (below) */
+static void splash_done(const char *why);
+#endif
+
 static struct {
     void (APIENTRY *BindFramebuffer)(GLenum, GLuint);
     void (APIENTRY *GenFramebuffers)(GLsizei, GLuint *);
@@ -857,6 +862,13 @@ static void input_frame(XrTime t)
     if(menu.test_frames){--menu.test_frames;held|=CAB_TEST;}
     if(menu.service_frames){--menu.service_frames;held|=CAB_SERVICE;}
     int coin=menu.coin+cabinet.coins;menu.coin=0;
+#ifdef __ANDROID__
+    /* The splash goes when the game's picture lights up; a Start pressed
+     * through the boot can land on a screen that stays too dark to count
+     * (the logo then hid the game until frame 6000). A button the player
+     * presses once the game is running takes the splash down at once. */
+    if(sp_on&&!sp_thread_on&&g_frame>0&&(held&~(unsigned)(CAB_TEST|CAB_SERVICE))&&!menu.open)splash_done("the player pressed a button");
+#endif
     {   /* LINDBERGH_INPUT_LOG=1: each change of the cabinet's buttons, and why
          * (the controllers' raw state), for inputs nobody remembers making */
         static int on=-1;static unsigned last=~0u;
