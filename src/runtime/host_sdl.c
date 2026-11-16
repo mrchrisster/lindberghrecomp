@@ -556,6 +556,7 @@ static void cabinet_p2_test(void)
  * and 5 one in chute 1. Held for 4 frames, or *frames. Unlike LINDBERGH_KEYS
  * (real key events, player 1's keys) these are the cabinet's bits directly,
  * and LINDBERGH_SCRIPT does not mask them. */
+volatile unsigned g_p2_join_ask;     /* hle_sega.c: player 2 asked to join at this frame */
 static unsigned cabinet_keys2(void)
 {
     static int n = -1;
@@ -573,6 +574,19 @@ static unsigned cabinet_keys2(void)
         if (n) fprintf(stderr, "[cab] player 2 script: %d presses (LINDBERGH_KEYS2)\n", n);
     }
     unsigned b = 0;
+    {   /* LINDBERGH_KEYS2_JOIN=1: when the game asks (g_p2_join_ask, set by
+         * VT3's hooks as a 1P match point starts): a coin in chute 2, Start,
+         * then shot taps through the player select - once per ask */
+        static int on = -1; static unsigned at;
+        if (on < 0) { const char *v = getenv("LINDBERGH_KEYS2_JOIN"); on = v && *v == '1'; }
+        if (on && g_p2_join_ask && g_p2_join_ask != at) { at = g_p2_join_ask; fprintf(stderr, "[cab] player 2 joins (asked at frame %u)\n", at); }
+        if (on && at) {
+            unsigned f = g_frame - at;
+            if (f == 60) { g_cab.coins[1] += 1; fprintf(stderr, "[cab] player 2: a coin in chute 2 at frame %u\n", g_frame); }
+            if (f >= 100 && f < 120) b |= CAB_P2_START;
+            if (f >= 200 && f < 800 && f % 60 < 4) b |= CAB_P2_TRIGGER;
+        }
+    }
     static unsigned coined_at[512];
     for (int i = 0; i < n; i++) {
         if (g_frame < ev[i].at || g_frame >= ev[i].at + ev[i].hold) continue;

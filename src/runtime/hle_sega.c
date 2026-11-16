@@ -1799,6 +1799,15 @@ static void h_vt3_set_mode(CPU *c)
         }
     }
     if (mgr && self == rd32(rd32(mgr + 0x104) + 0x14)) g_vt3_loop = mode;   /* the arcade loops' (far-end height latch) */
+    {   /* LINDBERGH_KEYS2_JOIN=1 (host_sdl.c): a match point starting (GameLoop,
+         * mode 4) asks the scripted player 2 to join - once, and again only
+         * after a match has ended */
+        extern volatile unsigned g_p2_join_ask; extern unsigned g_frame;
+        static int armed = 1;
+        uint32_t m = rd32(rd32(0x085061A4u) + 0x1c);
+        if (m && rd8(m + 0xd6)) armed = 1;
+        if (mode == 4 && armed && from >= 0x0807E000u && from < 0x0808F000u) { armed = 0; g_p2_join_ask = g_frame; }
+    }
     if (g_vt3_flowlog && from >= 0x0807E000u && from < 0x0808F000u)    /* the arcade screen loops' choices */
         fprintf(stderr, "[flow] frame %u: setMode(%#x, %u) from %#x\n", g_frame, self, mode, from);
     push32(c, 0xDEADBEEFu); g_vt3_set_mode(c);
