@@ -92,6 +92,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
         break; }
     case XW_PAGE_VERSUS:
+        if (w->vs_online && !(w->vs_phase >= 1 && w->vs_phase <= 3)) rows[n++] = XW_ROW(XW_VS_HOST_NET);   /* first: the usual choice */
         rows[n++] = XW_ROW(XW_BACK);
         if (w->vs_phase == 1 || w->vs_phase == 2 || w->vs_phase == 3) {
             rows[n++] = XW_ROW(XW_VS_STATUS);
@@ -103,7 +104,6 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
             for (int i = 0; i < w->vs_n && i < XW_VS_HOSTS; i++) rows[n++] = XW_ROW(XW_VS_JOIN0 + i);
             if (!w->vs_n) rows[n++] = XW_ROW(XW_VS_SEARCH);
             if (w->vs_online) {
-                rows[n++] = XW_ROW(XW_VS_HOST_NET);
                 for (int i = 0; i < 4; i++) rows[n++] = XW_ROW(XW_VS_DIG0 + i);
                 rows[n++] = XW_ROW(XW_VS_JOIN_NET);
             }
@@ -200,8 +200,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     else if (w->vs_phase == 1) snprintf(it[XW_VERSUS].value, 40, "Waiting for player 2");
     else if (w->vs_phase == 2) snprintf(it[XW_VERSUS].value, 40, "Joining");
     it[XW_VS_HOST].label = "Host a match here (same Wi-Fi)";
-    it[XW_VS_HOST_NET].label = "Host an online match";
-    snprintf(it[XW_VS_HOST_NET].value, 40, "gives a room code");
+    it[XW_VS_HOST_NET].label = "Host an online match (gives a room code)";     /* an action: yellow */
     it[XW_VS_CODE].label = "Room code - tell player 2";
     snprintf(it[XW_VS_CODE].value, 40, "%s", w->vs_code);
     {   static const char *const dl[4] = { "Room code, 1st digit", "Room code, 2nd digit", "Room code, 3rd digit", "Room code, 4th digit" };
