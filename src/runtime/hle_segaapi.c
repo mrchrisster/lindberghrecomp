@@ -259,6 +259,7 @@ static float  g_fifo[2 * DET_CAP];
 static int    g_fifo_rd, g_fifo_n, g_fifo_primed;
 static double g_fifo_frac;              /* playback between two FIFO frames (the rate steering) */
 static int    g_fifo_min = 1 << 30, g_fifo_max; static double g_rate_min = 9, g_rate_max;
+static double g_prod_rate = OUT_RATE;   /* the frames the game makes a second (smoothed): the playback rate's base */
 static unsigned g_det_drop, g_det_under;
 static int det_audio(void)
 {
@@ -351,6 +352,14 @@ void segaapi_det_frame(void)
     if (!g_lock || !det_audio()) return;
     static float blk[2 * DET_FRAME];
     memset(blk, 0, sizeof blk);
+    {   /* how fast the game makes sound: its own frame rate, smoothed over ~2 s */
+        static Uint64 last; Uint64 now = SDL_GetPerformanceCounter();
+        if (last) {
+            double dt = (now - last) / (double)SDL_GetPerformanceFrequency();
+            if (dt > 0.001 && dt < 0.25) { double r = DET_FRAME / dt; if (r > OUT_RATE * 1.1) r = OUT_RATE * 1.1; g_prod_rate += (r - g_prod_rate) * 0.01; }
+        }
+        last = now;
+    }
     LOCK();
     mix_voices(blk, NULL, DET_FRAME);
     for (int i = 0; i < DET_FRAME; i++) {
@@ -398,16 +407,18 @@ static void mix(void *ud, Uint8 *stream, int len)
         /* The game's frames are not the card's clock: a frame late or a
          * few frames under 60 fps (the headset's own pacing) would run the
          * FIFO dry - a click and a gap each time. The playback rate follows
-         * the fill instead: up to 15% slower when it runs low (the Quest at
-         * 120 Hz in VR mode runs the game at 50-55 fps: the sound then plays
-         * as slow as the game does), 3% faster when it piles up, read
-         * between frames; only a real stall still runs it dry. */
+         * the game instead: as fast as the game makes it (its frame rate,
+         * smoothed - the Quest at 120 Hz in VR mode runs the game at 50-55
+         * fps, the sound then plays as slow as the game does), steered +-6%
+         * towards a 75 ms fill, read between frames; only a real stall
+         * still runs it dry. */
         if (!g_fifo_primed && g_fifo_n >= DET_PRIME) g_fifo_primed = 1;
         if (g_fifo_primed) {
             double k = (g_fifo_n - DET_TARGET) / (double)DET_TARGET;
-            double rate = 1.0 + (k < 0 ? 0.15 * k : 0.03 * k);
-            if (rate < 0.85) rate = 0.85;
-            if (rate > 1.03) rate = 1.03;
+            if (k > 1) k = 1;
+            double rate = g_prod_rate / OUT_RATE * (1.0 + 0.06 * k);   /* as fast as the game makes it, steered to the target fill */
+            if (rate < 0.75) rate = 0.75;
+            if (rate > 1.05) rate = 1.05;
             if (g_fifo_n < g_fifo_min) g_fifo_min = g_fifo_n;
             if (g_fifo_n > g_fifo_max) g_fifo_max = g_fifo_n;
             if (rate < g_rate_min) g_rate_min = rate;
