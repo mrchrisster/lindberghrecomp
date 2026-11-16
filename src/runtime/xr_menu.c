@@ -129,89 +129,126 @@ static void frame(unsigned char *img, int x0, int y0, int x1, int y1, int t, con
     fill(img, x0, y0, x1, y0 + t, c); fill(img, x0, y1 - t, x1, y1, c);
     fill(img, x0, y0, x0 + t, y1, c); fill(img, x1 - t, y0, x1, y1, c);
 }
-/* text twice as large (each font pixel 2x2) */
-static void text2(unsigned char *img, int x, int y, const char *s, const unsigned char c[3])
-{
-    for (; *s && x + 2 * FONT_W <= XM_W; s++, x += 2 * (FONT_W - 3)) {
-        int ch = (unsigned char)*s - FONT_FIRST;
-        if (ch < 0 || ch >= FONT_COUNT) continue;
-        for (int j = 0; j < 2 * FONT_H && y + j < XM_H; j++)
-            for (int i = 0; i < 2 * FONT_W; i++) {
-                unsigned a = FONT[ch][(j / 2) * FONT_W + i / 2];
-                if (!a) continue;
-                unsigned char *p = img + ((size_t)(y + j) * XM_W + x + i) * 4;
-                for (int k = 0; k < 3; k++) p[k] = (unsigned char)((p[k] * (255 - a) + c[k] * a) / 255);
-            }
-    }
-}
 static int g_wide;
 void xm_modes_wide(int on) { g_wide = on != 0; }
 #define WIDE_TOP (TITLE_H + XM_BAR_H + 4)
 #define WIDE_BH (XM_WIDE_H - 12)
+/* ---- Virtua Tennis 3's look (2026-11-16): the arcade's red banners with a
+ * glossy top, white italic capitals, charcoal score boxes with a red stripe,
+ * yellow labels ("GAME") ---- */
+static void grad(unsigned char *img, int x0, int y0, int x1, int y1, const unsigned char a[3], const unsigned char b[3], int alpha)
+{
+    const int h = y1 - y0 > 1 ? y1 - y0 - 1 : 1;
+    for (int y = y0; y < y1; y++) {
+        const int t = y - y0;
+        unsigned char c[4] = { (unsigned char)(a[0] + (b[0] - a[0]) * t / h), (unsigned char)(a[1] + (b[1] - a[1]) * t / h),
+                               (unsigned char)(a[2] + (b[2] - a[2]) * t / h), (unsigned char)alpha };
+        for (int x = x0; x < x1; x++) memcpy(img + ((size_t)y * XM_W + x) * 4, c, 4);
+    }
+}
+/* a banner: a parallelogram leaning right (the arcade's slanted ends), a
+ * gradient a -> b and a lighter gloss on its upper third */
+static void banner(unsigned char *img, int x0, int y0, int x1, int y1, int lean, const unsigned char a[3], const unsigned char b[3])
+{
+    const int h = y1 - y0 > 1 ? y1 - y0 - 1 : 1;
+    for (int y = y0; y < y1; y++) {
+        const int t = y - y0, sh = lean * (h - t) / h;       /* the top further right */
+        unsigned char c[4] = { (unsigned char)(a[0] + (b[0] - a[0]) * t / h), (unsigned char)(a[1] + (b[1] - a[1]) * t / h),
+                               (unsigned char)(a[2] + (b[2] - a[2]) * t / h), 255 };
+        if (t < h / 3) for (int k = 0; k < 3; k++) c[k] = (unsigned char)(c[k] + (255 - c[k]) * (h / 3 - t) / (h / 3) / 4);   /* gloss */
+        int xa = x0 + sh, xb = x1 - lean + sh;
+        if (xa < 0) xa = 0;
+        if (xb > XM_W) xb = XM_W;
+        for (int x = xa; x < xb; x++) memcpy(img + ((size_t)y * XM_W + x) * 4, c, 4);
+    }
+}
+/* text at n times the font's size, leaning like the arcade's italic captions */
+static void texti(unsigned char *img, int x, int y, const char *s, const unsigned char c[3], int n, int italic)
+{
+    for (; *s && x + n * FONT_W <= XM_W; s++, x += n * (FONT_W - 3)) {
+        int ch = (unsigned char)*s - FONT_FIRST;
+        if (ch < 0 || ch >= FONT_COUNT) continue;
+        for (int j = 0; j < n * FONT_H && y + j < XM_H; j++) {
+            const int dx = italic ? (n * FONT_H - j) / 5 : 0;
+            for (int i = 0; i < n * FONT_W; i++) {
+                unsigned a = FONT[ch][(j / n) * FONT_W + i / n];
+                if (!a || x + i + dx >= XM_W) continue;
+                unsigned char *p = img + ((size_t)(y + j) * XM_W + x + i + dx) * 4;
+                for (int k = 0; k < 3; k++) p[k] = (unsigned char)((p[k] * (255 - a) + c[k] * a) / 255);
+            }
+        }
+    }
+}
+static void upper(char *o, size_t cap, const char *s)
+{
+    size_t k = 0;
+    for (; *s && k < cap - 1; s++) o[k++] = (char)(*s >= 'a' && *s <= 'z' ? *s - 32 : *s);
+    o[k] = 0;
+}
 void xm_paint_modes(unsigned char *img, const char *title, const XmItem *items, int n, int hover, const char *note, const char *hint)
 {
-    static const unsigned char bg[4] = { 18, 22, 28, 235 }, bar[4] = { 40, 70, 52, 255 },
-                               hi[4] = { 60, 110, 80, 255 }, line[4] = { 70, 80, 90, 255 },
-                               on[4] = { 46, 150, 86, 255 }, off[4] = { 34, 40, 48, 255 },
-                               ring[4] = { 150, 240, 170, 255 }, hover_ring[4] = { 250, 200, 90, 255 };
-    static const unsigned char white[3] = { 235, 238, 240 }, green[3] = { 120, 230, 140 },
-                               grey[3] = { 150, 158, 166 }, gold[3] = { 250, 200, 90 }, dim[3] = { 170, 176, 184 };
-    fill(img, 0, 0, XM_W, XM_H, bg);
-    fill(img, 0, 0, XM_W, TITLE_H, bar);
-    text(img, MARGIN, (TITLE_H - FONT_H) / 2, title, white);
+    static const unsigned char bg_top[3] = { 30, 32, 38 }, bg_bot[3] = { 12, 13, 16 },
+                               red_a[3] = { 236, 58, 34 }, red_b[3] = { 150, 16, 10 },
+                               org_a[3] = { 255, 150, 40 }, org_b[3] = { 214, 60, 16 },
+                               box_a[3] = { 58, 62, 70 }, box_b[3] = { 30, 32, 38 },
+                               hov_a[3] = { 120, 30, 22 }, hov_b[3] = { 70, 16, 12 };
+    static const unsigned char line[4] = { 52, 56, 64, 255 }, stripe[4] = { 226, 40, 24, 255 }, yel4[4] = { 255, 206, 40, 255 },
+                               pill[4] = { 22, 23, 27, 255 }, pill_edge[4] = { 70, 74, 82, 255 }, gold_ring[4] = { 255, 206, 40, 255 };
+    static const unsigned char white[3] = { 245, 245, 245 }, grey[3] = { 150, 156, 164 }, dim[3] = { 150, 154, 160 },
+                               yellow[3] = { 255, 206, 40 }, red[3] = { 255, 110, 96 };
+    grad(img, 0, 0, XM_W, XM_H, bg_top, bg_bot, 240);
+    /* the title: a red banner across the top, an orange line under it */
+    banner(img, 0, 0, XM_W, TITLE_H - 6, 0, red_a, red_b);
+    fill(img, 0, TITLE_H - 6, XM_W, TITLE_H - 2, yel4);
+    { char t[64]; upper(t, sizeof t, title); texti(img, MARGIN, (TITLE_H - 6 - FONT_H) / 2, t, white, 1, 1); }
+    /* Classic / VR: the chosen one a red banner ringed yellow */
     const int bw = (XM_W - 2 * MARGIN - BTN_GAP) / 2;
     for (int b = 0; b < 2 && b < n; b++) {
         const int x0 = MARGIN + b * (bw + BTN_GAP), x1 = x0 + bw, y0 = BAR_TOP, y1 = BAR_TOP + BTN_H;
         const int chosen = items[b].value[0] != 0;
-        fill(img, x0, y0, x1, y1, chosen ? on : off);
-        if (chosen) frame(img, x0, y0, x1, y1, 4, ring);
-        if (b == hover) frame(img, x0 + (chosen ? 4 : 0), y0 + (chosen ? 4 : 0), x1 - (chosen ? 4 : 0), y1 - (chosen ? 4 : 0), 4, hover_ring);
-        const char *l = items[b].label;
-        text2(img, x0 + (bw - 2 * text_w(l)) / 2, y0 + (BTN_H - 2 * FONT_H) / 2, l, chosen ? white : dim);
+        if (chosen) banner(img, x0, y0, x1, y1, 0, red_a, red_b); else grad(img, x0, y0, x1, y1, box_a, box_b, 255);
+        if (chosen) frame(img, x0, y0, x1, y1, 3, gold_ring);
+        if (b == hover) frame(img, x0 + 4, y0 + 4, x1 - 4, y1 - 4, 3, gold_ring);
+        char l[32]; upper(l, sizeof l, items[b].label);
+        texti(img, x0 + (bw - 2 * text_w(l)) / 2, y0 + (BTN_H - 2 * FONT_H) / 2, l, chosen ? white : dim, 2, 1);
     }
-    if (note) text(img, (XM_W - text_w(note)) / 2, BAR_TOP + BTN_H + 6, note, gold);
+    if (note) texti(img, (XM_W - text_w(note)) / 2, BAR_TOP + BTN_H + 6, note, yellow, 1, 0);
     const int first = g_wide ? 3 : 2, top = TITLE_H + XM_BAR_H + (g_wide ? XM_WIDE_H : 0), cap = g_wide ? XM_WIDE_ROWS + 1 : XM_MODE_ROWS;
-    if (g_wide && n > 2) {      /* the wide button */
+    if (g_wide && n > 2) {      /* Versus: the arcade's orange banner, slanted ends */
         const int x0 = MARGIN, x1 = XM_W - MARGIN, y0 = WIDE_TOP, y1 = WIDE_TOP + WIDE_BH;
-        const int active = items[2].value[0] != 0;
-        fill(img, x0, y0, x1, y1, active ? on : off);
-        if (active) frame(img, x0, y0, x1, y1, 4, ring);
-        if (hover == 2) frame(img, x0 + (active ? 4 : 0), y0 + (active ? 4 : 0), x1 - (active ? 4 : 0), y1 - (active ? 4 : 0), 4, hover_ring);
-        const char *l = items[2].label;
-        if (active) {
-            text2(img, x0 + 24, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white);
-            text(img, x1 - 24 - text_w(items[2].value), y0 + (WIDE_BH - FONT_H) / 2, items[2].value, white);
-        } else text2(img, x0 + ((x1 - x0) - 2 * text_w(l)) / 2, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white);
+        banner(img, x0, y0, x1, y1, 18, org_a, org_b);
+        if (hover == 2) { fill(img, x0 + 18, y0, x1, y0 + 3, yel4); fill(img, x0, y1 - 3, x1 - 18, y1, yel4); }
+        char l[32]; upper(l, sizeof l, items[2].label);
+        if (items[2].value[0]) {
+            texti(img, x0 + 34, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white, 2, 1);
+            texti(img, x1 - 34 - text_w(items[2].value), y0 + (WIDE_BH - FONT_H) / 2, items[2].value, white, 1, 1);
+        } else texti(img, x0 + ((x1 - x0) - 2 * text_w(l)) / 2, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white, 2, 1);
     }
-    static const unsigned char red[3] = { 255, 120, 110 }, ink[3] = { 24, 20, 12 },
-                               pill[4] = { 30, 36, 44, 255 }, pill_edge[4] = { 78, 88, 100, 255 },
-                               prim[4] = { 232, 182, 70, 255 }, prim_hi[4] = { 255, 214, 120, 255 };
     for (int i = first; i < n && i < cap; i++) {
         const int y = top + 8 + (i - first) * ROW_H, st = items[i].style;
-        if (st == XM_ROW_HEADING) {         /* a section's name: small, grey, capitals; no button */
-            char up[48]; size_t k = 0;
-            for (const char *s = items[i].label; *s && k < sizeof up - 1; s++) up[k++] = (char)(*s >= 'a' && *s <= 'z' ? *s - 32 : *s);
-            up[k] = 0;
-            text(img, MARGIN, y + 2, up, grey);
+        if (st == XM_ROW_HEADING) {         /* a section: yellow capitals after a red tick, like the arcade's GAME */
+            char up[48]; upper(up, sizeof up, items[i].label);
+            fill(img, MARGIN, y + 9, MARGIN + 6, y + ROW_H - 9, stripe);
+            texti(img, MARGIN + 16, y + 1, up, yellow, 1, 1);
             continue;
         }
-        if (st == XM_ROW_PRIMARY) {         /* the page's main action: a gold bar */
-            fill(img, MARGIN - 8, y + 1, XM_W - MARGIN + 8, y + ROW_H - 3, i == hover ? prim_hi : prim);
-            text(img, (XM_W - text_w(items[i].label)) / 2, y + 1, items[i].label, ink);
+        if (st == XM_ROW_PRIMARY) {         /* the page's main action: a red banner */
+            banner(img, MARGIN - 8, y + 1, XM_W - MARGIN + 8, y + ROW_H - 2, 12, i == hover ? org_a : red_a, i == hover ? org_b : red_b);
+            char up[48]; upper(up, sizeof up, items[i].label);
+            texti(img, (XM_W - text_w(up)) / 2, y + 1, up, white, 1, 1);
             continue;
         }
-        if (i == hover) fill(img, 8, y, XM_W - 8, y + ROW_H - 2, hi);
+        if (i == hover) { grad(img, 8, y, XM_W - 8, y + ROW_H - 2, hov_a, hov_b, 255); fill(img, 8, y, 14, y + ROW_H - 2, yel4); }
         else fill(img, MARGIN, y + ROW_H - 2, XM_W - MARGIN, y + ROW_H - 1, line);
-        const int action = !items[i].value[0];
-        text(img, MARGIN, y + 1, items[i].label, st == XM_ROW_DANGER ? red : white);
-        if (!action) {                      /* the value in a pill */
-            const int tw = text_w(items[i].value), x1 = XM_W - MARGIN, x0 = x1 - tw - 20;
-            if (i != hover) { fill(img, x0, y + 2, x1, y + ROW_H - 4, pill); frame(img, x0, y + 2, x1, y + ROW_H - 4, 2, pill_edge); }
-            text(img, x0 + 10, y + 1, items[i].value, st == XM_ROW_DANGER ? red : green);
+        texti(img, MARGIN, y + 1, items[i].label, st == XM_ROW_DANGER ? red : white, 1, 0);
+        if (items[i].value[0]) {            /* the value in a score box: charcoal, a red stripe on its left */
+            const int tw = text_w(items[i].value), x1 = XM_W - MARGIN, x0 = x1 - tw - 24;
+            fill(img, x0, y + 3, x1, y + ROW_H - 5, pill); frame(img, x0, y + 3, x1, y + ROW_H - 5, 1, pill_edge);
+            fill(img, x0, y + 3, x0 + 5, y + ROW_H - 5, stripe);
+            texti(img, x0 + 14, y + 1, items[i].value, st == XM_ROW_DANGER ? red : white, 1, 0);
         }
     }
-    (void)gold;
-    if (hint) text(img, MARGIN, XM_H - FONT_H - 10, hint, grey);
+    if (hint) texti(img, MARGIN, XM_H - FONT_H - 10, hint, grey, 1, 0);
 }
 int xm_row_at_modes(float u, float v, int n)
 {
