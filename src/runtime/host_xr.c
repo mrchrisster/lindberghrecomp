@@ -394,6 +394,9 @@ static void versus_start(int host, const char *ip, const char *code)
     else if (code) fprintf(f, "LINDBERGH_NETPLAY=online-join:%s\n", code);
     else fprintf(f, "LINDBERGH_NETPLAY=join:%s:47100\n", ip);
     fprintf(f, "LINDBERGH_NETPLAY_WAIT=600\nLINDBERGH_NETPLAY_NVRAM=netplay_nvram.bin\nLINDBERGH_VT3_SAVE=0\n");
+    /* the session's inputs, both players, every frame (~1 MB an hour): a
+     * desync is then replayed on the Mac to find what went apart */
+    fprintf(f, "LINDBERGH_INPUT_REC=netplay_session.lgin\n");
     fclose(f);
     fprintf(stderr, "[xr] versus: %s%s - the game starts again\n", host == 2 ? "hosting online, room " : host ? "hosting" : "", host == 2 ? code : host ? "" : code ? code : ip);
     netplay_scan(0);
