@@ -1252,6 +1252,8 @@ static void pace(void)
     static Uint64 next;
     Uint64 f = SDL_GetPerformanceFrequency(), now = SDL_GetPerformanceCounter(), period = f / (Uint64)g_pace_fps;
     if (!next || now > next + period) next = now;      /* first frame, or fell behind: no catching up */
+    { extern int netplay_take_stalled(void);
+      if (netplay_take_stalled()) next = now; }      /* netplay: this frame waited for the other side - its grid is ours now */
     while (now < next) {
         Uint64 left_ms = (next - now) * 1000 / f;
         if (left_ms > 1) SDL_Delay((Uint32)(left_ms - 1));

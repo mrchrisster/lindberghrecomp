@@ -2216,6 +2216,77 @@ static void vt3_load_barrier(void)
     }
 }
 
+/* Deterministic mode: the global random generator (_sRandom, one MT) is drawn
+ * from by the match (serves, AI, cameras, luck) and by presentation alike -
+ * the effects system (_abm*, _abk*, Kf* particles), the crowd
+ * (CAudience2DManager), voices (sound::*), the racket sound and the shader
+ * noise. Presentation draws depend on what is shown and heard - sound
+ * playback state, culling, the viewer's camera - and were seen moving the
+ * match's stream (netplay at 60 ms: MT index 346 vs 349 three frames after a
+ * point, the next camera pick then differed). Those callers (by return
+ * address, 222 call sites in 57 functions) get a stream of their own here;
+ * the match keeps the game's. */
+static const uint32_t k_vt3_fx_rand_from[] = {
+    0x080901F5u, 0x08090208u, 0x0809024Du, 0x08090275u, 0x080902A5u, 0x080902C5u, 0x080902D8u, 0x08090306u,
+    0x08090319u, 0x0809032Cu, 0x0809035Eu, 0x08090384u, 0x0809039Bu, 0x080903B5u, 0x08090493u, 0x080904B9u,
+    0x08090906u, 0x0809092Cu, 0x08090DCDu, 0x08090E11u, 0x08090E34u, 0x08090E50u, 0x08090E96u, 0x08090EEEu,
+    0x08092037u, 0x08092113u, 0x0809218Fu, 0x0815B8A0u, 0x081729BEu, 0x081729F1u, 0x08172A08u, 0x08172DC4u,
+    0x08172E59u, 0x08172ED2u, 0x08172EF1u, 0x08172F04u, 0x081ACA82u, 0x081AD0FEu, 0x081AD11Bu, 0x081D8DFEu,
+    0x081D8E21u, 0x081D8E48u, 0x081D8E6Fu, 0x081D9251u, 0x081D9316u, 0x081D933Du, 0x081D9364u, 0x081D948Au,
+    0x081D94F5u, 0x081D9554u, 0x081D9600u, 0x081D965Fu, 0x081D96DBu, 0x081D9750u, 0x081D97D5u, 0x081D984Eu,
+    0x081D98D3u, 0x081D9935u, 0x081D99D0u, 0x081D9A2Eu, 0x081D9AC0u, 0x081D9B1Eu, 0x081D9B88u, 0x081D9BD7u,
+    0x081D9C06u, 0x081D9C2Du, 0x081DA105u, 0x081DB72Au, 0x081DBB24u, 0x081DC0CEu, 0x081DCDDEu, 0x081DF865u,
+    0x081E06B5u, 0x081E06D8u, 0x081E06FFu, 0x081E0726u, 0x081E0B9Eu, 0x081E0D53u, 0x081E0E27u, 0x081E0E4Eu,
+    0x081E0E75u, 0x081E101Au, 0x081E108Bu, 0x081E10EAu, 0x081E11A5u, 0x081E1204u, 0x081E128Du, 0x081E1302u,
+    0x081E1387u, 0x081E1400u, 0x081E1489u, 0x081E14EBu, 0x081E158Au, 0x081E15E8u, 0x081E1688u, 0x081E16EBu,
+    0x081E1750u, 0x081E17A2u, 0x081E17D1u, 0x081E17F8u, 0x081E26AAu, 0x081E26D6u, 0x081E2709u, 0x081E2738u,
+    0x081E4187u, 0x081E419Eu, 0x081E41BCu, 0x081E41E3u, 0x081E44EBu, 0x081E4694u, 0x081E4756u, 0x081E477Du,
+    0x081E47A4u, 0x081E4940u, 0x081E49ABu, 0x081E4A04u, 0x081E4AB3u, 0x081E4B0Cu, 0x081E4B8Fu, 0x081E4C04u,
+    0x081E4C89u, 0x081E4D02u, 0x081E4D8Bu, 0x081E4DEDu, 0x081E4E8Cu, 0x081E4EEAu, 0x081E4F87u, 0x081E4FDCu,
+    0x081E5040u, 0x081E508Cu, 0x081E50ADu, 0x081E50D4u, 0x081E5D56u, 0x081E5D82u, 0x081E5DB5u, 0x081E5DE4u,
+    0x081E81BAu, 0x081E9A32u, 0x081E9E8Au, 0x081EA674u, 0x081EAAE4u, 0x081EB08Au, 0x081ECACAu, 0x081ECF5Cu,
+    0x081ED6BEu, 0x081EDB4Cu, 0x081EE10Au, 0x081EFFEFu, 0x081F03AFu, 0x081F0A48u, 0x081F0DC1u, 0x081F127Au,
+    0x081F2F13u, 0x081F3274u, 0x081F3330u, 0x081F334Eu, 0x081F336Cu, 0x081F3422u, 0x081F419Cu, 0x081F41C8u,
+    0x081F41FBu, 0x081F422Au, 0x081F7587u, 0x081F7ECFu, 0x081F7EEFu, 0x081F7F16u, 0x081F7F36u, 0x081F7FBDu,
+    0x081F8363u, 0x081F8388u, 0x081F9154u, 0x081F9184u, 0x081F91B5u, 0x081F966Au, 0x081F968Fu, 0x081F96B5u,
+    0x081F97C3u, 0x081FA047u, 0x081FA069u, 0x081FA08Cu, 0x081FA0AFu, 0x081FBC0Cu, 0x081FC0C6u, 0x081FC878u,
+    0x081FCEA8u, 0x081FD4B8u, 0x082002A1u, 0x0820037Au, 0x082003D5u, 0x08200418u, 0x0820049Du, 0x08200590u,
+    0x082005E2u, 0x08200626u, 0x082006B0u, 0x0820073Eu, 0x082007F4u, 0x0820081Fu, 0x08200889u, 0x082025F2u,
+    0x08202626u, 0x0820269Bu, 0x08202978u, 0x082029AFu, 0x08202A1Au, 0x082068DDu, 0x082068F4u, 0x0820692Cu,
+    0x08206984u, 0x082069E2u, 0x08206A17u, 0x08206A76u, 0x08206AA4u, 0x082073F4u, 0x08207437u, 0x0820747Au,
+    0x082077D7u, 0x08207813u, 0x0820791Du, 0x08207951u, 0x08207986u, 0x08207AF3u,
+};
+static void (*g_vt3_det_u32)(CPU *), (*g_vt3_det_f32)(CPU *);
+static int vt3_fx_caller(uint32_t ra)
+{
+    int lo = 0, hi = (int)(sizeof k_vt3_fx_rand_from / sizeof k_vt3_fx_rand_from[0]) - 1;
+    while (lo <= hi) { int m = (lo + hi) / 2; if (k_vt3_fx_rand_from[m] == ra) return 1; if (k_vt3_fx_rand_from[m] < ra) lo = m + 1; else hi = m - 1; }
+    return 0;
+}
+static uint32_t vt3_fx_rand(void)
+{
+    static _Atomic uint64_t st = 0x9E3779B97F4A7C15ull;     /* splitmix64: presentation only, any thread */
+    uint64_t z = atomic_fetch_add(&st, 0x9E3779B97F4A7C15ull) + 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull; z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (uint32_t)((z ^ (z >> 31)) >> 32);
+}
+static void h_vt3_rand(CPU *c);
+static void h_vt3_det_u32(CPU *c)
+{
+    if (vt3_fx_caller(rd32(c->esp - 4))) { RET(vt3_fx_rand()); return; }
+    if (g_vt3_rand) { h_vt3_rand(c); return; }              /* the close-up's split-screen pick, if hooked */
+    push32(c, 0xDEADBEEFu); g_vt3_det_u32(c);
+}
+static void h_vt3_det_f32(CPU *c)
+{
+    if (vt3_fx_caller(rd32(c->esp - 4))) {
+        double k; memcpy(&k, G2H(0x083B6538u), 8);          /* the game's own scale, as getRandMT_F32 */
+        RETF((float)((double)vt3_fx_rand() * k));
+        return;
+    }
+    push32(c, 0xDEADBEEFu); g_vt3_det_f32(c);
+}
+
 /* What changes Virtua Tennis 3's simulation, for an input recording's header
  * and the netplay handshake (two copies with different flow settings would
  * play different matches) */
@@ -2259,6 +2330,9 @@ static void vt3_jumps(void)
     if (guest_symbol("_ZN8_sSystem7getTimeEv")) {   /* Virtua Tennis 3 */
         netplay_settings_source(vt3_sim_settings);
         netplay_semantic_hash(vt3_semantic_hash);
+        if (lg_deterministic() && vt3_wrap("_ZN8_sRandom13getRandMT_U32Ev", &g_vt3_det_u32, h_vt3_det_u32) &&
+            vt3_wrap("_ZN8_sRandom13getRandMT_F32Ev", &g_vt3_det_f32, h_vt3_det_f32))
+            fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - effects, crowd and sounds draw from a random stream of their own\n");
         if (lg_deterministic() && vt3_wrap("_ZN5candy10ThreadPool10initializeEl", &g_vt3_pool_init, h_vt3_pool_init)) {
             netplay_frame_barrier(vt3_load_barrier);
             fprintf(stderr, "[sega] Virtua Tennis 3: deterministic - each frame waits for the loading threads\n");

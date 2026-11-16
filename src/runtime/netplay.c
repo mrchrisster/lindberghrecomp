@@ -378,6 +378,12 @@ static struct {
 } N = { .fd = -1, .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
 
 int netplay_active(void) { return N.phase == NP_RUN; }
+/* A frame waited for the other player: the host's frame pacer starts its
+ * 60 Hz grid again from now (host_sdl.c pace), or the side that waited would
+ * wait the same few ms every frame from then on (seen after a 350 ms stall:
+ * every later frame waited ~15 ms, the two grids a frame apart). */
+static volatile int g_stalled;
+int netplay_take_stalled(void) { int s = g_stalled; g_stalled = 0; return s; }
 
 /* LINDBERGH_NETSIM: our own sends delayed, jittered, lost, reordered */
 static struct {
@@ -686,7 +692,7 @@ static void net_tick(CabinetInput *c)
     if (stalled) {
         double ms = now_ms() - t0;
         N.stalls++; N.stall_ms += ms; if (ms > N.stall_max_ms) N.stall_max_ms = ms;
-        if (ms > 2) N.stall_frames++;
+        if (ms > 2) { N.stall_frames++; g_stalled = 1; }
         if (ms > 100) fprintf(stderr, "[net] frame %u: waited %.0f ms for the other player\n", g_tick, ms);
     }
     if (N.phase == NP_RUN) {

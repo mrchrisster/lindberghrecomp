@@ -61,6 +61,7 @@ void     netplay_frame_barrier(void (*fn)(void));
 
 /* the session is running (stalls, hashes, locked settings) */
 int      netplay_active(void);
+int      netplay_take_stalled(void);   /* 1 once after a frame that waited for the other player */
 /* the game's executable, for the version check (guest.c hands it over) */
 void     netplay_set_elf(const void *img, unsigned long len);
 void     netplay_add_image_rw(uint32_t lo, uint32_t hi);   /* a writable PT_LOAD segment: hashed by default */
