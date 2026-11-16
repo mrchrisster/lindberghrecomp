@@ -84,6 +84,7 @@ typedef struct {
     uint32_t adapt_next, low_since;
     unsigned waits;                     /* frames this side waited since the last adapt (ls_note_wait) */
     unsigned extra;                     /* frames added on top of the round trip's need because of waits */
+    unsigned min_delay;                 /* the delay never goes below this (online: 3, the relay's TCP bursts) */
     uint32_t extra_until;               /* ...kept at least until this frame */
 } LsSession;
 

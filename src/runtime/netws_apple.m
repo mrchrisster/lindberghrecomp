@@ -35,7 +35,7 @@ int lgws_open(const char *url)
     if (!ep) return -1;
     const int tls = !strncmp(url, "wss:", 4);
     nw_parameters_t p = nw_parameters_create_secure_tcp(tls ? NW_PARAMETERS_DEFAULT_CONFIGURATION : NW_PARAMETERS_DISABLE_PROTOCOL,
-                                                        NW_PARAMETERS_DEFAULT_CONFIGURATION);
+                                                        ^(nw_protocol_options_t t) { nw_tcp_options_set_no_delay(t, true); });
     nw_protocol_options_t ws = nw_ws_create_options(nw_ws_version_13);
     nw_ws_options_set_auto_reply_ping(ws, true);
     nw_protocol_stack_prepend_application_protocol(nw_parameters_copy_default_protocol_stack(p), ws);

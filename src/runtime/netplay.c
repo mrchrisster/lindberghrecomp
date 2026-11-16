@@ -67,6 +67,7 @@ static double now_ms(void)
 }
 static uint32_t now_us(void) { return (uint32_t)(uint64_t)(now_ms() * 1000.0); }
 
+static int env_num(const char *k, int def) { const char *v = getenv(k); return v && *v ? atoi(v) : def; }
 static int env_on(const char *k) { const char *v = getenv(k); return v && *v && *v != '0'; }
 
 static void np_net_init(void);
@@ -530,7 +531,7 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
         }
         on = ls_write_welcome(out, sizeof out, N.nonce, N.delay, N.start);
         raw_send(out, on);
-        ls_init(&N.s, 1, N.nonce, N.start, N.delay);
+        ls_init(&N.s, 1, N.nonce, N.start, N.delay); N.s.min_delay = (unsigned)env_num("LINDBERGH_NETPLAY_MIN_DELAY", N.ws || N.inet ? 3 : 1);
         N.phase = NP_RUN;
         char addr[64] = "?";
         if (from->ss_family == AF_INET) inet_ntop(AF_INET, &((const struct sockaddr_in *)from)->sin_addr, addr, sizeof addr);
@@ -658,7 +659,6 @@ static void *net_thread(void *arg)
     return NULL;
 }
 
-static int env_num(const char *k, int def) { const char *v = getenv(k); return v && *v ? atoi(v) : def; }
 
 /* "host@server[:port]" / "join@server[:port]/CODE": the meeting server
  * (default port 47200) and the room's code (upper case) */
@@ -722,6 +722,7 @@ static void np_net_init(void)
     N.timeout_ms = env_num("LINDBERGH_NETPLAY_TIMEOUT", 10000);
     N.wait_ms = env_num("LINDBERGH_NETPLAY_WAIT", 120) * 1000.0;
     N.delay = (unsigned)env_num("LINDBERGH_NETPLAY_DELAY", 2);
+    if ((!strncmp(spec, "online-", 7) || strchr(spec, '@')) && !getenv("LINDBERGH_NETPLAY_DELAY")) N.delay = 3;   /* online: start at the floor */
     N.start = 1;
     const char *sim = getenv("LINDBERGH_NETSIM");
     if (sim && *sim) {

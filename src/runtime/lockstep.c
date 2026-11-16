@@ -514,6 +514,7 @@ int ls_adapt(LsSession *s, uint32_t tick)
     if (waits >= 3 && s->extra < 4) { s->extra++; s->extra_until = tick + 600; }
     else if (!waits && s->extra && tick >= s->extra_until) { s->extra--; s->extra_until = tick + 180; }
     unsigned now = ls_delay(s, tick), want = ls_wanted_delay(s) + s->extra;
+    if (want < s->min_delay) want = s->min_delay;
     if (want > LS_MAX_DELAY) want = LS_MAX_DELAY;
     /* the change reaches the joiner before it samples that frame: it is at
      * most `now` frames past me, and the packet takes a round trip */
