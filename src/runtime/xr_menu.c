@@ -183,14 +183,34 @@ void xm_paint_modes(unsigned char *img, const char *title, const XmItem *items, 
             text(img, x1 - 24 - text_w(items[2].value), y0 + (WIDE_BH - FONT_H) / 2, items[2].value, white);
         } else text2(img, x0 + ((x1 - x0) - 2 * text_w(l)) / 2, y0 + (WIDE_BH - 2 * FONT_H) / 2, l, white);
     }
+    static const unsigned char red[3] = { 255, 120, 110 }, ink[3] = { 24, 20, 12 },
+                               pill[4] = { 30, 36, 44, 255 }, pill_edge[4] = { 78, 88, 100, 255 },
+                               prim[4] = { 232, 182, 70, 255 }, prim_hi[4] = { 255, 214, 120, 255 };
     for (int i = first; i < n && i < cap; i++) {
-        int y = top + 8 + (i - first) * ROW_H;
+        const int y = top + 8 + (i - first) * ROW_H, st = items[i].style;
+        if (st == XM_ROW_HEADING) {         /* a section's name: small, grey, capitals; no button */
+            char up[48]; size_t k = 0;
+            for (const char *s = items[i].label; *s && k < sizeof up - 1; s++) up[k++] = (char)(*s >= 'a' && *s <= 'z' ? *s - 32 : *s);
+            up[k] = 0;
+            text(img, MARGIN, y + 2, up, grey);
+            continue;
+        }
+        if (st == XM_ROW_PRIMARY) {         /* the page's main action: a gold bar */
+            fill(img, MARGIN - 8, y + 1, XM_W - MARGIN + 8, y + ROW_H - 3, i == hover ? prim_hi : prim);
+            text(img, (XM_W - text_w(items[i].label)) / 2, y + 1, items[i].label, ink);
+            continue;
+        }
         if (i == hover) fill(img, 8, y, XM_W - 8, y + ROW_H - 2, hi);
         else fill(img, MARGIN, y + ROW_H - 2, XM_W - MARGIN, y + ROW_H - 1, line);
-        int action = !items[i].value[0];
-        text(img, MARGIN, y + 1, items[i].label, action ? gold : white);
-        if (!action) text(img, XM_W - MARGIN - text_w(items[i].value), y + 1, items[i].value, green);
+        const int action = !items[i].value[0];
+        text(img, MARGIN, y + 1, items[i].label, st == XM_ROW_DANGER ? red : white);
+        if (!action) {                      /* the value in a pill */
+            const int tw = text_w(items[i].value), x1 = XM_W - MARGIN, x0 = x1 - tw - 20;
+            if (i != hover) { fill(img, x0, y + 2, x1, y + ROW_H - 4, pill); frame(img, x0, y + 2, x1, y + ROW_H - 4, 2, pill_edge); }
+            text(img, x0 + 10, y + 1, items[i].value, st == XM_ROW_DANGER ? red : green);
+        }
     }
+    (void)gold;
     if (hint) text(img, MARGIN, XM_H - FONT_H - 10, hint, grey);
 }
 int xm_row_at_modes(float u, float v, int n)

@@ -91,7 +91,7 @@ int xr_settings_screen_size_from(float distance);
  * xr_settings_vt3_defaults. (The stands' stretch,
  * "immersive.stand_y", is gone: an old file's key is ignored and not written back.) */
 #define LG_XR_SETTINGS_DEFAULT {1.0f,3.0f,15.0f,LG_XR_NATIVE_HEIGHT,LG_XR_NATIVE_WIDTH,120,0,LASER_ON,1,0,1,1,0,0,1,3,1,1, \
-                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT,-1,0}
+                                0,1024,1,0,0,0,200,50,LG_SKY_STADIUM,2048,10,0,1,0,1,0,LG_XR_SAVE_NAME_DEFAULT,-1,0,0}
 /* Save progress's record name (save_name): Virtua Tennis 3's name entry
  * takes up to 10 characters; letters and digits only (the font's, and one
  * vr.cfg token) */

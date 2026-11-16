@@ -463,7 +463,9 @@ static int menu_pinned_xp(int i)
 static void menu_items(XmItem *it)
 {
     XmItem all[XP_COUNT], wall[XW_COUNT];
+    memset(all, 0, sizeof all); memset(wall, 0, sizeof wall);
     xp_items(&menu,&cfg,gun_hand,stereo_hud_is_head_locked(),running_resolution,running_width,all);
+    all[XP_RESET].style = XM_ROW_DANGER;        /* destructive: red */
     menu_rows();
     if (g_world_capable) xw_items(&wpanel, &cfg, wall);
     if (menu_pinned_xp(XP_OVERLAYS)) snprintf(all[XP_OVERLAYS].value, 40, "%s (env.txt)", world_mode_overlays() ? "Shown" : "Hidden");

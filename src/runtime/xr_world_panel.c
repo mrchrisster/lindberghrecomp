@@ -58,7 +58,9 @@ static int wm_key(int item)
 /* the page's mode: 0 Classic, 1 Immersive, -1 the main page */
 static int page_mode(const XwState *w)
 {
-    return w->page == XW_PAGE_CLASSIC ? 0 : w->page == XW_PAGE_IMMERSIVE ? 1 : -1;
+    if (w->page == XW_PAGE_CLASSIC || w->page == XW_PAGE_FINE_CLASSIC) return 0;
+    if (w->page == XW_PAGE_IMMERSIVE || w->page == XW_PAGE_FINE_IMMERSIVE) return 1;
+    return w->page == XW_PAGE_MAIN ? w->running : -1;      /* the main page's Quick rows: the running mode's */
 }
 /* pinned for this row: its env variable is set and the row is the running mode's */
 static int pinned(const XwState *w, int item)
@@ -79,17 +81,30 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
     rows[n++] = XW_ROW(XW_MODE_CLASSIC);        /* the mode buttons, first on every page */
     rows[n++] = XW_ROW(XW_MODE_VR);
     if (w->page == XW_PAGE_MAIN && w->vs_able) rows[n++] = XW_ROW(XW_VERSUS);   /* the main page: Versus, a wide button under them */
+    const int vs_in = w->vs_phase >= 1 && w->vs_phase <= 3;
     switch (w->page) {
-    case XW_PAGE_CLASSIC: {
-        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS),
-                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_MSAA), XW_ROW(XW_ANISO), XW_ROW(XW_RESTORE), XP_CLOSE };
-        for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
+    case XW_PAGE_CLASSIC: case XW_PAGE_IMMERSIVE: {     /* Settings: the everyday ones, then the rest one level down */
+        const int im = w->page == XW_PAGE_IMMERSIVE;
+        rows[n++] = XW_ROW(XW_BACK);
+        rows[n++] = XW_ROW(XW_H_GAME);
+        rows[n++] = XW_ROW(XW_LANGUAGE);
+        rows[n++] = XW_ROW(XW_SAVE);
+        rows[n++] = XP_COINS;
+        if (!im) rows[n++] = XP_SCREEN;
+        rows[n++] = XW_ROW(XW_H_PICTURE);
+        rows[n++] = XP_RATE;
+        rows[n++] = XW_ROW(XW_FINE);
+        rows[n++] = XW_ROW(XW_H_RESET);
+        rows[n++] = XW_ROW(XW_RESTORE);
+        rows[n++] = XW_ROW(XW_RESET_SAVE);
+        rows[n++] = XP_RESET;
+        rows[n++] = XP_CLOSE;
         break; }
-    case XW_PAGE_IMMERSIVE: {
-        static const int r[] = { XW_ROW(XW_BACK), XW_ROW(XW_HEIGHT),
-                                 XW_ROW(XW_REPLAYS), XW_ROW(XW_OVERLAYS), XW_ROW(XW_SKY),
-                                 XW_ROW(XW_SAVE), XW_ROW(XW_RESET_SAVE), XW_ROW(XW_SHADOW), XW_ROW(XW_MSAA), XW_ROW(XW_ANISO), XW_ROW(XW_RESTORE), XP_CLOSE };
-        for (size_t i = 0; i < sizeof r / sizeof *r; i++) rows[n++] = r[i];
+    case XW_PAGE_FINE_CLASSIC: case XW_PAGE_FINE_IMMERSIVE: {
+        static const int r[] = { XW_ROW(XW_BACK), XP_RES, XP_FOVEATION, XW_ROW(XW_MSAA), XW_ROW(XW_ANISO), XW_ROW(XW_SHADOW),
+                                 XW_ROW(XW_SKY), XW_ROW(XW_OVERLAYS), XP_HUD, XP_STATS, XP_TEST, XP_SERVICE, XP_CLOSE };
+        for (size_t i = 0; i < sizeof r / sizeof *r; i++)
+            if (r[i] != XW_ROW(XW_SKY) || w->page == XW_PAGE_FINE_IMMERSIVE) rows[n++] = r[i];
         break; }
     case XW_PAGE_VERSUS:
         if (w->vs_starting) {       /* the code, before the restart */
@@ -97,32 +112,40 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
             rows[n++] = XW_ROW(XW_VS_STATUS);
             break;
         }
-        if (w->vs_online && !(w->vs_phase >= 1 && w->vs_phase <= 3)) rows[n++] = XW_ROW(XW_VS_HOST_NET);   /* first: the usual choice */
-        if (!(w->vs_phase >= 1 && w->vs_phase <= 3)) rows[n++] = XW_ROW(XW_VS_VOICE);    /* for the next match */
         rows[n++] = XW_ROW(XW_BACK);
-        if (w->vs_phase == 1 || w->vs_phase == 2 || w->vs_phase == 3) {
+        if (vs_in) {                /* in a session: how it goes, the mic, leave */
+            rows[n++] = XW_ROW(XW_H_MATCH);
             rows[n++] = XW_ROW(XW_VS_STATUS);
             if (w->vs_net && w->vs_is_host && w->vs_code[0]) rows[n++] = XW_ROW(XW_VS_CODE);
             if (w->vs_phase == 3 && w->vs_voice) rows[n++] = XW_ROW(XW_VS_MIC);
             rows[n++] = XW_ROW(XW_VS_LEAVE);
         } else {
             if (w->vs_phase == 4) rows[n++] = XW_ROW(XW_VS_STATUS);
-            rows[n++] = XW_ROW(XW_VS_HOST);
-            for (int i = 0; i < w->vs_n && i < XW_VS_HOSTS; i++) rows[n++] = XW_ROW(XW_VS_JOIN0 + i);
-            if (!w->vs_n) rows[n++] = XW_ROW(XW_VS_SEARCH);
-            if (w->vs_online) {
+            if (w->vs_online) {     /* online first: the usual choice */
+                rows[n++] = XW_ROW(XW_VS_HOST_NET);
+                rows[n++] = XW_ROW(XW_H_JOIN);
                 for (int i = 0; i < 4; i++) rows[n++] = XW_ROW(XW_VS_DIG0 + i);
                 rows[n++] = XW_ROW(XW_VS_JOIN_NET);
             }
+            rows[n++] = XW_ROW(XW_H_WIFI);
+            rows[n++] = XW_ROW(XW_VS_HOST);
+            const int max = w->vs_online ? 2 : XW_VS_HOSTS;
+            for (int i = 0; i < w->vs_n && i < max; i++) rows[n++] = XW_ROW(XW_VS_JOIN0 + i);
+            if (!w->vs_n) rows[n++] = XW_ROW(XW_VS_SEARCH);
+            rows[n++] = XW_ROW(XW_H_OPTIONS);
+            rows[n++] = XW_ROW(XW_VS_VOICE);
         }
         rows[n++] = XP_CLOSE;
         break;
-    default:
+    default:                        /* Main: what a player reaches for while playing */
         if (!w->live && cfg->world_mode != w->running && !pinned(w, XW_MODE)) rows[n++] = XW_ROW(XW_RESTART);
+        rows[n++] = XW_ROW(XW_H_QUICK);
+        rows[n++] = XP_RECENTRE;
+        if (w->running) rows[n++] = XW_ROW(XW_HEIGHT); else rows[n++] = XP_SCREEN;
+        rows[n++] = XW_ROW(XW_REPLAYS);
+        if (!cfg->auto_coins) rows[n++] = XP_COIN;
         rows[n++] = XW_ROW(XW_ADVANCED);
-        rows[n++] = XW_ROW(XW_LANGUAGE);
-        for (int i = 0; i < XP_COUNT; i++)
-            if (i != XP_OVERLAYS && i != XP_REPLAYS) rows[n++] = i;
+        rows[n++] = XP_CLOSE;
         break;
     }
     return n;
@@ -150,7 +173,7 @@ static void shadow(char *s, int size)
 
 void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
 {
-    for (int i = 0; i < XW_COUNT; i++) { it[i].label = ""; it[i].value[0] = 0; }
+    for (int i = 0; i < XW_COUNT; i++) { it[i].label = ""; it[i].value[0] = 0; it[i].style = XM_ROW_PLAIN; }
     const int im = page_mode(w) == 1;
     it[XW_MODE].label = "Mode";
     {
@@ -162,7 +185,15 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
         snprintf(it[m ? XW_MODE_VR : XW_MODE_CLASSIC].value, 40, "selected");
     }
     it[XW_RESTART].label = cfg->world_mode ? "Restart now in VR mode" : "Restart now in Classic mode";
-    it[XW_ADVANCED].label = cfg->world_mode ? "Advanced settings (VR) >" : "Advanced settings (Classic) >";
+    it[XW_ADVANCED].label = "Settings  >";
+    it[XW_FINE].label = "Fine tuning  >";
+    {   static const struct { int id; const char *l; } h[] = { { XW_H_QUICK, "Quick" }, { XW_H_GAME, "Game" }, { XW_H_PICTURE, "Picture" },
+            { XW_H_RESET, "Reset" }, { XW_H_JOIN, "Join an online match" }, { XW_H_WIFI, "Same Wi-Fi" }, { XW_H_OPTIONS, "Options" }, { XW_H_MATCH, "This match" } };
+        for (size_t k = 0; k < sizeof h / sizeof *h; k++) { it[h[k].id].label = h[k].l; it[h[k].id].style = XM_ROW_HEADING; } }
+    it[XW_RESTART].style = XM_ROW_PRIMARY;
+    it[XW_VS_HOST_NET].style = XM_ROW_PRIMARY;
+    it[XW_RESET_SAVE].style = XM_ROW_DANGER;
+    it[XW_VS_LEAVE].style = XM_ROW_DANGER;
     it[XW_BACK].label = "< Back";
     it[XW_DOLLY].label = "Camera closer";
     it[XW_STEPBACK].label = "Step back";
@@ -206,14 +237,14 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     if (w->vs_phase == 3) snprintf(it[XW_VERSUS].value, 40, "Playing");
     else if (w->vs_phase == 1) snprintf(it[XW_VERSUS].value, 40, "Waiting for player 2");
     else if (w->vs_phase == 2) snprintf(it[XW_VERSUS].value, 40, "Joining");
-    it[XW_VS_HOST].label = "Host a match here (same Wi-Fi)";
-    it[XW_VS_HOST_NET].label = "Host an online match (gives a room code)";     /* an action: yellow */
+    it[XW_VS_HOST].label = "Host a match here";
+    it[XW_VS_HOST_NET].label = "Host an online match";     /* the page's main action: a gold bar */
     it[XW_VS_CODE].label = "Room code - tell player 2";
     snprintf(it[XW_VS_CODE].value, 40, "%s", w->vs_code);
-    {   static const char *const dl[4] = { "Room code, 1st digit", "Room code, 2nd digit", "Room code, 3rd digit", "Room code, 4th digit" };
-        for (int i = 0; i < 4; i++) { it[XW_VS_DIG0 + i].label = dl[i]; snprintf(it[XW_VS_DIG0 + i].value, 40, "%d  (pull: next)", w->vs_digits[i] % 10); } }
-    it[XW_VS_JOIN_NET].label = "Join the online room";
-    snprintf(it[XW_VS_JOIN_NET].value, 40, "%d%d%d%d", w->vs_digits[0] % 10, w->vs_digits[1] % 10, w->vs_digits[2] % 10, w->vs_digits[3] % 10);
+    {   static const char *const dl[4] = { "Room code, digit 1", "Room code, digit 2", "Room code, digit 3", "Room code, digit 4" };
+        for (int i = 0; i < 4; i++) { it[XW_VS_DIG0 + i].label = dl[i]; snprintf(it[XW_VS_DIG0 + i].value, 40, "%d", w->vs_digits[i] % 10); } }
+    {   char code[8]; snprintf(code, sizeof code, "%d%d%d%d", w->vs_digits[0] % 10, w->vs_digits[1] % 10, w->vs_digits[2] % 10, w->vs_digits[3] % 10);
+        static char jl[40]; snprintf(jl, sizeof jl, "Join room %s  >", code); it[XW_VS_JOIN_NET].label = jl; }
     for (int i = 0; i < XW_VS_HOSTS; i++) {
         it[XW_VS_JOIN0 + i].label = i < w->vs_n ? w->vs_name[i] : "";
         if (i < w->vs_n) {
@@ -233,7 +264,7 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     snprintf(it[XW_VS_MIC].value, 40, "%s", !w->vs_mic ? "Muted" : w->vs_mic_ok ? "Mic on" : "No microphone");
     it[XW_VS_VOICE].label = "Voice chat";
     snprintf(it[XW_VS_VOICE].value, 40, "%s", cfg->voice_off ? "Off" : "On");
-    it[XW_VS_LEAVE].label = "Leave the match (restarts the game)";
+    it[XW_VS_LEAVE].label = "Leave the match";
     if (w->vs_leave_armed) snprintf(it[XW_VS_LEAVE].value, 40, "Pull again to leave");
     /* the page's stored values; a pinned row the run's own */
     const WmValues *e = &w->eff;
@@ -295,6 +326,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     const int leave_armed = w->vs_leave_armed; w->vs_leave_armed = 0;
     switch (item) {                     /* Versus: actions, nothing stored */
     case XW_VERSUS: w->page = XW_PAGE_VERSUS; return XW_PAGE_CHANGED;
+    case XW_H_QUICK: case XW_H_GAME: case XW_H_PICTURE: case XW_H_RESET: case XW_H_JOIN: case XW_H_WIFI: case XW_H_OPTIONS: case XW_H_MATCH: return 0;   /* headings */
     case XW_VS_HOST: w->vs_action = XW_VS_DO_HOST; return XW_VS_FX;
     case XW_VS_JOIN0: case XW_VS_JOIN1: case XW_VS_JOIN2: case XW_VS_JOIN3: {
         const int i = item - XW_VS_JOIN0;
@@ -315,8 +347,9 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     if (w->vs_phase >= 1 && w->vs_phase <= 3 &&
         (item == XW_MODE || item == XW_MODE_CLASSIC || item == XW_MODE_VR || item == XW_RESTART || item == XW_REPLAYS ||
          item == XW_CUTAWAYS || item == XW_OVERLAYS || item == XW_SAVE || item == XW_RESET_SAVE || item == XW_RESTORE)) return 0;
+    const int settings_page = w->page != XW_PAGE_MAIN && page_mode(w) >= 0;   /* Save, Reset save, anti-aliasing, Restore: not on Main */
     if (item == XW_RESET_SAVE) {        /* an action, not a setting: nothing stored, no env pin */
-        if (page_mode(w) < 0) return 0;
+        if (!settings_page) return 0;
         if (!save_armed) { w->reset_save_armed = 1; return XW_PAGE_CHANGED; }
         w->reset_save_done = 1;
         return XW_RESET_SAVE_FX | XW_PAGE_CHANGED;
@@ -331,11 +364,15 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
         const int m = item == XW_MODE_VR;
         if (c->world_mode == m) return armed ? XW_PAGE_CHANGED : 0;
         c->world_mode = m;
-        if (page_mode(w) >= 0) w->page = m ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC;   /* an Advanced page: the chosen mode's */
+        if (w->page == XW_PAGE_CLASSIC || w->page == XW_PAGE_IMMERSIVE) w->page = m ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC;   /* a Settings page: the chosen mode's */
+        else if (w->page == XW_PAGE_FINE_CLASSIC || w->page == XW_PAGE_FINE_IMMERSIVE) w->page = m ? XW_PAGE_FINE_IMMERSIVE : XW_PAGE_FINE_CLASSIC;
         fx |= XW_PAGE_CHANGED | (w->live ? XW_LIVE_CHANGED : 0); break; }
     case XW_RESTART: return XP_RESTART;
     case XW_ADVANCED: w->page = c->world_mode ? XW_PAGE_IMMERSIVE : XW_PAGE_CLASSIC; return XW_PAGE_CHANGED;
-    case XW_BACK: w->page = XW_PAGE_MAIN; return XW_PAGE_CHANGED;
+    case XW_BACK:           /* Fine tuning: back to its Settings page; the rest: Main */
+        w->page = w->page == XW_PAGE_FINE_CLASSIC ? XW_PAGE_CLASSIC : w->page == XW_PAGE_FINE_IMMERSIVE ? XW_PAGE_IMMERSIVE : XW_PAGE_MAIN;
+        return XW_PAGE_CHANGED;
+    case XW_FINE: w->page = w->page == XW_PAGE_IMMERSIVE ? XW_PAGE_FINE_IMMERSIVE : XW_PAGE_FINE_CLASSIC; return XW_PAGE_CHANGED;
     case XW_REPLAYS: case XW_CUTAWAYS:      /* Replays and reaction cams: one value, both stored (vr.cfg's two old keys) */
         if (page_mode(w) < 0) return 0;
         if (im) c->imm_replays = c->imm_cutaways = view_next(c->imm_replays);
@@ -349,9 +386,9 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_HEIGHT: if (!im) return 0; c->imm_height = next_step(c->imm_height, LG_XR_HEIGHT_STEPS, LG_XR_HEIGHT_NSTEPS); fx |= live; break;
     case XW_CARD: return 0;     /* Card reader notice: no row since 2026-11-13 (always off; classic.card_notice ignored) */
     case XW_LANGUAGE: c->language = !c->language; break;                                                     /* on restart */
-    case XW_SAVE: if (page_mode(w) < 0) return 0; c->save = !c->save; break;                               /* on restart */
+    case XW_SAVE: if (!settings_page) return 0; c->save = !c->save; break;                               /* on restart */
     case XW_MSAA: {
-        if (page_mode(w) < 0) return 0;
+        if (!settings_page) return 0;
         int *m = im ? &c->imm_msaa : &c->classic_msaa;
         *m = *m >= 4 ? 0 : *m >= 2 ? 4 : 2; break; }                                 /* Off > 2x > 4x, on restart */
     case XW_ANISO: c->aniso = next_step(xr_settings_aniso(c->aniso), LG_XR_ANISO_STEPS, LG_XR_ANISO_NSTEPS); break;   /* Standard > 4x > 8x, on restart */
@@ -360,7 +397,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
         while (k < 3 && SHADOWS[k] <= *s) k++;
         *s = SHADOWS[k % 3]; break; }     /* on restart */
     case XW_RESTORE:
-        if (page_mode(w) < 0) return 0;
+        if (!settings_page) return 0;
         if (!armed) { w->restore_armed = 1; return XW_PAGE_CHANGED; }
         xw_restore_defaults(c, im); fx |= live; break;
     default: return 0;
@@ -370,9 +407,11 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
 
 const char *xw_title(const XwState *w)
 {
-    return w->page == XW_PAGE_CLASSIC ? "Classic mode - advanced settings"
-         : w->page == XW_PAGE_IMMERSIVE ? "VR mode - advanced settings"
-         : w->page == XW_PAGE_VERSUS ? "Versus - two players, two headsets" : NULL;
+    return w->page == XW_PAGE_CLASSIC ? "Settings - Classic mode"
+         : w->page == XW_PAGE_IMMERSIVE ? "Settings - VR mode"
+         : w->page == XW_PAGE_FINE_CLASSIC ? "Fine tuning - Classic mode"
+         : w->page == XW_PAGE_FINE_IMMERSIVE ? "Fine tuning - VR mode"
+         : w->page == XW_PAGE_VERSUS ? "Versus - two players" : NULL;
 }
 
 const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg)
@@ -388,9 +427,9 @@ const char *xw_hint(const XwState *w)
     const int m = page_mode(w);
     if (w->page == XW_PAGE_VERSUS && w->vs_starting) return "Tell player 2 the room code.";
     if (w->page == XW_PAGE_VERSUS)
-        return w->vs_phase == 3 ? "Player 2: Start during a match." : "Same Wi-Fi. Joiner takes the host's mode.";
+        return w->vs_phase == 3 ? "Player 2: Start during a match." : w->vs_online ? "Pull a digit to count it up." : "Player 2 takes the host's mode.";
     if (w->vs_phase >= 1 && w->vs_phase <= 3 && m >= 0) return "In a match: mode and replays are locked.";
-    if (m >= 0 && m != w->running)
+    if (m >= 0 && m != w->running && w->page != XW_PAGE_MAIN)
         return m ? "Applies when VR mode runs." : "Applies when Classic mode runs.";
     return "Point and pull the trigger. Menu: close.";    /* 42 characters fit */
 }

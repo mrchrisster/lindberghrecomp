@@ -9,7 +9,7 @@ void xp_items(const XpPanel *menu,const LgXrSettings *cfg,int hand,int hud_locke
     static const char *const sight[] = { "Point shooting", "Red dot", "Holographic" };
     static const char *const laser[] = { "Laser and dot", "Dot only", "Off" };
     static const char *const labels[XP_COUNT] = {
-        "Sight", "Laser", "Game crosshair", "Gun model", "Gun hand", "Dual wield", "Frame rate counter", "Arcade overlays", "Replays", "Screen distance", "HUD position", "Display rate", "Resolution per eye",
+        "Sight", "Laser", "Game crosshair", "Gun model", "Gun hand", "Dual wield", "Frame rate counter", "Arcade overlays", "Replays", "Screen distance", "HUD position", "Display rate", "Resolution",
         "Foveation", "Coins", "Insert a coin", "Recentre view", "Arcade Test button (select)",
         "Arcade Service button (next)", "Reset game", "Close" };
     for (int i = 0; i < XP_COUNT; i++) { it[i].label = labels[i]; it[i].value[0] = 0; }

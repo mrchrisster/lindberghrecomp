@@ -31,15 +31,17 @@ int main(void) {
     XmItem it[XW_COUNT];
     /* main page, Classic running: the Classic / VR buttons, Advanced, Frame rate counter, the shared rows less overlays/replays; no Restart */
     n = xw_page_rows(&w, &c, r);
-    assert(r[0] == XW_ROW(XW_MODE_CLASSIC) && r[1] == XW_ROW(XW_MODE_VR) && r[2] == XW_ROW(XW_ADVANCED) && !has(r, n, XW_ROW(XW_RESTART)));
+    /* (2026-11-16, rows by importance) Quick: Recentre, Screen size (Classic) / Camera height (VR), Replays; Settings >; Close */
+    assert(r[0] == XW_ROW(XW_MODE_CLASSIC) && r[1] == XW_ROW(XW_MODE_VR) && r[2] == XW_ROW(XW_H_QUICK) && !has(r, n, XW_ROW(XW_RESTART)));
     assert(!has(r, n, XW_ROW(XW_MODE)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)) && !has(r, n, XW_ROW(XW_MSAA)));
-    assert(has(r, n, XP_STATS) && !has(r, n, XP_OVERLAYS) && !has(r, n, XP_REPLAYS) && has(r, n, XP_RESET) && r[n - 1] == XP_CLOSE);
-    assert(n <= XW_ROWS_MAX && n - 6 + 1 <= XM_MODE_ROWS);     /* minus the gun rows a lever cabinet drops, plus Restart */
+    assert(has(r, n, XP_RECENTRE) && has(r, n, XP_SCREEN) && !has(r, n, XW_ROW(XW_HEIGHT)) && has(r, n, XW_ROW(XW_REPLAYS)) && has(r, n, XW_ROW(XW_ADVANCED)));
+    assert(!has(r, n, XP_STATS) && !has(r, n, XP_RESET) && !has(r, n, XP_COIN) && !has(r, n, XW_ROW(XW_LANGUAGE)) && r[n - 1] == XP_CLOSE);
+    assert(n <= XM_MODE_ROWS);
     xw_items(&w, &c, it);
     assert(!strcmp(it[XW_MODE_CLASSIC].label, "Classic") && !strcmp(it[XW_MODE_CLASSIC].value, "selected"));
     assert(!strcmp(it[XW_MODE_VR].label, "VR") && !it[XW_MODE_VR].value[0]);
     assert(!strcmp(xw_mode_note(&w, &c), "Classic runs now"));
-    assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (Classic) >") && !it[XW_ADVANCED].value[0]);
+    assert(!strcmp(it[XW_ADVANCED].label, "Settings  >") && !it[XW_ADVANCED].value[0] && it[XW_H_QUICK].style == XM_ROW_HEADING);
     /* the chosen button again: nothing */
     assert(xw_choose(&w, &c, XW_MODE_CLASSIC) == 0 && c.world_mode == 0);
     /* VR: saved, applies on restart, Restart now shows right under the buttons */
@@ -53,10 +55,17 @@ int main(void) {
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 14 && !has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && r[3] == XW_ROW(XW_HEIGHT) && !has(r, n, XP_STATS) && has(r, n, XW_ROW(XW_MSAA)) && r[n - 1] == XP_CLOSE);
+    assert(!has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && has(r, n, XW_ROW(XW_LANGUAGE)) && has(r, n, XW_ROW(XW_SAVE)));
+    assert(has(r, n, XP_RATE) && has(r, n, XW_ROW(XW_FINE)) && has(r, n, XW_ROW(XW_RESTORE)) && has(r, n, XP_RESET) && !has(r, n, XP_STATS) && !has(r, n, XW_ROW(XW_MSAA)) && r[n - 1] == XP_CLOSE);
+    /* Fine tuning: the technical rows, per mode; Back goes to its Settings page */
+    assert(xw_choose(&w, &c, XW_FINE) == XW_PAGE_CHANGED && w.page == XW_PAGE_FINE_IMMERSIVE);
+    n = xw_page_rows(&w, &c, r);
+    assert(has(r, n, XW_ROW(XW_MSAA)) && has(r, n, XW_ROW(XW_SHADOW)) && has(r, n, XW_ROW(XW_SKY)) && has(r, n, XP_STATS) && has(r, n, XP_RES) && r[n - 1] == XP_CLOSE && n <= XM_MODE_ROWS);
+    assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
+    n = xw_page_rows(&w, &c, r);
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
     xw_items(&w, &c, it);
-    assert(!strcmp(xw_title(&w), "VR mode - advanced settings"));
+    assert(!strcmp(xw_title(&w), "Settings - VR mode"));
     assert(!strcmp(it[XW_HEIGHT].label, "Camera height") && !strcmp(it[XW_HEIGHT].value, "Medium"));   /* default Medium (T13) */
     assert(!strcmp(it[XW_REPLAYS].value, "Off") && !strcmp(it[XW_CUTAWAYS].value, "Off") && !strcmp(it[XW_OVERLAYS].value, "Hidden"));
     assert(!strcmp(it[XW_SKY].value, "Stadium") && !strcmp(it[XW_SHADOW].value, "High 2048"));
@@ -99,7 +108,7 @@ int main(void) {
     fx = xw_choose(&w, &c, XW_REPLAYS); assert((fx & XW_LIVE_CHANGED) && c.classic_cutaways == 0 && c.replays == 0);
     xw_choose(&w, &c, XW_REPLAYS); assert(c.classic_cutaways == 1 && c.replays == 1);
     n = xw_page_rows(&w, &c, r);
-    assert(n == 12 && !has(r, n, XP_STATS) && has(r, n, XW_ROW(XW_MSAA)) && !has(r, n, XW_ROW(XW_CUTAWAYS)) && !has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
+    assert(!has(r, n, XP_STATS) && !has(r, n, XW_ROW(XW_MSAA)) && has(r, n, XP_SCREEN) && !has(r, n, XW_ROW(XW_CUTAWAYS)) && !has(r, n, XW_ROW(XW_CARD)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_SKY)));
     assert(xw_choose(&w, &c, XW_SKY) == 0);             /* not a Classic row */
     w.pins = 1u << WM_REPLAYS; w.eff.replays = 0;
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Off (env.txt)"));
@@ -126,7 +135,7 @@ int main(void) {
     assert(find(&w, &c, XW_ROW(XW_RESTART)) < 0 && xw_choose(&w, &c, XW_MODE_CLASSIC) == 0 && c.world_mode == 0);
     /* Language on the main page (both modes), English by default, on restart */
     { XwState lw; memset(&lw, 0, sizeof lw); LgXrSettings lc = LG_XR_SETTINGS_DEFAULT;
-      world_mode_resolve(&lc, 1, 1, 0, &lw.eff, NULL); lw.running = 1;
+      world_mode_resolve(&lc, 1, 1, 0, &lw.eff, NULL); lw.running = 1; lw.page = XW_PAGE_IMMERSIVE;   /* on Settings since 2026-11-16 */
       int lr[XW_ROWS_MAX], ln = xw_page_rows(&lw, &lc, lr);
       assert(has(lr, ln, XW_ROW(XW_LANGUAGE)) && lc.language == 1 && lw.eff.language == 1);
       xw_items(&lw, &lc, it); assert(!strcmp(it[XW_LANGUAGE].value, "English"));
@@ -141,7 +150,7 @@ int main(void) {
       int ar[XW_ROWS_MAX], an = xw_page_rows(&aw, &ac, ar);
       assert(!has(ar, an, XW_ROW(XW_MSAA)) && ac.classic_msaa == 0 && ac.imm_msaa == 0 && aw.eff.msaa == 0);
       assert(xw_choose(&aw, &ac, XW_MSAA) == 0);
-      aw.page = XW_PAGE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(has(ar, an, XW_ROW(XW_MSAA)));
+      aw.page = XW_PAGE_FINE_CLASSIC; an = xw_page_rows(&aw, &ac, ar); assert(has(ar, an, XW_ROW(XW_MSAA)));
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].label, "Anti-aliasing") && !strcmp(it[XW_MSAA].value, "Off"));
       assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.classic_msaa == 2 && ac.imm_msaa == 0);
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (on restart)"));
@@ -150,13 +159,13 @@ int main(void) {
       aw.eff.msaa = 4; xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "4x"));
       assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.classic_msaa == 0);
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "Off (on restart)"));
-      aw.page = XW_PAGE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(has(ar, an, XW_ROW(XW_MSAA)));
+      aw.page = XW_PAGE_FINE_IMMERSIVE; an = xw_page_rows(&aw, &ac, ar); assert(has(ar, an, XW_ROW(XW_MSAA)));
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "Off"));   /* non-running mode: no "(on restart)" */
       assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.imm_msaa == 2 && ac.classic_msaa == 0);
       aw.pins = 1u << WM_MSAA; aw.eff.msaa = 2;
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x"));    /* pin is the running mode's only */
       assert(xw_choose(&aw, &ac, XW_MSAA) == XP_SAVE && ac.imm_msaa == 4);
-      aw.page = XW_PAGE_CLASSIC;
+      aw.page = XW_PAGE_FINE_CLASSIC;
       xw_items(&aw, &ac, it); assert(!strcmp(it[XW_MSAA].value, "2x (env.txt)"));
       assert(xw_choose(&aw, &ac, XW_MSAA) == 0 && ac.classic_msaa == 0); }
     /* Save progress on both Advanced pages (one value), On by default (T21), on restart; not on the main page (T16) */
@@ -181,7 +190,7 @@ int main(void) {
       assert(!has(rr, rn, XW_ROW(XW_RESET_SAVE)));
       for (int pg = XW_PAGE_CLASSIC; pg <= XW_PAGE_IMMERSIVE; pg++) {
           rw.page = pg; rn = xw_page_rows(&rw, &rc, rr);
-          assert(find(&rw, &rc, XW_ROW(XW_RESET_SAVE)) == find(&rw, &rc, XW_ROW(XW_SAVE)) + 1);
+          assert(find(&rw, &rc, XW_ROW(XW_RESET_SAVE)) > find(&rw, &rc, XW_ROW(XW_SAVE)));
           assert(rn <= XM_MODE_ROWS);
           rw.reset_save_done = 0;
           xw_items(&rw, &rc, it); assert(!strcmp(it[XW_RESET_SAVE].label, "Reset save") && !it[XW_RESET_SAVE].value[0]);
@@ -203,11 +212,11 @@ int main(void) {
       world_mode_resolve(&tc, 0, 1, 0, &tw.eff, NULL);
       int tr[XW_ROWS_MAX], tn = xw_page_rows(&tw, &tc, tr);
       assert(!has(tr, tn, XW_ROW(XW_ANISO)) && tc.aniso == 0 && tw.eff.aniso == 0);
-      tw.page = XW_PAGE_CLASSIC; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
+      tw.page = XW_PAGE_FINE_CLASSIC; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].label, "Texture filtering") && !strcmp(it[XW_ANISO].value, "Standard"));
       assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 4);
       xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 4x (on restart)"));
-      tw.page = XW_PAGE_IMMERSIVE; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
+      tw.page = XW_PAGE_FINE_IMMERSIVE; tn = xw_page_rows(&tw, &tc, tr); assert(has(tr, tn, XW_ROW(XW_ANISO)));
       assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 8);
       tw.eff.aniso = 8; xw_items(&tw, &tc, it); assert(!strcmp(it[XW_ANISO].value, "Sharp 8x"));
       assert(xw_choose(&tw, &tc, XW_ANISO) == XP_SAVE && tc.aniso == 0);
@@ -239,8 +248,8 @@ int main(void) {
         fx = xw_choose(&l, &lc, XW_MODE);
         assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && (fx & XW_LIVE_CHANGED) && lc.world_mode == 1);
         xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "VR (3D world)"));
-        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_ADVANCED)) == 2);
-        assert(!strcmp(it[XW_ADVANCED].label, "Advanced settings (VR) >"));
+        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_ADVANCED)) > 2);
+        assert(!strcmp(it[XW_ADVANCED].label, "Settings  >"));
         fx = xw_choose(&l, &lc, XW_MODE);
         assert((fx & XW_LIVE_CHANGED) && lc.world_mode == 0);
         xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "Classic (2D screen)"));

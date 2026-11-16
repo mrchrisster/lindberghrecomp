@@ -21,13 +21,21 @@ enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPL
        XW_VERSUS, XW_VS_HOST, XW_VS_JOIN0, XW_VS_JOIN1, XW_VS_JOIN2, XW_VS_JOIN3, XW_VS_STATUS, XW_VS_LEAVE, XW_VS_SEARCH,
        XW_VS_HOST_NET, XW_VS_CODE, XW_VS_DIG0, XW_VS_DIG1, XW_VS_DIG2, XW_VS_DIG3, XW_VS_JOIN_NET,
        XW_VS_MIC, XW_VS_VOICE,
+       XW_FINE,             /* Settings' "Fine tuning >" (the technical rows, a page of their own) */
+       XW_H_QUICK, XW_H_GAME, XW_H_PICTURE, XW_H_RESET, XW_H_JOIN, XW_H_WIFI, XW_H_OPTIONS, XW_H_MATCH,   /* section headings: no buttons */
        XW_COUNT };
 #define XW_VS_HOSTS 4
 /* the main page's Language; both Advanced pages' Anti-aliasing (per mode),
  * Save progress and Texture filtering (one value each for both modes) - all
  * on restart. Reset save (both Advanced pages, below Save progress): pull
  * twice, like Restore defaults - returns XW_RESET_SAVE */
-enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGE_VERSUS, XW_PAGES };
+/* Pages (2026-11-16, rows by importance): Main - the mode buttons, Versus,
+ * Quick (Recentre, Screen size or Camera height, Replays, Insert a coin),
+ * Settings >; Settings (the saved mode's: XW_PAGE_CLASSIC / _IMMERSIVE) -
+ * Game, Picture (Display rate, Fine tuning >), Reset; Fine tuning (per mode)
+ * - resolution, foveation, anti-aliasing, textures, shadows, sky, overlays,
+ * the frame rate counter. */
+enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGE_VERSUS, XW_PAGE_FINE_CLASSIC, XW_PAGE_FINE_IMMERSIVE, XW_PAGES };
 /* Versus (netplay, two players on two machines): the main page's "Versus -
  * two players >" opens a page with Host a match, the hosts found on the
  * network (Join), and in a session its status and Leave. Choosing one sets

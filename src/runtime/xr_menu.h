@@ -13,9 +13,15 @@ extern "C" {
 #define XM_H 860                /* title, XM_ROWS rows of 36 and the hint */
 #define XM_ROWS 21
 
+/* a row's look (xm_paint_modes): a plain row (a setting with its value in
+ * a pill, or an action without one), a section heading (grey capitals, not
+ * a button), a destructive action (red) or the page's main action (a gold
+ * bar) */
+enum { XM_ROW_PLAIN, XM_ROW_HEADING, XM_ROW_DANGER, XM_ROW_PRIMARY };
 typedef struct {
     const char *label;
     char value[40];             /* "" for an action */
+    int style;                  /* XM_ROW_ (0: plain) */
 } XmItem;
 
 /* Paints the panel into rgba (XM_W x XM_H x 4): title, the items with their
