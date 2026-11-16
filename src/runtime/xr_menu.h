@@ -17,7 +17,11 @@ extern "C" {
  * a pill, or an action without one), a section heading (grey capitals, not
  * a button), a destructive action (red) or the page's main action (a gold
  * bar) */
-enum { XM_ROW_PLAIN, XM_ROW_HEADING, XM_ROW_DANGER, XM_ROW_PRIMARY };
+enum { XM_ROW_PLAIN, XM_ROW_HEADING, XM_ROW_DANGER, XM_ROW_PRIMARY,
+       XM_ROW_TAB,      /* xm_paint_tabs: a tab in the bar under the title (value not empty: the open one) */
+       XM_ROW_MODE,     /* a big mode button, side by side with the next (value not empty: chosen) */
+       XM_ROW_TILE,     /* a big tile in a row of them: value large, label under it */
+       XM_ROW_DIGIT };  /* a digit box in one row of them (the first one's label on the left) */
 typedef struct {
     const char *label;
     char value[40];             /* "" for an action */
@@ -64,6 +68,12 @@ void xm_modes_wide(int on);
 #define XM_CODE_W 768
 #define XM_CODE_H 320
 void xm_paint_code(unsigned char *rgba, const char *title, const char *code, const char *line);
+/* The tabbed panel (Virtua Tennis 3, 2026-11-16): items laid out by their
+ * style - consecutive TAB, MODE, TILE and DIGIT items share a band - with
+ * `note` under the mode buttons and `hint` at the bottom. xm_hit_tabs: the
+ * item under u, v (0..1 from the top left) as last painted, -1 for none. */
+void xm_paint_tabs(unsigned char *rgba, const char *title, const XmItem *items, int n, int hover, const char *note, const char *hint);
+int  xm_hit_tabs(float u, float v);
 /* voice chat: a small speaker with sound waves, XM_ICON x XM_ICON x 4, on a
  * transparent background (alpha) */
 #define XM_ICON 96

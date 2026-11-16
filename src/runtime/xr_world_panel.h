@@ -22,6 +22,7 @@ enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPL
        XW_VS_HOST_NET, XW_VS_CODE, XW_VS_DIG0, XW_VS_DIG1, XW_VS_DIG2, XW_VS_DIG3, XW_VS_JOIN_NET,
        XW_VS_MIC, XW_VS_VOICE,
        XW_FINE,             /* Settings' "Fine tuning >" (the technical rows, a page of their own) */
+       XW_TAB_PLAY, XW_TAB_VERSUS, XW_TAB_SETTINGS,   /* the tab bar (xm_paint_tabs) */
        XW_H_QUICK, XW_H_GAME, XW_H_PICTURE, XW_H_RESET, XW_H_JOIN, XW_H_WIFI, XW_H_OPTIONS, XW_H_MATCH,   /* section headings: no buttons */
        XW_COUNT };
 #define XW_VS_HOSTS 4
@@ -84,6 +85,9 @@ typedef struct {
  * (on the Advanced pages here): the host still leaves out rows its game has
  * no use for. */
 int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows);
+/* A row's look on this page when it differs from its item's own (the
+ * shared XP_ rows: Play's tiles and its Resume bar): XM_ROW_, or -1 */
+int xw_row_style(const XwState *w, int row);
 /* The line under the mode buttons: which mode runs, and whether the choice
  * waits for a restart (or is pinned by env.txt) */
 const char *xw_mode_note(const XwState *w, const LgXrSettings *cfg);

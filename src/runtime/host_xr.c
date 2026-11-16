@@ -450,9 +450,8 @@ static void menu_rows(void)
         if ((i == XP_OVERLAYS || i == XW_ROW(XW_OVERLAYS)) && !g_arcade_overlay_hooks) continue;
         if ((i == XP_REPLAYS || i == XW_ROW(XW_REPLAYS)) && !g_replay_hook) continue;
         if (i == XW_ROW(XW_CUTAWAYS) && !g_cutaway_hook) continue;
-        if (menu_n < (g_world_capable ? (menu_n > 2 && menu_ids[2] == XW_ROW(XW_VERSUS) ? XM_WIDE_ROWS + 1 : XM_MODE_ROWS) : XM_ROWS)) menu_ids[menu_n++] = i;
+        if (menu_n < (g_world_capable ? 48 : XM_ROWS)) menu_ids[menu_n++] = i;     /* the tabbed panel lays out what fits */
     }
-    xm_modes_wide(g_world_capable && menu_n > 2 && menu_ids[2] == XW_ROW(XW_VERSUS));    /* Versus: the wide button under Classic / VR */
 }
 /* a run's env variable pins Arcade overlays / Replays (games without pages):
  * the row shows the run's value and ignores clicks */
@@ -470,7 +469,14 @@ static void menu_items(XmItem *it)
     if (g_world_capable) xw_items(&wpanel, &cfg, wall);
     if (menu_pinned_xp(XP_OVERLAYS)) snprintf(all[XP_OVERLAYS].value, 40, "%s (env.txt)", world_mode_overlays() ? "Shown" : "Hidden");
     if (menu_pinned_xp(XP_REPLAYS)) snprintf(all[XP_REPLAYS].value, 40, "%s (env.txt)", world_mode_replays() ? "On" : "Off");
-    for (int r = 0; r < menu_n; r++) it[r] = menu_ids[r] < XP_COUNT ? all[menu_ids[r]] : wall[menu_ids[r] - XP_COUNT];
+    for (int r = 0; r < menu_n; r++) {
+        it[r] = menu_ids[r] < XP_COUNT ? all[menu_ids[r]] : wall[menu_ids[r] - XP_COUNT];
+        if (g_world_capable) {      /* Play's tiles and its Resume bar */
+            const int st = xw_row_style(&wpanel, menu_ids[r]);
+            if (st >= 0) it[r].style = st;
+            if (menu_ids[r] == XP_CLOSE && st == XM_ROW_PRIMARY) it[r].label = "Resume";
+        }
+    }
 }
 
 /* The arcade's reset: the game starts again from its boot, as a new process
@@ -543,7 +549,7 @@ static void menu_paint(void)
     if (!wt) snprintf(title, sizeof title, "%s - settings", app_title());
     /* (the hint: 42 characters fit the panel's width) */
     if (g_world_capable)    /* the Classic / VR buttons on top (the pages' first two rows) */
-        xm_paint_modes(img, title, it, menu_n, menu.hover, xw_mode_note(&wpanel, &cfg), xw_hint(&wpanel));
+        xm_paint_tabs(img, title, it, menu_n, menu.hover, xw_mode_note(&wpanel, &cfg), xw_hint(&wpanel));
     else
         xm_paint(img, title, it, menu_n, menu.hover, "Point and pull the trigger. Menu: close.");
     xo_panel_upload(img, XM_W, XM_H);
@@ -840,7 +846,7 @@ static int aim_gun(int h, int pl, XrTime t, int *trig, XoFrame *x, float *gx_, f
         if (menu.open) {        /* the laser points at the panel; the game is not aimed at */
             float u, v, hit[3];
             int on = menu_hit(p, d, &u, &v, hit);
-            int row = on ? (menu_rows(), g_world_capable ? xm_row_at_modes(u, v, menu_n) : xm_row_at(u, v, menu_n)) : -1;
+            int row = on ? (menu_rows(), g_world_capable ? xm_hit_tabs(u, v) : xm_row_at(u, v, menu_n)) : -1;
             /* the panel's highlight follows the gun last on it */
             if (on && row != menu.hover) { menu.hover = row; menu.dirty = 1; }
             if (!on && pl == 0 && !cfg.dual && menu.hover != -1) { menu.hover = -1; menu.dirty = 1; }

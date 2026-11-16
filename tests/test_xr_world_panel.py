@@ -32,9 +32,11 @@ int main(void) {
     /* main page, Classic running: the Classic / VR buttons, Advanced, Frame rate counter, the shared rows less overlays/replays; no Restart */
     n = xw_page_rows(&w, &c, r);
     /* (2026-11-16, rows by importance) Quick: Recentre, Screen size (Classic) / Camera height (VR), Replays; Settings >; Close */
-    assert(r[0] == XW_ROW(XW_MODE_CLASSIC) && r[1] == XW_ROW(XW_MODE_VR) && r[2] == XW_ROW(XW_H_QUICK) && !has(r, n, XW_ROW(XW_RESTART)));
+    /* (tabs, 2026-11-16) Play: the tab bar, the mode buttons, tiles, Resume */
+    assert(r[0] == XW_ROW(XW_TAB_PLAY) && r[1] == XW_ROW(XW_TAB_SETTINGS) && r[2] == XW_ROW(XW_MODE_CLASSIC) && r[3] == XW_ROW(XW_MODE_VR) && !has(r, n, XW_ROW(XW_RESTART)));
+    assert(xw_row_style(&w, XP_RECENTRE) == XM_ROW_TILE && xw_row_style(&w, XP_CLOSE) == XM_ROW_PRIMARY);
     assert(!has(r, n, XW_ROW(XW_MODE)) && !has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)) && !has(r, n, XW_ROW(XW_MSAA)));
-    assert(has(r, n, XP_RECENTRE) && has(r, n, XP_SCREEN) && !has(r, n, XW_ROW(XW_HEIGHT)) && has(r, n, XW_ROW(XW_REPLAYS)) && has(r, n, XW_ROW(XW_ADVANCED)));
+    assert(has(r, n, XP_RECENTRE) && has(r, n, XP_SCREEN) && !has(r, n, XW_ROW(XW_HEIGHT)) && has(r, n, XW_ROW(XW_REPLAYS)) && !has(r, n, XW_ROW(XW_ADVANCED)));
     assert(!has(r, n, XP_STATS) && !has(r, n, XP_RESET) && !has(r, n, XP_COIN) && !has(r, n, XW_ROW(XW_LANGUAGE)) && r[n - 1] == XP_CLOSE);
     assert(n <= XM_MODE_ROWS);
     xw_items(&w, &c, it);
@@ -50,17 +52,17 @@ int main(void) {
     xw_items(&w, &c, it);
     assert(!strcmp(it[XW_MODE_VR].value, "selected") && !it[XW_MODE_CLASSIC].value[0]);
     assert(!strcmp(xw_mode_note(&w, &c), "Classic runs now - VR after a restart"));
-    assert(find(&w, &c, XW_ROW(XW_RESTART)) == 2 && !strcmp(it[XW_RESTART].label, "Restart now in VR mode"));
+    assert(find(&w, &c, XW_ROW(XW_RESTART)) == 4 && !strcmp(it[XW_RESTART].label, "Restart now in VR mode"));
     assert(xw_choose(&w, &c, XW_RESTART) == XP_RESTART);
     /* Advanced goes to the saved mode's page */
     assert(xw_choose(&w, &c, XW_ADVANCED) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(!has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_MODE_CLASSIC) && r[2] == XW_ROW(XW_BACK) && has(r, n, XW_ROW(XW_LANGUAGE)) && has(r, n, XW_ROW(XW_SAVE)));
-    assert(has(r, n, XP_RATE) && has(r, n, XW_ROW(XW_FINE)) && has(r, n, XW_ROW(XW_RESTORE)) && has(r, n, XP_RESET) && !has(r, n, XP_STATS) && !has(r, n, XW_ROW(XW_MSAA)) && r[n - 1] == XP_CLOSE);
+    assert(!has(r, n, XW_ROW(XW_CUTAWAYS)) && r[0] == XW_ROW(XW_TAB_PLAY) && !has(r, n, XW_ROW(XW_MODE_CLASSIC)) && has(r, n, XW_ROW(XW_LANGUAGE)) && has(r, n, XW_ROW(XW_SAVE)));
+    assert(has(r, n, XP_RATE) && has(r, n, XW_ROW(XW_FINE)) && has(r, n, XW_ROW(XW_RESTORE)) && has(r, n, XP_RESET) && !has(r, n, XP_STATS) && !has(r, n, XW_ROW(XW_MSAA)));
     /* Fine tuning: the technical rows, per mode; Back goes to its Settings page */
     assert(xw_choose(&w, &c, XW_FINE) == XW_PAGE_CHANGED && w.page == XW_PAGE_FINE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
-    assert(has(r, n, XW_ROW(XW_MSAA)) && has(r, n, XW_ROW(XW_SHADOW)) && has(r, n, XW_ROW(XW_SKY)) && has(r, n, XP_STATS) && has(r, n, XP_RES) && r[n - 1] == XP_CLOSE && n <= XM_MODE_ROWS);
+    assert(has(r, n, XW_ROW(XW_MSAA)) && has(r, n, XW_ROW(XW_SHADOW)) && has(r, n, XW_ROW(XW_SKY)) && has(r, n, XP_STATS) && has(r, n, XP_RES) && has(r, n, XW_ROW(XW_BACK)) && n <= XM_MODE_ROWS);
     assert(xw_choose(&w, &c, XW_BACK) == XW_PAGE_CHANGED && w.page == XW_PAGE_IMMERSIVE);
     n = xw_page_rows(&w, &c, r);
     assert(!has(r, n, XW_ROW(XW_DOLLY)) && !has(r, n, XW_ROW(XW_STEPBACK)));
@@ -76,7 +78,7 @@ int main(void) {
     assert(fx == XP_SAVE && c.imm_replays == 1 && c.replays == 1);
     /* VR's Replays and reaction cams (one row for replays and point cutaways, 2026-11-13): Off > Flat screen > VR > Off */
     assert(c.imm_cutaways == LG_VIEW_FLAT);             /* the row sets both */
-    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen") && !strcmp(it[XW_REPLAYS].label, "Replays and reaction cams"));
+    xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "Flat screen") && !strcmp(it[XW_REPLAYS].label, "Replays"));
     xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_CAMERA && c.imm_cutaways == LG_VIEW_CAMERA);
     xw_items(&w, &c, it); assert(!strcmp(it[XW_REPLAYS].value, "VR"));
     xw_choose(&w, &c, XW_REPLAYS); assert(c.imm_replays == LG_VIEW_OFF && c.imm_cutaways == LG_VIEW_OFF && c.replays == 1);
@@ -248,7 +250,7 @@ int main(void) {
         fx = xw_choose(&l, &lc, XW_MODE);
         assert((fx & XP_SAVE) && (fx & XW_PAGE_CHANGED) && (fx & XW_LIVE_CHANGED) && lc.world_mode == 1);
         xw_items(&l, &lc, it); assert(!strcmp(it[XW_MODE].value, "VR (3D world)"));
-        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_ADVANCED)) > 2);
+        assert(find(&l, &lc, XW_ROW(XW_RESTART)) < 0 && find(&l, &lc, XW_ROW(XW_MODE_VR)) == 3);
         assert(!strcmp(it[XW_ADVANCED].label, "Settings  >"));
         fx = xw_choose(&l, &lc, XW_MODE);
         assert((fx & XW_LIVE_CHANGED) && lc.world_mode == 0);

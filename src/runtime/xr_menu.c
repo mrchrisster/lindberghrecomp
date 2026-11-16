@@ -244,7 +244,6 @@ void xm_paint_modes(unsigned char *img, const char *title, const XmItem *items, 
         if (items[i].value[0]) {            /* the value in a score box: charcoal, a red stripe on its left */
             const int tw = text_w(items[i].value), x1 = XM_W - MARGIN, x0 = x1 - tw - 24;
             fill(img, x0, y + 3, x1, y + ROW_H - 5, pill); frame(img, x0, y + 3, x1, y + ROW_H - 5, 1, pill_edge);
-            fill(img, x0, y + 3, x0 + 5, y + ROW_H - 5, stripe);
             texti(img, x0 + 14, y + 1, items[i].value, st == XM_ROW_DANGER ? red : white, 1, 0);
         }
     }
@@ -338,4 +337,134 @@ void xm_paint_speaker(unsigned char *img)
         }
     }
     memcpy(img, out, sizeof out);
+}
+
+/* ---- the tabbed panel ---- */
+#define XT_MAX 64
+static struct { int x0, y0, x1, y1; } g_hit[XT_MAX];
+static int g_nhit;
+int xm_hit_tabs(float u, float v)
+{
+    const int x = (int)(u * XM_W), y = (int)(v * XM_H);
+    if (u < 0 || u > 1 || v < 0 || v > 1) return -1;
+    for (int i = 0; i < g_nhit; i++)
+        if (x >= g_hit[i].x0 && x < g_hit[i].x1 && y >= g_hit[i].y0 && y < g_hit[i].y1) return i;
+    return -1;
+}
+static void hit(int i, int x0, int y0, int x1, int y1)
+{
+    if (i < 0 || i >= XT_MAX) return;
+    g_hit[i].x0 = x0; g_hit[i].y0 = y0; g_hit[i].x1 = x1; g_hit[i].y1 = y1;
+    if (i >= g_nhit) g_nhit = i + 1;
+}
+static void bold(unsigned char *img, int x, int y, const char *s, const unsigned char c[3], int n)
+{
+    texti(img, x, y, s, c, n, 1); texti(img, x + 1, y, s, c, n, 1);
+}
+void xm_paint_tabs(unsigned char *img, const char *title, const XmItem *items, int n, int hover, const char *note, const char *hint)
+{
+    static const unsigned char bg_top[3] = { 30, 32, 38 }, bg_bot[3] = { 12, 13, 16 },
+                               red_a[3] = { 236, 58, 34 }, red_b[3] = { 150, 16, 10 },
+                               org_a[3] = { 255, 150, 40 }, org_b[3] = { 214, 60, 16 },
+                               box_a[3] = { 58, 62, 70 }, box_b[3] = { 30, 32, 38 },
+                               tab_a[3] = { 44, 47, 54 }, tab_b[3] = { 26, 28, 33 },
+                               hov_a[3] = { 120, 30, 22 }, hov_b[3] = { 70, 16, 12 };
+    static const unsigned char line[4] = { 52, 56, 64, 255 }, stripe[4] = { 226, 40, 24, 255 }, yel4[4] = { 255, 206, 40, 255 },
+                               boxc[4] = { 22, 23, 27, 255 }, box_edge[4] = { 70, 74, 82, 255 }, dark[4] = { 16, 17, 20, 255 };
+    static const unsigned char white[3] = { 245, 245, 245 }, grey[3] = { 150, 156, 164 },
+                               yellow[3] = { 255, 206, 40 }, red[3] = { 255, 110, 96 };
+    const int TH = 58, TAB_TOP = TH + 4, TAB_H = 56;
+    g_nhit = 0;
+    for (int i = 0; i < XT_MAX; i++) g_hit[i].x0 = g_hit[i].x1 = 0;
+    grad(img, 0, 0, XM_W, XM_H, bg_top, bg_bot, 240);
+    banner(img, 0, 0, XM_W, TH, 0, red_a, red_b);
+    fill(img, 0, TH, XM_W, TH + 4, yel4);
+    { char t[64]; upper(t, sizeof t, title); bold(img, MARGIN, (TH - FONT_H) / 2, t, white, 1); }
+    int y = TAB_TOP;
+    for (int i = 0; i < n; ) {
+        const int st = items[i].style;
+        int k = i; while (k < n && items[k].style == st && (st == XM_ROW_TAB || st == XM_ROW_MODE || st == XM_ROW_TILE || st == XM_ROW_DIGIT)) k++;
+        if (k == i) k = i + 1;
+        const int cnt = k - i;
+        if (st == XM_ROW_TAB) {             /* the tab bar */
+            fill(img, 0, y, XM_W, y + TAB_H, dark);
+            const int tw = XM_W / cnt;
+            for (int j = 0; j < cnt; j++) {
+                const XmItem *it = &items[i + j]; const int x0 = j * tw, x1 = j == cnt - 1 ? XM_W : x0 + tw, on = it->value[0] != 0;
+                if (on) grad(img, x0, y, x1, y + TAB_H, tab_a, tab_b, 255);
+                if (on) fill(img, x0 + 10, y + TAB_H - 5, x1 - 10, y + TAB_H, yel4);
+                char l[32]; upper(l, sizeof l, it->label);
+                bold(img, x0 + (x1 - x0 - text_w(l)) / 2, y + (TAB_H - 5 - FONT_H) / 2, l, i + j == hover ? yellow : on ? white : grey, 1);
+                hit(i + j, x0, y, x1, y + TAB_H);
+            }
+            y += TAB_H + 14;
+        } else if (st == XM_ROW_MODE) {     /* Classic / VR */
+            const int gap = 20, bw = (XM_W - 2 * MARGIN - gap * (cnt - 1)) / cnt, h = 80;
+            for (int j = 0; j < cnt; j++) {
+                const XmItem *it = &items[i + j]; const int x0 = MARGIN + j * (bw + gap), x1 = x0 + bw, on = it->value[0] != 0;
+                if (on) banner(img, x0, y, x1, y + h, 0, red_a, red_b); else grad(img, x0, y, x1, y + h, box_a, box_b, 255);
+                if (on) frame(img, x0, y, x1, y + h, 3, yel4);
+                if (i + j == hover) frame(img, x0 + 4, y + 4, x1 - 4, y + h - 4, 3, yel4);
+                char l[32]; upper(l, sizeof l, it->label);
+                texti(img, x0 + (bw - 2 * text_w(l)) / 2, y + (h - 2 * FONT_H) / 2, l, on ? white : grey, 2, 1);
+                hit(i + j, x0, y, x1, y + h);
+            }
+            y += h + 4;
+            if (note) { texti(img, (XM_W - text_w(note)) / 2, y, note, yellow, 1, 0); y += FONT_H; }
+            y += 12;
+        } else if (st == XM_ROW_TILE) {     /* big tiles, easy to hit */
+            const int gap = 12, tw = (XM_W - 2 * MARGIN - gap * (cnt - 1)) / cnt, h = 116;
+            for (int j = 0; j < cnt; j++) {
+                const XmItem *it = &items[i + j]; const int x0 = MARGIN + j * (tw + gap), x1 = x0 + tw;
+                grad(img, x0, y, x1, y + h, box_a, box_b, 255);
+                frame(img, x0, y, x1, y + h, i + j == hover ? 3 : 1, i + j == hover ? yel4 : box_edge);
+                if (it->value[0]) {
+                    char v[40]; upper(v, sizeof v, it->value);
+                    const int big = 2 * text_w(v) <= tw - 16 ? 2 : 1;
+                    texti(img, x0 + (tw - big * text_w(v)) / 2, y + 14 + (big == 1 ? FONT_H / 2 : 0), v, white, big, 1);
+                    texti(img, x0 + (tw - text_w(it->label)) / 2, y + h - FONT_H - 8, it->label, grey, 1, 0);
+                } else texti(img, x0 + (tw - text_w(it->label)) / 2, y + (h - FONT_H) / 2, it->label, white, 1, 0);
+                hit(i + j, x0, y, x1, y + h);
+            }
+            y += h + 14;
+        } else if (st == XM_ROW_DIGIT) {    /* one row of digit boxes, its label on the left */
+            const int h = 56, bw = 56, gap = 10, x_end = XM_W - MARGIN;
+            texti(img, MARGIN, y + (h - FONT_H) / 2, items[i].label, white, 1, 0);
+            for (int j = 0; j < cnt; j++) {
+                const int x1 = x_end - (cnt - 1 - j) * (bw + gap), x0 = x1 - bw;
+                fill(img, x0, y, x1, y + h, boxc);
+                frame(img, x0, y, x1, y + h, i + j == hover ? 3 : 1, i + j == hover ? yel4 : box_edge);
+                const char *d = items[i + j].value;
+                texti(img, x0 + (bw - 2 * text_w(d)) / 2 - 4, y + (h - 2 * FONT_H) / 2 + 4, d, white, 2, 0);
+                hit(i + j, x0, y, x1, y + h);
+            }
+            y += h + 8;
+        } else if (st == XM_ROW_HEADING) {
+            char up[48]; upper(up, sizeof up, items[i].label);
+            fill(img, MARGIN, y + 9, MARGIN + 6, y + 27, stripe);
+            texti(img, MARGIN + 16, y + 1, up, yellow, 1, 1);
+            y += 36;
+        } else if (st == XM_ROW_PRIMARY) {
+            const int h = 54;
+            banner(img, MARGIN, y, XM_W - MARGIN, y + h, 16, i == hover ? org_a : red_a, i == hover ? org_b : red_b);
+            char up[48]; upper(up, sizeof up, items[i].label);
+            bold(img, (XM_W - text_w(up)) / 2, y + (h - FONT_H) / 2, up, white, 1);
+            hit(i, MARGIN, y, XM_W - MARGIN, y + h);
+            y += h + 10;
+        } else {                            /* a plain row: label, value in a box */
+            if (i == hover) { grad(img, 8, y, XM_W - 8, y + ROW_H - 2, hov_a, hov_b, 255); fill(img, 8, y, 14, y + ROW_H - 2, yel4); }
+            else fill(img, MARGIN, y + ROW_H - 2, XM_W - MARGIN, y + ROW_H - 1, line);
+            texti(img, MARGIN, y + 1, items[i].label, st == XM_ROW_DANGER ? red : white, 1, 0);
+            if (items[i].value[0]) {
+                const int tw = text_w(items[i].value), x1 = XM_W - MARGIN, x0 = x1 - tw - 20;
+                fill(img, x0, y + 3, x1, y + ROW_H - 5, boxc); frame(img, x0, y + 3, x1, y + ROW_H - 5, 1, box_edge);
+                texti(img, x0 + 10, y + 1, items[i].value, st == XM_ROW_DANGER ? red : white, 1, 0);
+            }
+            hit(i, 0, y, XM_W, y + ROW_H);
+            y += ROW_H;
+        }
+        i = k;
+        if (y > XM_H - FONT_H - 20) break;      /* no room: the rest is left out */
+    }
+    if (hint) texti(img, MARGIN, XM_H - FONT_H - 10, hint, grey, 1, 0);
 }
