@@ -387,6 +387,11 @@ static struct {
     unsigned stalls, stall_frames; double stall_ms, stall_max_ms;
     unsigned delay_changes;
     char     end_why[160];
+    /* over the Internet (LINDBERGH_NETPLAY=host@server | join@server/CODE):
+     * the meeting server, the room, the peer's public address from it, and
+     * whether the packets go through its relay */
+    int      inet, relay, peer_direct; struct sockaddr_in server; char code[5];
+    double   last_server_ms, peer_at_ms;
 } N = { .fd = -1, .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
 
 int netplay_active(void) { return N.phase == NP_RUN; }
@@ -408,11 +413,33 @@ static uint32_t sim_rnd(void) { S.rng ^= S.rng << 13; S.rng ^= S.rng >> 17; S.rn
 static double sim_unit(void) { return (sim_rnd() & 0xFFFFFF) / (double)0x1000000; }
 
 #ifdef NP_SOCKETS
+/* the meeting server's packets ("LGRV", tools/netplay_server.py) */
+#define RV_MAGIC 0x5652474Cu
+enum { RV_HOST = 1, RV_CODE = 2, RV_JOIN = 3, RV_PEER = 4, RV_RELAY = 5, RV_ERROR = 6 };
+static size_t rv_packet(uint8_t *o, int type, const char *code, const uint8_t *payload, size_t n, int role)
+{
+    o[0] = 0x4C; o[1] = 0x47; o[2] = 0x52; o[3] = 0x56; o[4] = (uint8_t)type;
+    size_t k = 5;
+    if (code) { memcpy(o + k, code, 4); k += 4; }
+    if (type == RV_RELAY) o[k++] = (uint8_t)role;
+    if (payload && n) { memcpy(o + k, payload, n); k += n; }
+    return k;
+}
+static int rv_type(const uint8_t *b, size_t n) { return n >= 5 && b[0] == 0x4C && b[1] == 0x47 && b[2] == 0x52 && b[3] == 0x56 ? b[4] : 0; }
+static void relay_send(int fd, const struct sockaddr_in *server, const char *code, int role, const uint8_t *b, size_t n)
+{
+    uint8_t o[LS_PACKET_MAX + 32];
+    if (n > LS_PACKET_MAX) return;
+    size_t k = rv_packet(o, RV_RELAY, code, b, n, role);
+    sendto(fd, o, k, 0, (const struct sockaddr *)server, sizeof *server);
+}
 static void raw_send(const uint8_t *b, size_t n)
 {
     if (N.fd < 0 || !N.have_peer) return;
+    if (N.relay) { relay_send(N.fd, &N.server, N.code, N.host ? 0 : 1, b, n); return; }
     sendto(N.fd, b, n, 0, (struct sockaddr *)&N.peer, N.peer_len);
 }
+static int g_via_relay;     /* the packet being handled came through the relay */
 /* called with N.lock held */
 static void net_send(const uint8_t *b, size_t n)
 {
@@ -470,14 +497,16 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
         if (N.phase == NP_RUN) strncat(name, " (playing)", sizeof name - strlen(name) - 1);
         if (g_adopt) g_adopt(lines, sizeof lines);
         uint8_t out[LS_PACKET_MAX]; size_t on = ls_write_settings(out, sizeof out, name, lines);
-        if (on) sendto(N.fd, out, on, 0, (const struct sockaddr *)from, flen);
+        if (on && g_via_relay) relay_send(N.fd, &N.server, N.code, 0, out, on);
+        else if (on) sendto(N.fd, out, on, 0, (const struct sockaddr *)from, flen);
         return;
     }
     if (N.phase == NP_HOSTING && type == LS_HELLO) {
         LsHello theirs; char why[512];
         if (!ls_read_hello(b, n, &theirs)) return;
         ls_compare_hello(&N.hello, &theirs, why, sizeof why);
-        memcpy(&N.peer, from, flen); N.peer_len = flen; N.have_peer = 1;
+        if (g_via_relay) { N.relay = 1; N.have_peer = 1; }
+        else { memcpy(&N.peer, from, flen); N.peer_len = flen; N.have_peer = 1; N.relay = 0; }
         uint8_t out[LS_PACKET_MAX]; size_t on;
         if (why[0]) {
             fprintf(stderr, "[net] refused a player: %s\n", why);
@@ -492,7 +521,8 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
         N.phase = NP_RUN;
         char addr[64] = "?";
         if (from->ss_family == AF_INET) inet_ntop(AF_INET, &((const struct sockaddr_in *)from)->sin_addr, addr, sizeof addr);
-        fprintf(stderr, "[net] player 2 joined from %s: lockstep from frame %u, input delay %u\n", addr, N.start, N.delay);
+        fprintf(stderr, "[net] player 2 joined from %s%s: lockstep from frame %u, input delay %u\n", g_via_relay ? "the relay" : addr,
+                N.inet && !g_via_relay ? " (direct)" : "", N.start, N.delay);
         pthread_cond_broadcast(&N.cond);
         return;
     }
@@ -507,7 +537,7 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
         N.nonce = nonce; N.delay = d; N.start = start;
         ls_init(&N.s, 0, nonce, start, d);
         N.phase = NP_RUN;
-        fprintf(stderr, "[net] joined as player 2: lockstep from frame %u, input delay %u\n", start, d);
+        fprintf(stderr, "[net] joined as player 2%s: lockstep from frame %u, input delay %u\n", N.inet ? (N.relay ? " through the relay" : " directly") : "", start, d);
         pthread_cond_broadcast(&N.cond);
         return;
     }
@@ -537,6 +567,20 @@ static void *net_thread(void *arg)
     while (!N.stop) {
         pthread_mutex_lock(&N.lock);
         double next = S.on ? sim_flush() : 1e9;
+        if (N.inet && N.host && N.phase != NP_ENDED && now_ms() - N.last_server_ms > 2000) {   /* the room stays open, the router's door to the server too */
+            uint8_t o[16]; size_t k = rv_packet(o, RV_HOST, N.code[0] ? N.code : "\0\0\0\0", NULL, 0, 0);
+            sendto(N.fd, o, k, 0, (struct sockaddr *)&N.server, sizeof N.server); N.last_server_ms = now_ms();
+        }
+        if (N.inet && !N.host && N.phase == NP_JOINING) {
+            if (!N.peer_direct && !N.relay && now_ms() - N.last_server_ms > 500) {
+                uint8_t o[16]; size_t k = rv_packet(o, RV_JOIN, N.code, NULL, 0, 0);
+                sendto(N.fd, o, k, 0, (struct sockaddr *)&N.server, sizeof N.server); N.last_server_ms = now_ms();
+            }
+            if (N.peer_direct && !N.relay && (now_ms() - N.peer_at_ms > 2500 || env_on("LINDBERGH_NETPLAY_FORCE_RELAY"))) {
+                N.relay = 1;
+                fprintf(stderr, "[net] no answer straight from the host - through the relay\n");
+            }
+        }
         if (N.phase == NP_JOINING && now_ms() - last_hello > 250) {
             uint8_t b[LS_PACKET_MAX]; size_t n = ls_write_hello(b, sizeof b, &N.hello);
             raw_send(b, n);                  /* the handshake goes straight out */
@@ -556,7 +600,28 @@ static void *net_thread(void *arg)
                 ssize_t n = recvfrom(N.fd, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
                 if (n <= 0) break;
                 pthread_mutex_lock(&N.lock);
-                handle_packet(b, (size_t)n, &from, fl);
+                int rv = N.inet ? rv_type(b, (size_t)n) : 0;
+                if (rv == RV_CODE && n >= 9 && N.host) {
+                    if (memcmp(N.code, b + 5, 4)) { memcpy(N.code, b + 5, 4); N.code[4] = 0; fprintf(stderr, "[net] room code %s\n", N.code); }
+                } else if (rv == RV_PEER && n >= 12) {
+                    struct sockaddr_in pa; memset(&pa, 0, sizeof pa); pa.sin_family = AF_INET;
+                    memcpy(&pa.sin_addr, b + 5, 4); pa.sin_port = htons((uint16_t)(b[9] | b[10] << 8));
+                    if (!N.peer_direct || memcmp(&pa, &N.peer, sizeof pa)) {
+                        char ip[32]; inet_ntop(AF_INET, &pa.sin_addr, ip, sizeof ip);
+                        fprintf(stderr, "[net] the other side is at %s:%u - trying it directly\n", ip, ntohs(pa.sin_port));
+                    }
+                    if (N.phase != NP_RUN) { memcpy(&N.peer, &pa, sizeof pa); N.peer_len = sizeof pa; N.have_peer = 1; }
+                    if (!N.peer_direct) N.peer_at_ms = now_ms();
+                    N.peer_direct = 1;
+                    uint8_t q[64]; size_t qn = ls_write_query(q, sizeof q);     /* open our router towards it */
+                    for (int k = 0; k < 3; k++) sendto(N.fd, q, qn, 0, (struct sockaddr *)&pa, sizeof pa);
+                } else if (rv == RV_RELAY && n > 10) {
+                    g_via_relay = 1;
+                    handle_packet(b + 10, (size_t)n - 10, &from, fl);
+                    g_via_relay = 0;
+                } else if (rv == RV_ERROR) {
+                    fprintf(stderr, "[net] the meeting server: %.*s\n", (int)(n - 5), (const char *)b + 5);
+                } else if (!rv) handle_packet(b, (size_t)n, &from, fl);
                 pthread_mutex_unlock(&N.lock);
             }
         }
@@ -569,13 +634,37 @@ static void *net_thread(void *arg)
 
 static int env_num(const char *k, int def) { const char *v = getenv(k); return v && *v ? atoi(v) : def; }
 
+/* "host@server[:port]" / "join@server[:port]/CODE": the meeting server
+ * (default port 47200) and the room's code (upper case) */
+static int inet_spec(const char *spec, struct sockaddr_in *server, char code[5])
+{
+    char b[200]; snprintf(b, sizeof b, "%s", spec + 5);
+    code[0] = 0;
+    char *sl = strchr(b, '/');
+    if (sl) { *sl = 0; for (int i = 0; i < 4; i++) code[i] = (char)(sl[1 + i] >= 'a' && sl[1 + i] <= 'z' ? sl[1 + i] - 32 : sl[1 + i]); code[4] = 0; }
+    int port = 47200; char *c = strrchr(b, ':');
+    if (c) { *c = 0; port = atoi(c + 1); }
+    struct addrinfo hints, *res = NULL; memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+    char ps[16]; snprintf(ps, sizeof ps, "%d", port);
+    if (getaddrinfo(b, ps, &hints, &res) || !res) return 0;
+    memcpy(server, res->ai_addr, sizeof *server); freeaddrinfo(res);
+    return 1;
+}
+/* a joiner's socket from netplay_before_start, kept for the session */
+static struct { int fd, direct, relay; struct sockaddr_in peer; } g_keep = { -1, 0, 0, { 0 } };
+
 static void np_net_init(void)
 {
     if (!g_net[0]) return;
     char spec[256]; snprintf(spec, sizeof spec, "%s", g_net);
     int port = 47100;
     char host[128] = "";
-    if (!strncmp(spec, "host", 4)) {
+    if (!strncmp(spec, "host@", 5) || !strncmp(spec, "join@", 5)) {      /* over the Internet, through a meeting server */
+        N.host = spec[0] == 'h'; N.inet = 1;
+        if (!inet_spec(spec, &N.server, N.code)) { fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: cannot find the meeting server - netplay off\n", g_net); return; }
+        port = env_num("LINDBERGH_NETPLAY_PORT", N.host ? 47100 : 0);
+    } else if (!strncmp(spec, "host", 4)) {
         N.host = 1;
         if (spec[4] == ':') port = atoi(spec + 5);
     } else if (!strncmp(spec, "join:", 5)) {
@@ -584,7 +673,7 @@ static void np_net_init(void)
         if (c) { *c = 0; port = atoi(c + 1); }
         snprintf(host, sizeof host, "%s", a);
     } else {
-        fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: want host[:port] or join:<ip>[:port] - netplay off\n", g_net);
+        fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: want host[:port], join:<ip>[:port], host@<server>[:port] or join@<server>[:port]/<code> - netplay off\n", g_net);
         return;
     }
     N.timeout_ms = env_num("LINDBERGH_NETPLAY_TIMEOUT", 10000);
@@ -604,6 +693,12 @@ static void np_net_init(void)
         fprintf(stderr, "[net] network simulator: %.0f ms delay, %.0f ms jitter, %.1f%% loss, %.1f%% reordered%s\n",
                 S.delay, S.jitter, S.loss, S.reorder, S.stall_len > 0 ? ", one stall" : "");
     }
+    if (N.inet && !N.host && g_keep.fd >= 0) {          /* the socket the settings came on: the routers know it */
+        N.fd = g_keep.fd; g_keep.fd = -1;
+        fcntl(N.fd, F_SETFL, fcntl(N.fd, F_GETFL) | O_NONBLOCK);
+        if (g_keep.direct) { memcpy(&N.peer, &g_keep.peer, sizeof g_keep.peer); N.peer_len = sizeof g_keep.peer; N.have_peer = 1; N.peer_direct = 1; N.peer_at_ms = now_ms(); }
+        if (g_keep.relay) { N.relay = 1; N.have_peer = 1; }
+    } else {
     N.fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (N.fd < 0) { fprintf(stderr, "[net] no UDP socket: %s - netplay off\n", strerror(errno)); return; }
     fcntl(N.fd, F_SETFL, fcntl(N.fd, F_GETFL) | O_NONBLOCK);
@@ -613,6 +708,7 @@ static void np_net_init(void)
     if (bind(N.fd, (struct sockaddr *)&me, sizeof me) < 0) {
         fprintf(stderr, "[net] cannot listen on UDP port %d: %s - netplay off\n", port, strerror(errno));
         close(N.fd); N.fd = -1; return;
+    }
     }
     /* the handshake */
     N.hello.proto = (uint32_t)env_num("LINDBERGH_NETPLAY_TEST_PROTO", LS_PROTO);
@@ -626,6 +722,10 @@ static void np_net_init(void)
         if (!N.nonce) N.nonce = 1;
         N.phase = NP_HOSTING;
         fprintf(stderr, "[net] hosting on UDP port %d: waiting up to %.0f s for player 2 (settings %s)\n", port, N.wait_ms / 1000, N.hello.settings);
+        if (N.inet) fprintf(stderr, "[net] asking the meeting server for a room\n");
+    } else if (N.inet) {
+        N.phase = NP_JOINING;
+        fprintf(stderr, "[net] joining room %s as player 2 (settings %s)\n", N.code, N.hello.settings);
     } else {
         struct addrinfo hints, *res = NULL; memset(&hints, 0, sizeof hints);
         hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
@@ -687,6 +787,60 @@ static void adopt_lines(const char *lines)
         fprintf(stderr, "[net] from the host: %s=%s\n", l, eq + 1);
     }
 }
+/* join@server/CODE: find the host through the meeting server (its public
+ * address; straight there, or through the relay after 2.5 s of silence),
+ * take its settings, and keep the socket for the session */
+static void before_start_inet(const char *np)
+{
+    struct sockaddr_in server; char code[5];
+    if (!inet_spec(np, &server, code) || !code[0]) { fprintf(stderr, "[net] LINDBERGH_NETPLAY=%s: want join@<server>[:port]/<code>\n", np); return; }
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    double wait = env_num("LINDBERGH_NETPLAY_WAIT", 120) * 1000.0, t0 = now_ms(), last_srv = -1e9, last_q = -1e9, peer_at = 0;
+    int direct = 0, relay = 0, errors = 0;
+    struct sockaddr_in peer; memset(&peer, 0, sizeof peer);
+    fprintf(stderr, "[net] looking for room %s (up to %.0f s)\n", code, wait / 1000);
+    for (;;) {
+        double now = now_ms();
+        if (now - t0 > wait) { fprintf(stderr, "[net] room %s: no host - its settings not taken\n", code); break; }
+        if (!direct && !relay && now - last_srv > 500) {
+            uint8_t o[16]; size_t k = rv_packet(o, RV_JOIN, code, NULL, 0, 0);
+            sendto(fd, o, k, 0, (struct sockaddr *)&server, sizeof server); last_srv = now;
+        }
+        if (direct && !relay && now - peer_at > 2500) { relay = 1; fprintf(stderr, "[net] no answer straight from the host - through the relay\n"); }
+        if ((direct || relay) && now - last_q > 250) {
+            uint8_t q[64]; size_t qn = ls_write_query(q, sizeof q);
+            if (relay) relay_send(fd, &server, code, 1, q, qn);
+            else sendto(fd, q, qn, 0, (struct sockaddr *)&peer, sizeof peer);
+            last_q = now;
+        }
+        struct pollfd p = { fd, POLLIN, 0 };
+        if (poll(&p, 1, 50) <= 0) continue;
+        uint8_t b[LS_PACKET_MAX + 64]; ssize_t n = recv(fd, b, sizeof b, 0);
+        if (n <= 0) continue;
+        int rv = rv_type(b, (size_t)n);
+        const uint8_t *pk = b; size_t pn = (size_t)n;
+        if (rv == RV_PEER && n >= 12 && !direct) {
+            peer.sin_family = AF_INET; memcpy(&peer.sin_addr, b + 5, 4); peer.sin_port = htons((uint16_t)(b[9] | b[10] << 8));
+            char ip[32]; inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
+            fprintf(stderr, "[net] room %s: the host is at %s:%u\n", code, ip, ntohs(peer.sin_port));
+            direct = 1; peer_at = now_ms();
+            if (env_on("LINDBERGH_NETPLAY_FORCE_RELAY")) { relay = 1; fprintf(stderr, "[net] the relay only (LINDBERGH_NETPLAY_FORCE_RELAY)\n"); }
+            continue;
+        }
+        if (rv == RV_ERROR) { if (errors++ < 3) fprintf(stderr, "[net] the meeting server: %.*s\n", (int)(n - 5), (const char *)b + 5); continue; }
+        if (rv == RV_RELAY && n > 10) { pk = b + 10; pn = (size_t)n - 10; }
+        else if (rv) continue;
+        char name[48], lines[440];
+        if (ls_type(pk, pn) == LS_SETTINGS && ls_read_settings(pk, pn, name, sizeof name, lines, sizeof lines)) {
+            fprintf(stderr, "[net] the host \"%s\" answered after %.0f ms (%s)\n", name, now_ms() - t0, rv == RV_RELAY ? "through the relay" : "directly");
+            adopt_lines(lines);
+            g_keep.fd = fd; g_keep.direct = direct; g_keep.relay = rv == RV_RELAY; g_keep.peer = peer;
+            return;
+        }
+    }
+    close(fd);
+}
 void netplay_before_start(void)
 {
     const char *nv = getenv("LINDBERGH_NETPLAY_NVRAM"), *np = getenv("LINDBERGH_NETPLAY");
@@ -696,7 +850,9 @@ void netplay_before_start(void)
         setenv("LINDBERGH_NVRAM", nv, 1);
         fprintf(stderr, "[net] this session's NVRAM: %s (the game's factory settings)\n", nv);
     }
-    if (strncmp(np, "join:", 5) || (getenv("LINDBERGH_NETPLAY_ADOPT") && *getenv("LINDBERGH_NETPLAY_ADOPT") == '0')) return;
+    if (getenv("LINDBERGH_NETPLAY_ADOPT") && *getenv("LINDBERGH_NETPLAY_ADOPT") == '0') return;
+    if (!strncmp(np, "join@", 5)) { before_start_inet(np); return; }
+    if (strncmp(np, "join:", 5)) return;
     char spec[256]; snprintf(spec, sizeof spec, "%s", np + 5);
     int port = 47100; char *c = strrchr(spec, ':');
     if (c) { *c = 0; port = atoi(c + 1); }
@@ -790,6 +946,7 @@ void netplay_status(NetplayStatus *st)
         st->in_sync = !N.s.desync_tick; st->hashes = N.s.hashes_compared;
     }
     snprintf(st->why, sizeof st->why, "%s", N.end_why[0] ? N.end_why : N.refused);
+    st->online = N.inet; st->relay = N.relay; snprintf(st->code, sizeof st->code, "%s", N.code);
     pthread_mutex_unlock(&N.lock);
 }
 
@@ -850,6 +1007,7 @@ static void net_tick(CabinetInput *c)
         double ms = now_ms() - t0;
         N.stalls++; N.stall_ms += ms; if (ms > N.stall_max_ms) N.stall_max_ms = ms;
         if (ms > 2) { N.stall_frames++; g_stalled = 1; }
+        if (ms > 34) ls_note_wait(&N.s);    /* over two frames: the network, not the two frame clocks' phase */
         if (ms > 100) fprintf(stderr, "[net] frame %u: waited %.0f ms for the other player\n", g_tick, ms);
     }
     if (N.phase == NP_RUN) {

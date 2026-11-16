@@ -76,7 +76,8 @@ void     netplay_add_image_rw(uint32_t lo, uint32_t hi);   /* a writable PT_LOAD
  *   netplay_status         the running session, for a status line */
 typedef struct { char ip[32]; char name[48]; int immersive; } NetplayHost;
 typedef struct { int phase;  /* 0 off, 1 hosting (waiting), 2 joining, 3 running, 4 ended */
-                 int host; unsigned delay; double rtt_ms; int in_sync; unsigned hashes; char why[160]; } NetplayStatus;
+                 int host; unsigned delay; double rtt_ms; int in_sync; unsigned hashes; char why[160];
+                 int online, relay; char code[5]; } NetplayStatus;
 void netplay_before_start(void);
 void netplay_adopt_source(void (*fn)(char *out, size_t cap));
 void netplay_scan(int on);

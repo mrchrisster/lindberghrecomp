@@ -94,12 +94,18 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         rows[n++] = XW_ROW(XW_BACK);
         if (w->vs_phase == 1 || w->vs_phase == 2 || w->vs_phase == 3) {
             rows[n++] = XW_ROW(XW_VS_STATUS);
+            if (w->vs_net && w->vs_is_host && w->vs_code[0]) rows[n++] = XW_ROW(XW_VS_CODE);
             rows[n++] = XW_ROW(XW_VS_LEAVE);
         } else {
+            if (w->vs_phase == 4) rows[n++] = XW_ROW(XW_VS_STATUS);
             rows[n++] = XW_ROW(XW_VS_HOST);
             for (int i = 0; i < w->vs_n && i < XW_VS_HOSTS; i++) rows[n++] = XW_ROW(XW_VS_JOIN0 + i);
             if (!w->vs_n) rows[n++] = XW_ROW(XW_VS_SEARCH);
-            if (w->vs_phase == 4) rows[n++] = XW_ROW(XW_VS_STATUS);
+            if (w->vs_online) {
+                rows[n++] = XW_ROW(XW_VS_HOST_NET);
+                for (int i = 0; i < 4; i++) rows[n++] = XW_ROW(XW_VS_DIG0 + i);
+                rows[n++] = XW_ROW(XW_VS_JOIN_NET);
+            }
         }
         rows[n++] = XP_CLOSE;
         break;
@@ -193,7 +199,15 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     if (w->vs_phase == 3) snprintf(it[XW_VERSUS].value, 40, "Playing");
     else if (w->vs_phase == 1) snprintf(it[XW_VERSUS].value, 40, "Waiting for player 2");
     else if (w->vs_phase == 2) snprintf(it[XW_VERSUS].value, 40, "Joining");
-    it[XW_VS_HOST].label = "Host a match (restarts the game)";
+    it[XW_VS_HOST].label = "Host a match here (same Wi-Fi)";
+    it[XW_VS_HOST_NET].label = "Host an online match";
+    snprintf(it[XW_VS_HOST_NET].value, 40, "gives a room code");
+    it[XW_VS_CODE].label = "Room code - tell player 2";
+    snprintf(it[XW_VS_CODE].value, 40, "%s", w->vs_code);
+    {   static const char *const dl[4] = { "Room code, 1st digit", "Room code, 2nd digit", "Room code, 3rd digit", "Room code, 4th digit" };
+        for (int i = 0; i < 4; i++) { it[XW_VS_DIG0 + i].label = dl[i]; snprintf(it[XW_VS_DIG0 + i].value, 40, "%d  (pull: next)", w->vs_digits[i] % 10); } }
+    it[XW_VS_JOIN_NET].label = "Join the online room";
+    snprintf(it[XW_VS_JOIN_NET].value, 40, "%d%d%d%d", w->vs_digits[0] % 10, w->vs_digits[1] % 10, w->vs_digits[2] % 10, w->vs_digits[3] % 10);
     for (int i = 0; i < XW_VS_HOSTS; i++) {
         it[XW_VS_JOIN0 + i].label = i < w->vs_n ? w->vs_name[i] : "";
         if (i < w->vs_n) {
@@ -203,8 +217,9 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     }
     it[XW_VS_SEARCH].label = "Looking for a host on this network...";
     it[XW_VS_STATUS].label = w->vs_phase == 1 ? "Waiting for player 2" : w->vs_phase == 2 ? "Joining" : w->vs_phase == 3 ? "Connected" : "Session ended";
-    if (w->vs_phase == 3) snprintf(it[XW_VS_STATUS].value, 40, "%s, %u frame%s, %.0f ms", w->vs_sync ? "in sync" : "OUT OF SYNC",
-                                   w->vs_delay, w->vs_delay == 1 ? "" : "s", w->vs_rtt);
+    if (w->vs_phase == 3) snprintf(it[XW_VS_STATUS].value, 40, "%s, %u frame%s, %.0f ms%s", w->vs_sync ? "in sync" : "OUT OF SYNC",
+                                   w->vs_delay, w->vs_delay == 1 ? "" : "s", w->vs_rtt, w->vs_net ? (w->vs_relay ? ", relay" : ", direct") : "");
+    else if (w->vs_phase == 1 && w->vs_net) snprintf(it[XW_VS_STATUS].value, 40, "%s", w->vs_code[0] ? "online room open" : "asking the server...");
     else if (w->vs_phase == 4) snprintf(it[XW_VS_STATUS].value, 40, "%.39s", w->vs_note);
     else snprintf(it[XW_VS_STATUS].value, 40, "%s", w->vs_is_host ? "host, player 1" : "player 2");
     it[XW_VS_LEAVE].label = "Leave the match (restarts the game)";
@@ -277,7 +292,11 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_VS_LEAVE:
         if (!leave_armed) { w->vs_leave_armed = 1; return XW_PAGE_CHANGED; }
         w->vs_action = XW_VS_DO_LEAVE; return XW_VS_FX;
-    case XW_VS_STATUS: case XW_VS_SEARCH: return 0;
+    case XW_VS_HOST_NET: w->vs_action = XW_VS_DO_HOST_NET; return XW_VS_FX;
+    case XW_VS_DIG0: case XW_VS_DIG1: case XW_VS_DIG2: case XW_VS_DIG3:
+        w->vs_digits[item - XW_VS_DIG0] = (w->vs_digits[item - XW_VS_DIG0] + 1) % 10; return XW_PAGE_CHANGED;
+    case XW_VS_JOIN_NET: w->vs_action = XW_VS_DO_JOIN_NET; return XW_VS_FX;
+    case XW_VS_STATUS: case XW_VS_SEARCH: case XW_VS_CODE: return 0;
     }
     /* in a session the simulation's settings stay as they are (both copies must agree) */
     if (w->vs_phase >= 1 && w->vs_phase <= 3 &&

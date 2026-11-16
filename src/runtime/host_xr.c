@@ -365,6 +365,8 @@ static void menu_world_state(void)
     wpanel.vs_phase = st.phase; wpanel.vs_is_host = st.host;
     wpanel.vs_delay = st.delay; wpanel.vs_rtt = (float)st.rtt_ms; wpanel.vs_sync = st.in_sync;
     snprintf(wpanel.vs_note, sizeof wpanel.vs_note, "%s", st.why);
+    wpanel.vs_net = st.online; wpanel.vs_relay = st.relay; snprintf(wpanel.vs_code, sizeof wpanel.vs_code, "%s", st.code);
+    {   const char *sv = getenv("LINDBERGH_NETPLAY_SERVER"); wpanel.vs_online = sv && *sv; }
     NetplayHost h[XW_VS_HOSTS];
     wpanel.vs_n = netplay_hosts(h, XW_VS_HOSTS);
     for (int i = 0; i < wpanel.vs_n; i++) {
@@ -379,15 +381,21 @@ static void menu_world_state(void)
  * session runs on the game's factory NVRAM (netplay_nvram.bin, made fresh);
  * the joiner takes the host's settings before its game starts. */
 static void reset_game(void);
-static void versus_start(int host, const char *ip)
+/* host 1: here, 2: online (a room on LINDBERGH_NETPLAY_SERVER); 0: join ip,
+ * or with code the online room */
+static void versus_start(int host, const char *ip, const char *code)
 {
+    const char *sv = getenv("LINDBERGH_NETPLAY_SERVER");
     FILE *f = fopen("../netplay.txt", "w");
     if (!f) { fprintf(stderr, "[xr] versus: cannot write ../netplay.txt\n"); return; }
-    if (host) fprintf(f, "LINDBERGH_NETPLAY=host:47100\n");
+    if (host == 2) fprintf(f, "LINDBERGH_NETPLAY=host@%s\n", sv ? sv : "");
+    else if (host) fprintf(f, "LINDBERGH_NETPLAY=host:47100\n");
+    else if (code) fprintf(f, "LINDBERGH_NETPLAY=join@%s/%s\n", sv ? sv : "", code);
     else fprintf(f, "LINDBERGH_NETPLAY=join:%s:47100\n", ip);
+    if (sv && *sv) fprintf(f, "LINDBERGH_NETPLAY_SERVER=%s\n", sv);
     fprintf(f, "LINDBERGH_NETPLAY_WAIT=600\nLINDBERGH_NETPLAY_NVRAM=netplay_nvram.bin\nLINDBERGH_VT3_SAVE=0\n");
     fclose(f);
-    fprintf(stderr, "[xr] versus: %s - the game starts again\n", host ? "hosting" : ip);
+    fprintf(stderr, "[xr] versus: %s - the game starts again\n", host == 2 ? "hosting online" : host ? "hosting" : code ? code : ip);
     netplay_scan(0);
     reset_game();
 }
@@ -568,8 +576,13 @@ static void menu_choose(int row)
                     wpanel.running ? "immersive" : "classic", cfg.world_mode != wpanel.running ? " - applies on restart" : "");
         if (effects & XW_PAGE_CHANGED) { menu.hover = -1; fprintf(stderr, "[xr] panel page %d\n", wpanel.page); }
         if (effects & XW_VS_FX) {
-            if (wpanel.vs_action == XW_VS_DO_HOST) versus_start(1, NULL);
-            else if (wpanel.vs_action == XW_VS_DO_JOIN && wpanel.vs_join < wpanel.vs_n) versus_start(0, wpanel.vs_ip[wpanel.vs_join]);
+            if (wpanel.vs_action == XW_VS_DO_HOST) versus_start(1, NULL, NULL);
+            else if (wpanel.vs_action == XW_VS_DO_HOST_NET) versus_start(2, NULL, NULL);
+            else if (wpanel.vs_action == XW_VS_DO_JOIN && wpanel.vs_join < wpanel.vs_n) versus_start(0, wpanel.vs_ip[wpanel.vs_join], NULL);
+            else if (wpanel.vs_action == XW_VS_DO_JOIN_NET) {
+                char code[5]; snprintf(code, sizeof code, "%d%d%d%d", wpanel.vs_digits[0] % 10, wpanel.vs_digits[1] % 10, wpanel.vs_digits[2] % 10, wpanel.vs_digits[3] % 10);
+                versus_start(0, NULL, code);
+            }
             else if (wpanel.vs_action == XW_VS_DO_LEAVE) { remove("../netplay.txt"); fprintf(stderr, "[xr] versus: leaving - the game starts again\n"); reset_game(); }
             wpanel.vs_action = XW_VS_NONE;
             return;

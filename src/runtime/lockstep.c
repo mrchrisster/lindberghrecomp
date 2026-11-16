@@ -498,12 +498,23 @@ unsigned ls_wanted_delay(const LsSession *s)
     return d;
 }
 
+void ls_note_wait(LsSession *s) { s->waits++; }
+
 int ls_adapt(LsSession *s, uint32_t tick)
 {
     if (!s->host || tick < s->adapt_next) return 0;
     s->adapt_next = tick + 30;
+    const unsigned waits = s->waits; s->waits = 0;
     if (s->sched_at && s->peer_sched_seen != s->sched_at && tick < s->sched_at + 120) return 0;   /* one change at a time */
-    unsigned now = ls_delay(s, tick), want = ls_wanted_delay(s);
+    /* Long waits (over two frames each, ls_note_wait) piling up - 3 in the
+     * last 30 frames: the round trip alone underestimates (bursts of loss,
+     * the relay's own hop). One frame more, kept 10 s at least, then given
+     * back one at a time. Short waits are the two frame clocks' phase - more
+     * delay does not help those. */
+    if (waits >= 3 && s->extra < 4) { s->extra++; s->extra_until = tick + 600; }
+    else if (!waits && s->extra && tick >= s->extra_until) { s->extra--; s->extra_until = tick + 180; }
+    unsigned now = ls_delay(s, tick), want = ls_wanted_delay(s) + s->extra;
+    if (want > LS_MAX_DELAY) want = LS_MAX_DELAY;
     /* the change reaches the joiner before it samples that frame: it is at
      * most `now` frames past me, and the packet takes a round trip */
     uint32_t lead = 2 * LS_MAX_DELAY + (uint32_t)ceil(s->srtt_ms / FRAME_MS) + 8;

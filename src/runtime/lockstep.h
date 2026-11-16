@@ -82,6 +82,9 @@ typedef struct {
     int      bye;                       /* the peer said goodbye: LS_BYE_* */
     /* adaptive delay (host) */
     uint32_t adapt_next, low_since;
+    unsigned waits;                     /* frames this side waited since the last adapt (ls_note_wait) */
+    unsigned extra;                     /* frames added on top of the round trip's need because of waits */
+    uint32_t extra_until;               /* ...kept at least until this frame */
 } LsSession;
 
 /* little helpers, exported for the tests */
@@ -122,6 +125,7 @@ void     ls_compare_hello(const LsHello *mine, const LsHello *theirs, char *why,
 void     ls_schedule_delay(LsSession *s, uint32_t at, unsigned d);
 /* host, once a frame: the delay the round trip asks for, changed when it should
  * be (up at once, down after 3 s of less); returns 1 when a change was made */
+void     ls_note_wait(LsSession *s);   /* this frame waited for the peer (host: it raises the delay when they pile up) */
 int      ls_adapt(LsSession *s, uint32_t tick);
 unsigned ls_wanted_delay(const LsSession *s);
 
