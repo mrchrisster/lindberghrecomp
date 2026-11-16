@@ -30,7 +30,8 @@
 
 enum { LS_HELLO = 1, LS_WELCOME = 2, LS_REFUSE = 3, LS_INPUT = 4, LS_BYE = 5,
        LS_QUERY = 6,        /* "who hosts here, and with what?" (unicast or broadcast) - before the game starts */
-       LS_SETTINGS = 7 };   /* the host's answer: its name and the NAME=value lines a joiner adopts */
+       LS_SETTINGS = 7,     /* the host's answer: its name and the NAME=value lines a joiner adopts */
+       LS_VOICE = 8 };      /* voice chat beside the session (voice.c): never part of the lockstep */
 enum { LS_BYE_QUIT = 1, LS_BYE_DESYNC = 2, LS_BYE_TIMEOUT = 3 };
 
 /* One side's cabinet input for one frame. Buttons are already in their final

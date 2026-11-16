@@ -58,6 +58,11 @@ void xm_modes_wide(int on);
 #define XM_CODE_W 768
 #define XM_CODE_H 320
 void xm_paint_code(unsigned char *rgba, const char *title, const char *code, const char *line);
+/* a small badge (voice chat: "Player 2 talking"), XM_BADGE_W x XM_BADGE_H x 4,
+ * text twice the menu's size */
+#define XM_BADGE_W 448
+#define XM_BADGE_H 72
+void xm_paint_badge(unsigned char *rgba, const char *text);
 
 #ifdef __cplusplus
 }

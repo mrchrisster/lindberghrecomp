@@ -52,6 +52,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <SDL.h>
+#include "voice.h"
 #ifdef __ANDROID__
 #include <dlfcn.h>
 #include <EGL/egl.h>
@@ -387,6 +388,8 @@ static void menu_world_state(void)
     snprintf(wpanel.vs_note, sizeof wpanel.vs_note, "%s", st.why);
     wpanel.vs_net = st.online; wpanel.vs_relay = st.relay;
     if (!wpanel.vs_starting) snprintf(wpanel.vs_code, sizeof wpanel.vs_code, "%s", st.code);
+    {   VoiceStatus vo; voice_status(&vo);
+        wpanel.vs_voice = vo.on; wpanel.vs_mic = vo.mic; wpanel.vs_mic_ok = vo.mic_ok; wpanel.vs_they_talk = vo.they_talk; }
     {   const char *rl = getenv("LINDBERGH_NETPLAY_RELAY"); wpanel.vs_online = rl && *rl; }
     NetplayHost h[XW_VS_HOSTS];
     wpanel.vs_n = netplay_hosts(h, XW_VS_HOSTS);
@@ -614,6 +617,7 @@ static void menu_choose(int row)
                 char code[5]; snprintf(code, sizeof code, "%d%d%d%d", wpanel.vs_digits[0] % 10, wpanel.vs_digits[1] % 10, wpanel.vs_digits[2] % 10, wpanel.vs_digits[3] % 10);
                 versus_start(0, NULL, code);
             }
+            else if (wpanel.vs_action == XW_VS_DO_MIC) voice_set_mic(!voice_mic());
             else if (wpanel.vs_action == XW_VS_DO_LEAVE) { remove("../netplay.txt"); fprintf(stderr, "[xr] versus: leaving - the game starts again\n"); reset_game(); }
             wpanel.vs_action = XW_VS_NONE;
             return;
@@ -1489,6 +1493,59 @@ static int splash_init(void)
     return 1;
 }
 
+/* Voice chat: a small badge low in view while the other player talks
+ * (voice.c), made the first time it is needed */
+static XrSwapchain vb_chain; static XrSpace vb_view; static int vb_state;   /* 0 not made, 1 ready, -1 failed */
+static void voice_badge_make(void)
+{
+    vb_state = -1;
+    XrReferenceSpaceCreateInfo rc = { XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
+    rc.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW; rc.poseInReferenceSpace.orientation.w = 1;
+    if (XR_FAILED(xrCreateReferenceSpace(session, &rc, &vb_view))) { fprintf(stderr, "[voice] no view space for the badge\n"); return; }
+    XrSwapchainCreateInfo ci = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
+    ci.createFlags = XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT;
+    ci.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    ci.format = color_format; ci.sampleCount = 1; ci.width = XM_BADGE_W; ci.height = XM_BADGE_H;
+    ci.faceCount = 1; ci.arraySize = 1; ci.mipCount = 1;
+    XR_GL_IMAGE img[4]; uint32_t ni = 0;
+    for (int k = 0; k < 4; k++) img[k].type = XR_GL_IMAGE_TYPE;
+    if (XR_FAILED(xrCreateSwapchain(session, &ci, &vb_chain)) ||
+        XR_FAILED(xrEnumerateSwapchainImages(vb_chain, 4, &ni, (XrSwapchainImageBaseHeader *)img)) || !ni) { fprintf(stderr, "[voice] no swapchain for the badge\n"); return; }
+    static unsigned char px[XM_BADGE_W * XM_BADGE_H * 4];
+    xm_paint_badge(px, "Player 2 talking");
+    uint32_t at = 0;
+    XrSwapchainImageAcquireInfo ai = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+    XrSwapchainImageWaitInfo wi = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO }; wi.timeout = XR_INFINITE_DURATION;
+    xrAcquireSwapchainImage(vb_chain, &ai, &at);
+    xrWaitSwapchainImage(vb_chain, &wi);
+    GLint was = 0; gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &was);
+    gl.BindTexture(GL_TEXTURE_2D, img[at].image);
+    for (int y = 0; y < XM_BADGE_H; y++)
+        gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, XM_BADGE_H - 1 - y, XM_BADGE_W, 1, GL_RGBA, GL_UNSIGNED_BYTE, px + (size_t)y * XM_BADGE_W * 4);
+    gl.BindTexture(GL_TEXTURE_2D, (GLuint)was);
+    gl.Finish();
+    XrSwapchainImageReleaseInfo ri = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+    xrReleaseSwapchainImage(vb_chain, &ri);
+    vb_state = 1;
+    fprintf(stderr, "[voice] talking badge ready\n");
+}
+static int voice_badge_layer(XrCompositionLayerQuad *q)
+{
+    VoiceStatus vo; voice_status(&vo);
+    if (!vo.they_talk) return 0;
+    if (!vb_state) voice_badge_make();
+    if (vb_state != 1) return 0;
+    *q = (XrCompositionLayerQuad){ XR_TYPE_COMPOSITION_LAYER_QUAD };
+    q->layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+    q->space = vb_view; q->eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    q->subImage.swapchain = vb_chain;
+    q->subImage.imageRect.extent.width = XM_BADGE_W; q->subImage.imageRect.extent.height = XM_BADGE_H;
+    q->pose.orientation.w = 1;
+    q->pose.position.x = 0; q->pose.position.y = -0.24f; q->pose.position.z = -1.0f;
+    q->size.width = 0.26f; q->size.height = 0.26f * XM_BADGE_H / XM_BADGE_W;
+    return 1;
+}
+
 /* one quad from a part of the picture: rect x, y, w, h in the picture's pixels
  * (top down), placed where panel pixels px, py, pw, ph lie */
 static XrCompositionLayerQuad sp_quad(int x, int y, int w, int h, float px, float py, float pw, float ph, int alpha)
@@ -2349,6 +2406,8 @@ void xr_frame_end(void)
         for (int k = 0; k < n; k++) layers[1 + k] = (XrCompositionLayerBaseHeader *)&spq[k];
         ei.layerCount = 1 + (uint32_t)n;
     }
+    XrCompositionLayerQuad vq;
+    if (ok && ei.layerCount < 5 && voice_badge_layer(&vq)) layers[ei.layerCount++] = (XrCompositionLayerBaseHeader *)&vq;
 #endif
     static int last_ok = -1;
     if (ok != last_ok)

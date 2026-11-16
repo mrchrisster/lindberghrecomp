@@ -217,6 +217,7 @@ function(lindbergh_runtime target generated_dir)
         "${LINDBERGH_RUNTIME_DIR}/crash_report.c"
         "${LINDBERGH_RUNTIME_DIR}/netplay.c"
         "${LINDBERGH_RUNTIME_DIR}/netws.c"
+        "${LINDBERGH_RUNTIME_DIR}/voice.c"
         "${LINDBERGH_RUNTIME_DIR}/lockstep.c"
         "${LINDBERGH_RUNTIME_DIR}/det_math.c"
         ${LINDBERGH_FDLIBM_SOURCES}
@@ -374,6 +375,32 @@ function(lindbergh_runtime target generated_dir)
                 PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
             # Every guest call is a host call: give the main thread room.
             target_link_options(${target} PRIVATE "LINKER:-stack_size,0x10000000")
+        endif()
+        # Voice chat in a netplay session (voice.c): Opus, built from its
+        # source in LINDBERGH_OPUS_DIR (default: deps/opus beside the ports
+        # workspace). Without it the session simply has no voice.
+        if(NOT WIN32)
+            if(NOT LINDBERGH_OPUS_DIR)
+                get_filename_component(opus_default "${CMAKE_SOURCE_DIR}/../deps/opus" ABSOLUTE)
+                set(LINDBERGH_OPUS_DIR "${opus_default}" CACHE PATH "Opus source tree (voice chat)")
+            endif()
+            if(EXISTS "${LINDBERGH_OPUS_DIR}/CMakeLists.txt")
+                if(NOT TARGET opus)
+                    set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+                    set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+                    set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+                    set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+                    set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+                    add_subdirectory("${LINDBERGH_OPUS_DIR}" "${CMAKE_BINARY_DIR}/opus" EXCLUDE_FROM_ALL)
+                endif()
+                target_link_libraries(${target} PRIVATE opus)
+                target_compile_definitions(${target} PRIVATE LINDBERGH_VOICE=1)
+                if(ANDROID)
+                    target_link_libraries(${target} PRIVATE aaudio)
+                endif()
+            else()
+                message(STATUS "No Opus at ${LINDBERGH_OPUS_DIR}: netplay without voice chat")
+            endif()
         endif()
     endif()
 endfunction()

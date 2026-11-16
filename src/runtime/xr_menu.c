@@ -238,3 +238,14 @@ void xm_paint_code(unsigned char *img, const char *title, const char *code, cons
     textn(img, W, H, (W - cw) / 2, 22 + FONT_H + 18, code, gold, big);
     textn(img, W, H, (W - text_w(line)) / 2, H - FONT_H - 24, line, grey, 1);
 }
+
+void xm_paint_badge(unsigned char *img, const char *s)
+{
+    static const unsigned char bg[4] = { 18, 22, 28, 220 }, edge[4] = { 250, 200, 90, 255 };
+    static const unsigned char gold[3] = { 250, 200, 90 };
+    const int W = XM_BADGE_W, H = XM_BADGE_H, n = 2, tw = n * (FONT_W - 3) * (int)strlen(s);
+    for (int i = 0; i < W * H; i++) memcpy(img + (size_t)i * 4, bg, 4);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+        if (x < 3 || y < 3 || x >= W - 3 || y >= H - 3) memcpy(img + ((size_t)y * W + x) * 4, edge, 4);
+    textn(img, W, H, (W - tw) / 2 > 4 ? (W - tw) / 2 : 4, (H - n * FONT_H) / 2, s, gold, n);
+}

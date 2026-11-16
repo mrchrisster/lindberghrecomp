@@ -16,6 +16,7 @@
 #include "netplay.h"
 #include "lockstep.h"
 #include "netws.h"
+#include "voice.h"
 #include "game_profile.h"
 
 #include <errno.h>
@@ -561,6 +562,10 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
         end_session_locked(0, "refused by the host");
         return;
     }
+    if (type == LS_VOICE) {
+        if (N.phase == NP_RUN && n > 8) voice_receive(b + 8, n - 8);
+        return;
+    }
     if (N.phase == NP_RUN && (type == LS_INPUT || type == LS_BYE)) {
         if (ls_receive(&N.s, b, n, now_us())) {
             if (N.s.bye) {
@@ -572,6 +577,20 @@ static void handle_packet(const uint8_t *b, size_t n, const struct sockaddr_stor
             pthread_cond_broadcast(&N.cond);
         }
     }
+}
+
+/* voice.c: a voice piece out, straight past the network simulator */
+void netplay_send_voice(const uint8_t *body, size_t n)
+{
+    if (n + 8 > LS_PACKET_MAX) return;
+    uint8_t b[LS_PACKET_MAX];
+    uint32_t m = LS_MAGIC; size_t len = n + 8;
+    b[0] = (uint8_t)m; b[1] = (uint8_t)(m >> 8); b[2] = (uint8_t)(m >> 16); b[3] = (uint8_t)(m >> 24);
+    b[4] = (uint8_t)LS_PROTO; b[5] = LS_VOICE; b[6] = (uint8_t)len; b[7] = (uint8_t)(len >> 8);
+    memcpy(b + 8, body, n);
+    pthread_mutex_lock(&N.lock);
+    if (N.phase == NP_RUN) raw_send(b, len);
+    pthread_mutex_unlock(&N.lock);
 }
 
 static void *net_thread(void *arg)
@@ -789,6 +808,7 @@ static void np_net_init(void)
         fprintf(stderr, "[net] joining %s:%d as player 2 (settings %s)\n", host, port, N.hello.settings);
     }
     if (pthread_create(&N.thread, NULL, net_thread, NULL) == 0) N.thread_on = 1;
+    voice_init();
     /* wait for the other side here, before the first frame: both start together */
     double t0 = now_ms();
     pthread_mutex_lock(&N.lock);
@@ -1135,6 +1155,7 @@ static void net_tick(CabinetInput *c) { (void)c; }
 static void net_hash(uint32_t t, uint64_t h) { (void)t; (void)h; }
 static void net_check_desync(void) {}
 static void np_net_init(void) { if (g_net[0]) fprintf(stderr, "[net] netplay is not built for this platform\n"); }
+void netplay_send_voice(const uint8_t *body, size_t n) { (void)body; (void)n; }
 void netplay_before_start(void) {}
 void netplay_scan(int on) { (void)on; }
 int netplay_hosts(NetplayHost *out, int max) { (void)out; (void)max; return 0; }

@@ -102,6 +102,7 @@ int xw_page_rows(const XwState *w, const LgXrSettings *cfg, int *rows)
         if (w->vs_phase == 1 || w->vs_phase == 2 || w->vs_phase == 3) {
             rows[n++] = XW_ROW(XW_VS_STATUS);
             if (w->vs_net && w->vs_is_host && w->vs_code[0]) rows[n++] = XW_ROW(XW_VS_CODE);
+            if (w->vs_phase == 3 && w->vs_voice) rows[n++] = XW_ROW(XW_VS_MIC);
             rows[n++] = XW_ROW(XW_VS_LEAVE);
         } else {
             if (w->vs_phase == 4) rows[n++] = XW_ROW(XW_VS_STATUS);
@@ -227,6 +228,8 @@ void xw_items(const XwState *w, const LgXrSettings *cfg, XmItem *it)
     else if (w->vs_phase == 1 && w->vs_net) snprintf(it[XW_VS_STATUS].value, 40, "%s", w->vs_code[0] ? "online room open" : "asking the server...");
     else if (w->vs_phase == 4) snprintf(it[XW_VS_STATUS].value, 40, "%.39s", w->vs_note);
     else snprintf(it[XW_VS_STATUS].value, 40, "%s", w->vs_is_host ? "host, player 1" : "player 2");
+    it[XW_VS_MIC].label = w->vs_they_talk ? "Voice chat - player 2 is talking" : "Voice chat";
+    snprintf(it[XW_VS_MIC].value, 40, "%s", !w->vs_mic ? "Muted" : w->vs_mic_ok ? "Mic on" : "No microphone");
     it[XW_VS_LEAVE].label = "Leave the match (restarts the game)";
     if (w->vs_leave_armed) snprintf(it[XW_VS_LEAVE].value, 40, "Pull again to leave");
     /* the page's stored values; a pinned row the run's own */
@@ -301,6 +304,7 @@ unsigned xw_choose(XwState *w, LgXrSettings *c, int item)
     case XW_VS_DIG0: case XW_VS_DIG1: case XW_VS_DIG2: case XW_VS_DIG3:
         w->vs_digits[item - XW_VS_DIG0] = (w->vs_digits[item - XW_VS_DIG0] + 1) % 10; return XW_PAGE_CHANGED;
     case XW_VS_JOIN_NET: w->vs_action = XW_VS_DO_JOIN_NET; return XW_VS_FX;
+    case XW_VS_MIC: w->vs_action = XW_VS_DO_MIC; return XW_VS_FX;
     case XW_VS_STATUS: case XW_VS_SEARCH: case XW_VS_CODE: return 0;
     }
     /* in a session the simulation's settings stay as they are (both copies must agree) */

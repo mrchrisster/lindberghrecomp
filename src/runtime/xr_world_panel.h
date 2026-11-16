@@ -20,6 +20,7 @@ enum { XW_MODE, XW_RESTART, XW_ADVANCED, XW_BACK, XW_DOLLY, XW_STEPBACK, XW_REPL
        XW_CARD, XW_LANGUAGE, XW_MSAA, XW_SAVE, XW_ANISO, XW_RESET_SAVE,
        XW_VERSUS, XW_VS_HOST, XW_VS_JOIN0, XW_VS_JOIN1, XW_VS_JOIN2, XW_VS_JOIN3, XW_VS_STATUS, XW_VS_LEAVE, XW_VS_SEARCH,
        XW_VS_HOST_NET, XW_VS_CODE, XW_VS_DIG0, XW_VS_DIG1, XW_VS_DIG2, XW_VS_DIG3, XW_VS_JOIN_NET,
+       XW_VS_MIC,
        XW_COUNT };
 #define XW_VS_HOSTS 4
 /* the main page's Language; both Advanced pages' Anti-aliasing (per mode),
@@ -33,7 +34,7 @@ enum { XW_PAGE_MAIN, XW_PAGE_CLASSIC, XW_PAGE_IMMERSIVE, XW_PAGE_VERSUS, XW_PAGE
  * vs_action and returns XW_VS_FX; the host (host_xr.c) starts or ends the
  * session - a restart. While a session runs the simulation's settings (mode,
  * replays and cams, overlays, save) do not change. */
-enum { XW_VS_NONE, XW_VS_DO_HOST, XW_VS_DO_JOIN, XW_VS_DO_LEAVE, XW_VS_DO_HOST_NET, XW_VS_DO_JOIN_NET };
+enum { XW_VS_NONE, XW_VS_DO_HOST, XW_VS_DO_JOIN, XW_VS_DO_LEAVE, XW_VS_DO_HOST_NET, XW_VS_DO_JOIN_NET, XW_VS_DO_MIC };
 /* xw_choose's effects, beside XP_SAVE and XP_RESTART */
 enum { XW_LIVE_CHANGED = 1 << 16,      /* a live value of the running mode (or, live, the mode) changed: world_mode_update */
        XW_PAGE_CHANGED = 1 << 17,      /* the page or its rows changed */
@@ -66,6 +67,7 @@ typedef struct {
     int vs_online;              /* a meeting server is set: the online rows */
     int vs_net, vs_relay; char vs_code[5];   /* this session is online (through the relay); the room's code */
     int vs_digits[4];           /* the code being entered (each row: next digit) */
+    int vs_voice, vs_mic, vs_mic_ok, vs_they_talk;   /* voice chat (voice.c): on in this session, our mic live, a mic open, player 2 talking */
     int vs_starting;            /* Host an online match chosen: vs_code shown, the game restarts in a moment */
 } XwState;
 
