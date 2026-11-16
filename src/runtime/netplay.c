@@ -764,6 +764,7 @@ void cab_switch_read(CabinetInput *out)
     g_tick++;
     if (g_tick_log && (g_tick < 5 || g_tick % 600 == 0))
         fprintf(stderr, "[tick] input frame %u at display frame %u (thread %lu)\n", g_tick, g_frame, (unsigned long)(uintptr_t)pthread_self());
+    if (g_det) segaapi_det_frame();     /* before the barrier: the decoders refill what this frame played */
     if (g_det && g_barrier) g_barrier();
     /* the state at the start of this frame, before its input */
     if (g_hash_every && g_tick % g_hash_every == 0) {

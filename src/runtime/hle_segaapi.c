@@ -33,6 +33,7 @@
 #include <string.h>
 
 #include "lindbergh_rt.h"
+#include "netplay.h"
 
 #if !defined(_WIN32) || defined(RECOMP_GUEST_BASE)
 #include <SDL.h>
@@ -239,35 +240,40 @@ static int g_wrap = 1;
  * between source samples when the voice's rate is not the output's). */
 static int g_interp = -1;
 
-static void mix(void *ud, Uint8 *stream, int len)
+/* Deterministic mode (netplay, input recording/replay): the voices advance by
+ * the game's frames, not by the sound card. The game asks whether a voice is
+ * still playing (vs::isVs_stop: the announcer's call before the next screen)
+ * and where a ring is; on the card's clock the answer changed at a different
+ * frame on each machine, and the game's flow with it (seen: the attract's
+ * Start, MT draws 49 frames apart). Here each input frame mixes exactly
+ * OUT_RATE / 60 output frames into a FIFO (segaapi_det_frame, from the input
+ * layer at the frame's start) and the card's callback only plays the FIFO.
+ * A stall (netplay waiting for the other player) is silence.
+ * LINDBERGH_DET_AUDIO=0: the card's clock even in deterministic mode. */
+#define DET_FRAME (OUT_RATE / 60)
+#define DET_CAP   (OUT_RATE / 8)          /* 125 ms: beyond it the oldest is dropped */
+#define DET_PRIME (2048)                  /* the card starts playing at this much */
+static int    g_det_audio = -1;
+static float  g_fifo[2 * DET_CAP];
+static int    g_fifo_rd, g_fifo_n, g_fifo_primed;
+static unsigned g_det_drop, g_det_under;
+static int det_audio(void)
 {
-    (void)ud;
-    float *out = (float *)stream;
-    int frames = len / (int)(2 * sizeof(float));
-    memset(stream, 0, (size_t)len);
-    static float sout[8192];
-    int sfr = g_sdump && frames <= 4096;
-    if (sfr) memset(sout, 0, (size_t)frames * 2 * sizeof(float));
+    if (g_det_audio < 0) {
+        const char *v = getenv("LINDBERGH_DET_AUDIO");
+        g_det_audio = lg_deterministic() && !(v && *v == '0');
+        if (g_det_audio) fprintf(stderr, "[sega-api] deterministic: voices advance %d output frames per input frame\n", DET_FRAME);
+    }
+    return g_det_audio;
+}
+
+/* Every playing voice, mixed into out[frames * 2] (stereo, zeroed by the
+ * caller) and advanced by what it played; sout: the streamed rings alone. */
+static void mix_voices(float *out, float *sout, int frames)
+{
+    int sfr = sout != NULL;
     if (g_interp < 0) { const char *v = getenv("LINDBERGH_AUDIO_INTERP"); g_interp = !(v && *v == '0'); }
 
-    /* callback timing: a gap well over the block's length means the device
-     * ran dry (or will) unless it buffers more than one block */
-    static Uint64 last;
-    Uint64 t0 = SDL_GetPerformanceCounter();
-    double freq = (double)SDL_GetPerformanceFrequency();
-    double block_ms = frames * 1000.0 / OUT_RATE;
-    if (last) {
-        double gap = (t0 - last) * 1000.0 / freq;
-        if (gap > g_h.gap_max_ms) g_h.gap_max_ms = gap;
-        if (gap > block_ms * 1.5) g_h.late++;
-    }
-    last = t0;
-    g_h.blocks++;
-
-    LOCK();
-    Uint64 t1 = SDL_GetPerformanceCounter();
-    double lw = (t1 - t0) * 1000.0 / freq;
-    if (lw > g_h.lockwait_max_ms) g_h.lockwait_max_ms = lw;
     for (SegaBuf *b = g_bufs; b; b = b->next) {
         if (!b->playing || b->paused || !b->data || !b->size) continue;
         uint32_t fb = frame_bytes(b), total = b->size / fb;
@@ -334,6 +340,69 @@ static void mix(void *ud, Uint8 *stream, int len)
             } else b->starved_now = 0;
         }
     }
+}
+
+void segaapi_det_frame(void)
+{
+#ifdef HAVE_MIXER
+    if (!g_lock || !det_audio()) return;
+    static float blk[2 * DET_FRAME];
+    memset(blk, 0, sizeof blk);
+    LOCK();
+    mix_voices(blk, NULL, DET_FRAME);
+    for (int i = 0; i < DET_FRAME; i++) {
+        if (g_fifo_n == DET_CAP) { g_fifo_rd = (g_fifo_rd + 1) % DET_CAP; g_fifo_n--; g_det_drop++; }
+        int w = (g_fifo_rd + g_fifo_n) % DET_CAP;
+        g_fifo[2 * w] = blk[2 * i]; g_fifo[2 * w + 1] = blk[2 * i + 1];
+        g_fifo_n++;
+    }
+    UNLOCK();
+#endif
+}
+
+static void mix(void *ud, Uint8 *stream, int len)
+{
+    (void)ud;
+    float *out = (float *)stream;
+    int frames = len / (int)(2 * sizeof(float));
+    memset(stream, 0, (size_t)len);
+    static float sout[8192];
+    int sfr = g_sdump && frames <= 4096;
+    if (sfr) memset(sout, 0, (size_t)frames * 2 * sizeof(float));
+    int det = det_audio();
+    if (det) sfr = 0;
+
+    /* callback timing: a gap well over the block's length means the device
+     * ran dry (or will) unless it buffers more than one block */
+    static Uint64 last;
+    Uint64 t0 = SDL_GetPerformanceCounter();
+    double freq = (double)SDL_GetPerformanceFrequency();
+    double block_ms = frames * 1000.0 / OUT_RATE;
+    if (last) {
+        double gap = (t0 - last) * 1000.0 / freq;
+        if (gap > g_h.gap_max_ms) g_h.gap_max_ms = gap;
+        if (gap > block_ms * 1.5) g_h.late++;
+    }
+    last = t0;
+    g_h.blocks++;
+
+    LOCK();
+    Uint64 t1 = SDL_GetPerformanceCounter();
+    double lw = (t1 - t0) * 1000.0 / freq;
+    if (lw > g_h.lockwait_max_ms) g_h.lockwait_max_ms = lw;
+    if (!det) mix_voices(out, sfr ? sout : NULL, frames);
+    else {
+        if (!g_fifo_primed && g_fifo_n >= DET_PRIME) g_fifo_primed = 1;
+        if (g_fifo_primed) {
+            int n = frames < g_fifo_n ? frames : g_fifo_n;
+            for (int i = 0; i < n; i++) {
+                out[2 * i] = g_fifo[2 * g_fifo_rd]; out[2 * i + 1] = g_fifo[2 * g_fifo_rd + 1];
+                g_fifo_rd = (g_fifo_rd + 1) % DET_CAP;
+            }
+            g_fifo_n -= n;
+            if (n < frames) { g_det_under++; g_fifo_primed = 0; }
+        }
+    }
     UNLOCK();
 
     if (sfr) {
@@ -375,6 +444,10 @@ static void mix(void *ud, Uint8 *stream, int len)
         UNLOCK();
         if (meter)
             fprintf(stderr, "[sega-api] mix peak %.3f%s, %d of %d voices playing\n", peak, st->muted ? " (muted)" : "", playing, made);
+        if (det && (g_det_drop || g_det_under)) {
+            fprintf(stderr, "[sega-api] deterministic audio: %u frames dropped (game ahead of the card), %u underruns (game behind: a stall or a slow frame)\n", g_det_drop, g_det_under);
+            g_det_drop = g_det_under = 0;
+        }
         int bad = g_h.starved_events || g_h.late;
         if (meter || bad)
             fprintf(stderr, "[sega-api] health: starved %u events / %.0f ms (%u total), "
@@ -501,11 +574,25 @@ static void h_destroy(CPU *c)
 static void h_play(CPU *c)  { SegaBuf *b = buf_of(A32(0)); LOCK(); if (b) { b->playing = 1; b->paused = 0; b->release = 0; } UNLOCK(); RET(SEGA_OK); }
 static void h_stop(CPU *c)  { SegaBuf *b = buf_of(A32(0)); LOCK(); if (b) { b->playing = 0; b->paused = 0; } UNLOCK(); RET(SEGA_OK); }
 static void h_pause(CPU *c) { SegaBuf *b = buf_of(A32(0)); LOCK(); if (b) b->paused = 1; UNLOCK(); RET(SEGA_OK); }
+/* LINDBERGH_SEGA_READS=<from>-<to>: every status and position read the game
+ * makes in that input-frame range, with its caller (test only: what of the
+ * game's flow waits on the audio clock). */
+static void read_log(const char *what, CPU *c, uint32_t r)
+{
+    static int on = -1; static uint32_t lo, hi;
+    if (on < 0) { const char *v = getenv("LINDBERGH_SEGA_READS"); on = v && sscanf(v, "%u-%u", &lo, &hi) == 2; }
+    if (!on) return;
+    uint32_t t = lg_input_tick();
+    if (t < lo || t > hi) return;
+    fprintf(stderr, "[sega-read] tick %u: %s(%#x) = %u (from %#x)\n", t, what, A32(0), r, rd32(c->esp - 4u));
+}
 /* status: 0 stop, 1 active, 2 pause */
 static void h_status(CPU *c)
 {
     SegaBuf *b = buf_of(A32(0));
-    RET(!b || !b->playing ? 0 : b->paused ? 2 : 1);
+    uint32_t r = !b || !b->playing ? 0 : b->paused ? 2 : 1;
+    read_log("status", c, r);
+    RET(r);
 }
 static void h_get_pos(CPU *c)
 {
@@ -518,6 +605,7 @@ static void h_get_pos(CPU *c)
     uint32_t lstart = b->loop_start / fb;
     if (g_wrap && b->looping && !b->release && lend > lstart && f >= lend) f = lstart + (f - lend);
 #endif
+    read_log("pos", c, f * fb);
     RET(f * fb);
 }
 static void h_set_pos(CPU *c)
