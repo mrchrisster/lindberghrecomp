@@ -52,6 +52,12 @@ int  xm_row_at_modes(float u, float v, int n);
 #define XM_WIDE_H 76            /* the wide button and its gap */
 #define XM_WIDE_ROWS 16
 void xm_modes_wide(int on);
+/* A big code on a dark card (the netplay room code on the start-up screen):
+ * title and line in normal letters, code five times as large; rgba
+ * XM_CODE_W x XM_CODE_H x 4 */
+#define XM_CODE_W 768
+#define XM_CODE_H 320
+void xm_paint_code(unsigned char *rgba, const char *title, const char *code, const char *line);
 
 #ifdef __cplusplus
 }

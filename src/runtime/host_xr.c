@@ -1369,6 +1369,8 @@ extern const int lg_splash_ball[4] __attribute__((weak));     /* the progress li
 #include "splash_logo.h"
 
 static XrSwapchain sp_chain;
+static XrSwapchain sp_code_chain;      /* the netplay room code's card (online host, until player 2 is in) */
+static int sp_code;
 static int sp_on;                      /* shown: from the session's start until the game is seen */
 static int sp_thread_on;               /* the loading thread runs */
 static volatile int sp_stop;
@@ -1426,6 +1428,34 @@ static int splash_init(void)
     XrSwapchainImageReleaseInfo ri = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
     xrReleaseSwapchainImage(sp_chain, &ri);
     free(px);
+    {   /* Hosting online (online-host:CODE, the panel chose the code): a
+         * big card with the room code in front of the splash, until player 2
+         * is in - the game waits for them at its first frame */
+        const char *np = getenv("LINDBERGH_NETPLAY");
+        if (np && !strncmp(np, "online-host:", 12) && np[12]) {
+            static unsigned char card[XM_CODE_W * XM_CODE_H * 4];
+            char code[8]; snprintf(code, sizeof code, "%.4s", np + 12);
+            xm_paint_code(card, "Online room code", code, "Waiting for player 2 to join...");
+            XrSwapchainCreateInfo cc = ci; cc.width = XM_CODE_W; cc.height = XM_CODE_H;
+            XR_GL_IMAGE ci2[4]; uint32_t n2 = 0;
+            for (int k = 0; k < 4; k++) ci2[k].type = XR_GL_IMAGE_TYPE;
+            if (XR_SUCCEEDED(xrCreateSwapchain(session, &cc, &sp_code_chain)) &&
+                XR_SUCCEEDED(xrEnumerateSwapchainImages(sp_code_chain, 4, &n2, (XrSwapchainImageBaseHeader *)ci2)) && n2) {
+                uint32_t a2 = 0;
+                xrAcquireSwapchainImage(sp_code_chain, &ai, &a2);
+                xrWaitSwapchainImage(sp_code_chain, &wi);
+                gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &was);
+                gl.BindTexture(GL_TEXTURE_2D, ci2[a2].image);
+                for (int y = 0; y < XM_CODE_H; y++)
+                    gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, XM_CODE_H - 1 - y, XM_CODE_W, 1, GL_RGBA, GL_UNSIGNED_BYTE, card + (size_t)y * XM_CODE_W * 4);
+                gl.BindTexture(GL_TEXTURE_2D, (GLuint)was);
+                gl.Finish();
+                xrReleaseSwapchainImage(sp_code_chain, &ri);
+                sp_code = 1;
+                fprintf(stderr, "[xr] splash: room code %s shown until player 2 joins\n", code);
+            }
+        }
+    }
     /* T21: the last start's time, within 8-60 s - a start that waited on the
      * headset (taken off, a Guardian prompt) measured minutes, and the next
      * start's line then crept a pixel at a time, as good as not there */
@@ -1462,6 +1492,22 @@ static XrCompositionLayerQuad sp_quad(int x, int y, int w, int h, float px, floa
  * them), the progress line and its ball (if it has one) - 4 at most */
 static int sp_layers(XrCompositionLayerQuad q[4])
 {
+    if (sp_code) {          /* the room code, until player 2 is in */
+        NetplayStatus st; netplay_status(&st);
+        if (st.phase == 3 || st.phase == 4) sp_code = 0;
+        else {
+            q[0] = sp_quad(0, 0, lg_splash_w, lg_splash_panel_h, 0, 0, (float)lg_splash_w, (float)lg_splash_panel_h, 0);
+            XrCompositionLayerQuad c = { XR_TYPE_COMPOSITION_LAYER_QUAD };
+            c.space = local_base; c.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            c.subImage.swapchain = sp_code_chain;
+            c.subImage.imageRect.extent.width = XM_CODE_W; c.subImage.imageRect.extent.height = XM_CODE_H;
+            c.pose.orientation.w = 1;
+            c.pose.position.x = 0; c.pose.position.y = -0.05f; c.pose.position.z = -SP_DIST + 0.004f;
+            c.size.width = 1.1f; c.size.height = 1.1f * XM_CODE_H / XM_CODE_W;
+            q[1] = c;
+            return 2;
+        }
+    }
     double t = sp_now() - sp_t0, left = sp_expect - t;
     int secs = left < 1 ? 1 : left > 99 ? 99 : (int)ceil(left), n = 0;
     q[n++] = sp_quad(0, 0, lg_splash_w, lg_splash_panel_h, 0, 0, (float)lg_splash_w, (float)lg_splash_panel_h, 0);

@@ -209,3 +209,32 @@ int xm_row_at_modes(float u, float v, int n)
     r = first + r / ROW_H;
     return r < n && r < cap ? r : -1;
 }
+
+/* text n times as large, into an image w pixels wide (xm_paint_code) */
+static void textn(unsigned char *img, int w, int h, int x, int y, const char *s, const unsigned char c[3], int n)
+{
+    for (; *s && x + n * FONT_W <= w; s++, x += n * (FONT_W - 3)) {
+        int ch = (unsigned char)*s - FONT_FIRST;
+        if (ch < 0 || ch >= FONT_COUNT) continue;
+        for (int j = 0; j < n * FONT_H && y + j < h; j++)
+            for (int i = 0; i < n * FONT_W; i++) {
+                unsigned a = FONT[ch][(j / n) * FONT_W + i / n];
+                if (!a) continue;
+                unsigned char *p = img + ((size_t)(y + j) * w + x + i) * 4;
+                for (int k = 0; k < 3; k++) p[k] = (unsigned char)((p[k] * (255 - a) + c[k] * a) / 255);
+            }
+    }
+}
+void xm_paint_code(unsigned char *img, const char *title, const char *code, const char *line)
+{
+    static const unsigned char bg[4] = { 18, 22, 28, 240 }, edge[4] = { 250, 200, 90, 255 };
+    static const unsigned char white[3] = { 235, 238, 240 }, gold[3] = { 250, 200, 90 }, grey[3] = { 170, 176, 184 };
+    const int W = XM_CODE_W, H = XM_CODE_H;
+    for (int i = 0; i < W * H; i++) memcpy(img + (size_t)i * 4, bg, 4);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+        if (x < 4 || y < 4 || x >= W - 4 || y >= H - 4) memcpy(img + ((size_t)y * W + x) * 4, edge, 4);
+    const int big = 5, cw = big * (FONT_W - 3) * (int)strlen(code);
+    textn(img, W, H, (W - text_w(title)) / 2, 22, title, white, 1);
+    textn(img, W, H, (W - cw) / 2, 22 + FONT_H + 18, code, gold, big);
+    textn(img, W, H, (W - text_w(line)) / 2, H - FONT_H - 24, line, grey, 1);
+}
