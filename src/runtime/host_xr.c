@@ -194,6 +194,15 @@ static XrSessionState state = XR_SESSION_STATE_UNKNOWN;
 static int         running;
 static XrFrameState frame = { XR_TYPE_FRAME_STATE };
 static int         in_frame;           /* xrBeginFrame done, xrEndFrame owed */
+/* Late wait (2026-11-16, LINDBERGH_XR_LATE_WAIT=0 off): xrWaitFrame and
+ * xrBeginFrame at the frame's end, just before its eyes are handed over,
+ * instead of before it is drawn. The headset's beat then overlaps the
+ * drawing: at 90 Hz a game frame of ~13 ms no longer waits ~6 ms for the
+ * next beat before it starts (52 -> 60 fps on the US court). The eyes are
+ * placed for when the frame will be shown: the last frame's display time
+ * plus a game frame (the compositor corrects the rest). */
+static int         late_wait = -1, late_owed, late_have;
+static XrTime      late_time;          /* this frame's estimated display time */
 static XrView      views[2] = { { XR_TYPE_VIEW }, { XR_TYPE_VIEW } };
 static XrFovf      fov[2];             /* what was rendered: symmetric */
 static int         views_ok;
@@ -1817,18 +1826,28 @@ void xr_frame_begin(void)
     menu_test_frame();
     menu_versus_frame();
     poll_events();
-    if (!running) { views_ok = 0; if (fixed_head()) set_eyes(); return; }
-    XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
-    frame = (XrFrameState){ XR_TYPE_FRAME_STATE };
-    if (XR_FAILED(xrWaitFrame(session, &wi, &frame))) return;
-    XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO };
-    if (XR_FAILED(xrBeginFrame(session, &bi))) return;
-    host_display_timing(frame.predictedDisplayTime, frame.predictedDisplayPeriod);
+    if (!running) { views_ok = 0; late_have = 0; if (fixed_head()) set_eyes(); return; }
+    if (late_wait < 0) {
+        const char *v = getenv("LINDBERGH_XR_LATE_WAIT"); late_wait = !(v && *v == '0');
+        fprintf(stderr, "[xr] the headset's frame wait %s\n", late_wait ? "at the frame's end (overlaps the drawing)" : "before the frame is drawn");
+    }
+    if (late_wait && late_have) {       /* drawn first; the wait and begin at the end (xr_frame_end) */
+        late_owed = 1;
+        late_time = frame.predictedDisplayTime + (XrTime)16666667;
+    } else {
+        XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
+        frame = (XrFrameState){ XR_TYPE_FRAME_STATE };
+        if (XR_FAILED(xrWaitFrame(session, &wi, &frame))) return;
+        XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO };
+        if (XR_FAILED(xrBeginFrame(session, &bi))) return;
+        host_display_timing(frame.predictedDisplayTime, frame.predictedDisplayPeriod);
+        late_time = frame.predictedDisplayTime; late_have = 1; late_owed = 0;
+    }
     in_frame = 1;
 
     XrViewLocateInfo vl = { XR_TYPE_VIEW_LOCATE_INFO };
     vl.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    vl.displayTime = frame.predictedDisplayTime;
+    vl.displayTime = late_time;
     if (anchor_pending) anchor_head(&vl);
     vl.space = local;
     XrViewState vs = { XR_TYPE_VIEW_STATE };
@@ -1878,16 +1897,16 @@ void xr_frame_begin(void)
         XrQuaternionf q = views[0].pose.orientation;
         fprintf(stderr, "[pose] frame %u: q %.5f %.5f %.5f %.5f pos %.4f %.4f %.4f t %lld\n", g_frame, q.x, q.y, q.z, q.w,
                 views[0].pose.position.x, views[0].pose.position.y, views[0].pose.position.z,
-                (long long)frame.predictedDisplayTime);
+                (long long)late_time);
     }
     if (views_ok) set_eyes();
-    if (state == XR_SESSION_STATE_FOCUSED) input_frame(frame.predictedDisplayTime);
+    if (state == XR_SESSION_STATE_FOCUSED) input_frame(late_time);
     else {
         host_vr_input(-100000, -100000, 0, 0); host_vr_input2(0, -100000, -100000);
         xo.gun_valid = xo.beam = xo.dot = xo.flash = 0; xo2.gun_valid = xo2.beam = xo2.dot = xo2.flash = 0;
         stereo_set_gun_ray(0, NULL, NULL, 0); stereo_set_gun_ray(1, NULL, NULL, 0);
     }
-    if (cfg.show_stats) fps_update(frame.predictedDisplayTime);
+    if (cfg.show_stats) fps_update(late_time);
 }
 
 /* This frame's world depth, copied into each eye's depth swapchain image -
@@ -2227,6 +2246,17 @@ void xr_frame_end(void)
     black_log();
     gpu_time();
     if (!in_frame) return;
+    int begun = 1;
+    if (late_owed) {        /* late wait: the headset's beat now, the frame already drawn */
+        late_owed = 0;
+        XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
+        XrFrameState fs = { XR_TYPE_FRAME_STATE };
+        XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO };
+        if (XR_SUCCEEDED(xrWaitFrame(session, &wi, &fs)) && XR_SUCCEEDED(xrBeginFrame(session, &bi))) {
+            frame = fs;
+            host_display_timing(frame.predictedDisplayTime, frame.predictedDisplayPeriod);
+        } else { begun = 0; late_have = 0; frame.shouldRender = 0; }
+    }
     if (xr_prof < 0) { const char *v = getenv("LINDBERGH_XR_PROF"); xr_prof = v && *v == '1'; }
     if (xr_prof > 0) { xp_t0 = xp_ms(); xp_mark(&xp_game); }
     XrCompositionLayerProjectionView pv[2];
@@ -2453,6 +2483,7 @@ void xr_frame_end(void)
                 ok ? "showing the game" : "nothing to show", views_ok, (int)frame.shouldRender, (int)state);
     last_ok = ok;
     xp_mark(&xp_copy);
+    if (!begun) return;     /* the late wait failed: no frame begun to end */
     XrResult er = xrEndFrame(session, &ei);
     if (xr_prof > 0) {
         xp_end += xp_ms() - xp_t0;
