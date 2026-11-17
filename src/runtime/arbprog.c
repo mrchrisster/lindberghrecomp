@@ -2944,8 +2944,8 @@ static void before_draw(void)
             }
         }
     }
-    static int probed;
-    const char *dvp = getenv("LINDBERGH_DUMP_VP");
+    static int probed, dvp_read; static const char *dvp;     /* (read once: this runs at every draw) */
+    if (!dvp_read) { dvp_read = 1; dvp = getenv("LINDBERGH_DUMP_VP"); }
     if (dvp && (long)vid == strtol(dvp, NULL, 0) && probed < 3 && l && l->ok) {
         probed++;
         GLint loc8 = glGetAttribLocation(l->prog, "va_8"), loc3 = glGetAttribLocation(l->prog, "va_3");

@@ -37,8 +37,9 @@ static void rd_rows(uint32_t va, float *out, int rows)
  * LINDBERGH_MATRIX=1 shows what does arrive. */
 static void show(const char *tag, uint32_t va, const float *m, int rows)
 {
-    static int shown;
-    if (shown > 90 || !getenv("LINDBERGH_MATRIX")) return;
+    static int shown, on = -1;      /* (read once: a dead row is common, this ran a getenv each time) */
+    if (on < 0) on = getenv("LINDBERGH_MATRIX") != NULL;
+    if (shown > 90 || !on) return;
     shown++;
     fprintf(stderr, "[mat] %s at 0x%08X:", tag, va);
     for (int i = 0; i < rows; i++)
