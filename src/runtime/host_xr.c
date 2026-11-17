@@ -362,7 +362,7 @@ static PFN_xrRequestDisplayRefreshRateFB request_rate;
 static PFN_xrPerfSettingsSetPerformanceLevelEXT set_perf_level;
 static PFN_xrEnumerateDisplayRefreshRatesFB enumerate_rates;
 
-/* A Versus or online match runs the display at 90 Hz at most: at 120 Hz VR
+/* A Versus or online match runs the display at 72 Hz (was 90 at most): at 120 Hz VR
  * mode manages only ~53 fps, and a lockstep session plays its audio at the
  * game's pace, so the voices slowed down.  90 Hz holds ~59 fps.  The player's
  * own rate is untouched and comes back when the session ends (the game
@@ -373,8 +373,10 @@ static int session_refresh(void)
     const char *np = getenv("LINDBERGH_NETPLAY");
     if (!np || !*np || !strcmp(np, "0")) return hz;
     const char *o = getenv("LINDBERGH_NETPLAY_HZ");
-    int cap = o && *o ? atoi(o) : 90;
-    if (cap > 0 && (hz == 0 || hz > cap)) {
+    int cap = o && *o ? atoi(o) : 72;
+    if (cap > 0 && hz != cap) {         /* (2026-11-17) Versus runs at 72 Hz: a steady 60 fps on every court,
+                                         * so the match's frame-locked sound plays at its speed; at 90 / 120
+                                         * the US court made ~50 fps and the voices slowed */
         static int said;
         if (!said++) fprintf(stderr, "[xr] Versus session: display at %d Hz (your setting %d returns afterwards)\n", cap, hz);
         hz = cap;
