@@ -1209,6 +1209,12 @@ int xr_init(void)
         XrResult r = set_perf_level(session, XR_PERF_SETTINGS_DOMAIN_CPU_EXT,
                                     boost ? XR_PERF_SETTINGS_LEVEL_BOOST_EXT : XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
         fprintf(stderr, "[xr] CPU at %s clocks: %s\n", boost ? "boost" : "sustained high", XR_SUCCEEDED(r) ? "yes" : "refused");
+        const char *gv = getenv("LINDBERGH_GPU_LEVEL");     /* test: boost | high (sustained high) | low; unset: the runtime's own */
+        if (gv && *gv) {
+            XrPerfSettingsLevelEXT lv = !strcmp(gv, "boost") ? XR_PERF_SETTINGS_LEVEL_BOOST_EXT : !strcmp(gv, "low") ? XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT : XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT;
+            XrResult g = set_perf_level(session, XR_PERF_SETTINGS_DOMAIN_GPU_EXT, lv);
+            fprintf(stderr, "[xr] GPU at %s clocks: %s\n", gv, XR_SUCCEEDED(g) ? "yes" : "refused");
+        }
     }
     /* That thread is also the one that renders: registered as the
      * renderer, the runtime schedules it ahead of other work - the hitches
