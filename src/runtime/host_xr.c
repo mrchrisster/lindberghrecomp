@@ -1579,8 +1579,8 @@ static int voice_badge_layer(XrCompositionLayerQuad *q)
     q->subImage.swapchain = vb_chain;
     q->subImage.imageRect.extent.width = XM_ICON; q->subImage.imageRect.extent.height = XM_ICON;
     q->pose.orientation.w = 1;          /* the bottom-right corner of the view, 1 m out */
-    q->pose.position.x = 0.30f; q->pose.position.y = -0.26f; q->pose.position.z = -1.0f;
-    q->size.width = 0.06f; q->size.height = 0.06f;
+    q->pose.position.x = 0.26f; q->pose.position.y = -0.22f; q->pose.position.z = -1.0f;
+    q->size.width = 0.016f; q->size.height = 0.016f;     /* small: a quarter of the first 6 cm (2026-11-16) */
     return 1;
 }
 
