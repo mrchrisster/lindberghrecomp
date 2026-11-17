@@ -203,6 +203,75 @@ static int         in_frame;           /* xrBeginFrame done, xrEndFrame owed */
  * plus a game frame (the compositor corrects the rest). */
 static int         late_wait = -1, late_owed, late_have;
 static XrTime      late_time;          /* this frame's estimated display time */
+/* The pacer (2026-11-17, LINDBERGH_XR_PACER=0 off): with the late wait,
+ * xrWaitFrame still held a finished frame ~9 ms for the next beat. A thread
+ * of its own now waits for the next frame while this one is drawn (OpenXR
+ * lets xrWaitFrame for the next frame follow xrBeginFrame of this one), so
+ * the frame's end usually finds its beat waited for and begins at once. */
+#ifdef __ANDROID__
+#include <pthread.h>
+static pthread_t       pc_thread;
+static int             pc_on, pc_want = -1, pc_have, pc_stop;
+static pthread_mutex_t pc_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  pc_cv = PTHREAD_COND_INITIALIZER;
+static XrFrameState    pc_fs;
+static XrResult        pc_err;
+static void *pc_loop(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&pc_mu);
+        while (pc_have && !pc_stop) pthread_cond_wait(&pc_cv, &pc_mu);   /* the last one not begun yet */
+        if (pc_stop) { pthread_mutex_unlock(&pc_mu); break; }
+        pthread_mutex_unlock(&pc_mu);
+        XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
+        XrFrameState fs = { XR_TYPE_FRAME_STATE };
+        XrResult r = xrWaitFrame(session, &wi, &fs);
+        pthread_mutex_lock(&pc_mu);
+        pc_fs = fs; pc_err = r; pc_have = 1;
+        pthread_cond_broadcast(&pc_cv);
+        pthread_mutex_unlock(&pc_mu);
+        if (XR_FAILED(r)) usleep(10000);
+    }
+    return NULL;
+}
+static void pc_start(void)
+{
+    if (pc_on) return;
+    pc_stop = 0; pc_have = 0;
+    pc_on = pthread_create(&pc_thread, NULL, pc_loop, NULL) == 0;
+    fprintf(stderr, "[xr] pacer thread %s: the next frame's wait overlaps this one's drawing\n", pc_on ? "on" : "FAILED");
+}
+static void pc_halt(void)
+{
+    if (!pc_on) return;
+    pthread_mutex_lock(&pc_mu); pc_stop = 1; pthread_cond_broadcast(&pc_cv); pthread_mutex_unlock(&pc_mu);
+    pthread_join(pc_thread, NULL);
+    pc_on = 0; pc_have = 0;
+}
+/* the frame's end: the waited frame begun (under the lock, so the pacer's
+ * next wait comes after this begin); 0 if there is none to begin */
+static int pc_begin(XrFrameState *out)
+{
+    int ok = 0;
+    pthread_mutex_lock(&pc_mu);
+    while (!pc_have && pc_on) pthread_cond_wait(&pc_cv, &pc_mu);
+    if (pc_have) {
+        *out = pc_fs;
+        XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO };
+        ok = XR_SUCCEEDED(pc_err) && XR_SUCCEEDED(xrBeginFrame(session, &bi));
+        pc_have = 0;
+        pthread_cond_broadcast(&pc_cv);
+    }
+    pthread_mutex_unlock(&pc_mu);
+    return ok;
+}
+#else
+static int pc_on, pc_want = 0;
+static void pc_start(void) {}
+static void pc_halt(void) {}
+static int pc_begin(XrFrameState *out) { (void)out; return 0; }
+#endif
 static XrView      views[2] = { { XR_TYPE_VIEW }, { XR_TYPE_VIEW } };
 static XrFovf      fov[2];             /* what was rendered: symmetric */
 static int         views_ok;
@@ -1064,6 +1133,8 @@ static int poll_events(void)
                     }
                 }
             } else if (state == XR_SESSION_STATE_STOPPING && running) {
+                pc_halt();          /* no frame wait left running into the session's end */
+                late_have = 0;
                 xrEndSession(session);
                 running = 0;
             } else if (state == XR_SESSION_STATE_EXITING || state == XR_SESSION_STATE_LOSS_PENDING) {
@@ -1588,7 +1659,7 @@ static int voice_badge_layer(XrCompositionLayerQuad *q)
     q->subImage.swapchain = vb_chain;
     q->subImage.imageRect.extent.width = XM_ICON; q->subImage.imageRect.extent.height = XM_ICON;
     q->pose.orientation.w = 1;          /* the bottom-right corner of the view, 1 m out */
-    q->pose.position.x = 0.26f; q->pose.position.y = -0.22f; q->pose.position.z = -1.0f;
+    q->pose.position.x = 0.46f; q->pose.position.y = -0.40f; q->pose.position.z = -1.0f;     /* low right, near the view's edge (2026-11-17) */
     q->size.width = 0.016f; q->size.height = 0.016f;     /* small: a quarter of the first 6 cm (2026-11-16) */
     return 1;
 }
@@ -1832,6 +1903,8 @@ void xr_frame_begin(void)
         fprintf(stderr, "[xr] the headset's frame wait %s\n", late_wait ? "at the frame's end (overlaps the drawing)" : "before the frame is drawn");
     }
     if (late_wait && late_have) {       /* drawn first; the wait and begin at the end (xr_frame_end) */
+        if (pc_want < 0) { const char *v = getenv("LINDBERGH_XR_PACER"); pc_want = !(v && *v == '0'); }
+        if (pc_want) pc_start();
         late_owed = 1;
         late_time = frame.predictedDisplayTime + (XrTime)16666667;
     } else {
@@ -2252,10 +2325,10 @@ void xr_frame_end(void)
         XrFrameWaitInfo wi = { XR_TYPE_FRAME_WAIT_INFO };
         XrFrameState fs = { XR_TYPE_FRAME_STATE };
         XrFrameBeginInfo bi = { XR_TYPE_FRAME_BEGIN_INFO };
-        if (XR_SUCCEEDED(xrWaitFrame(session, &wi, &fs)) && XR_SUCCEEDED(xrBeginFrame(session, &bi))) {
+        if (pc_on ? pc_begin(&fs) : XR_SUCCEEDED(xrWaitFrame(session, &wi, &fs)) && XR_SUCCEEDED(xrBeginFrame(session, &bi))) {
             frame = fs;
             host_display_timing(frame.predictedDisplayTime, frame.predictedDisplayPeriod);
-        } else { begun = 0; late_have = 0; frame.shouldRender = 0; }
+        } else { begun = 0; late_have = 0; frame.shouldRender = 0; pc_halt(); }   /* (the next frame waits the plain way, alone) */
     }
     if (xr_prof < 0) { const char *v = getenv("LINDBERGH_XR_PROF"); xr_prof = v && *v == '1'; }
     if (xr_prof > 0) { xp_t0 = xp_ms(); xp_mark(&xp_game); }
